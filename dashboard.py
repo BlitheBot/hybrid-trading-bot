@@ -21,7 +21,7 @@ if not API_KEY or not SECRET_KEY:
     st.stop()
 
 # Initialize Clients
-trading_client = TradingClient(API_KEY, SECRET_KEY, paper=PAPER)
+trading_client = TradingClient(api_key=API_KEY, secret_key=SECRET_KEY, paper=PAPER)
 
 st.title("🚀 Hybrid Trading Bot Dashboard")
 st.sidebar.header("Account Settings")

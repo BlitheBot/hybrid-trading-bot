@@ -10,8 +10,8 @@ from utils import get_historical_bars
 
 class TradingBot:
     def __init__(self):
-        self.trading_client = TradingClient(Config.ALPACA_API_KEY, Config.ALPACA_SECRET_KEY, Config.PAPER_TRADING)
-        self.stock_data_client = StockHistoricalDataClient(Config.ALPACA_API_KEY, Config.ALPACA_SECRET_KEY)
+        self.trading_client = TradingClient(api_key=Config.ALPACA_API_KEY, secret_key=Config.ALPACA_SECRET_KEY, paper=Config.PAPER_TRADING)
+        self.stock_data_client = StockHistoricalDataClient(api_key=Config.ALPACA_API_KEY, secret_key=Config.ALPACA_SECRET_KEY)
         self.strategies = []
 
     def add_strategy(self, strategy: BaseStrategy):
