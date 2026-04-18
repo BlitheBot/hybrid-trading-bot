@@ -72,7 +72,8 @@ class TradingBot:
                     self.trading_client, 
                     Config.EQUITY_RISK_PER_TRADE_PERCENT,
                     Config.STOP_LOSS_PERCENT,
-                    Config.TAKE_PROFIT_PERCENT
+                    Config.TAKE_PROFIT_PERCENT,
+                    Config.MAX_BUYING_POWER_UTILIZATION_PERCENT
                 )
             else:
                 print(f"No signal for {symbol}")

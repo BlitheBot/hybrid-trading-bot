@@ -138,7 +138,7 @@ class SMBStrategy(BaseStrategy):
             
         return None
 
-    def execute_trade(self, signal, trading_client, equity_risk_percent, stop_loss_percent, take_profit_percent):
+    def execute_trade(self, signal, trading_client, equity_risk_percent, stop_loss_percent, take_profit_percent, max_buying_power_utilization_percent):
         """
         Executes trade using SMB-specific stop and target levels.
         """
@@ -154,13 +154,21 @@ class SMBStrategy(BaseStrategy):
         # Calculate Quantity based on 2% risk
         account = trading_client.get_account()
         risk_amount = float(account.equity) * (equity_risk_percent / 100)
+        max_cash_for_trade = float(account.buying_power) * (max_buying_power_utilization_percent / 100)
         
         risk_per_share = abs(entry_price - stop_price)
         if risk_per_share <= 0:
             print(f"Calculated risk per share for {symbol} is zero or negative. Cannot place order.")
             return
             
-        qty = int(risk_amount / risk_per_share)
+        # Calculate quantity based on risk amount
+        qty_from_risk = int(risk_amount / risk_per_share)
+        
+        # Calculate max quantity based on buying power
+        qty_from_buying_power = int(max_cash_for_trade / entry_price) if entry_price > 0 else 0
+        
+        # Use the minimum of the two to ensure we don't exceed buying power
+        qty = min(qty_from_risk, qty_from_buying_power)
         
         if qty <= 0:
             print(f"Calculated quantity for {symbol} is zero or negative. Not placing order.")

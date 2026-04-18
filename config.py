@@ -10,6 +10,7 @@ class Config:
     # Risk Management Parameters
     EQUITY_RISK_PER_TRADE_PERCENT = 2.0  # Percentage of total equity to risk per trade
     STOP_LOSS_PERCENT = 2.0              # Percentage drop from entry price to trigger stop-loss
+    MAX_BUYING_POWER_UTILIZATION_PERCENT = 10.0 # Max percentage of buying power to use for a single trade
     TAKE_PROFIT_PERCENT = 6.0            # Percentage gain from entry price to trigger take-profit
 
     # Trading parameters (will be dynamically calculated based on risk management)

@@ -47,7 +47,7 @@ class SMACrossoverStrategy(BaseStrategy):
             }
         return None
 
-    def execute_trade(self, signal, trading_client, equity_risk_percent, stop_loss_percent, take_profit_percent):
+    def execute_trade(self, signal, trading_client, equity_risk_percent, stop_loss_percent, take_profit_percent, max_buying_power_utilization_percent):
         """
         Executes a trade based on the generated signal and risk management parameters.
         """
@@ -66,6 +66,7 @@ class SMACrossoverStrategy(BaseStrategy):
 
         current_equity = float(account.equity)
         risk_amount = current_equity * (equity_risk_percent / 100)
+        max_cash_for_trade = float(account.buying_power) * (max_buying_power_utilization_percent / 100)
 
         # Calculate stop loss and take profit prices
         if side == OrderSide.BUY:
@@ -76,7 +77,7 @@ class SMACrossoverStrategy(BaseStrategy):
             if price_diff_to_stop <= 0: # Avoid division by zero or negative risk
                 print(f"Invalid stop loss price for {symbol}. Cannot calculate quantity.")
                 return
-            qty = int(risk_amount / price_diff_to_stop)
+            qty_from_risk = int(risk_amount / price_diff_to_stop)
         else: # Sell (short)
             stop_price = entry_price * (1 + (stop_loss_percent / 100))
             take_profit_price = entry_price * (1 - (take_profit_percent / 100))
@@ -85,7 +86,13 @@ class SMACrossoverStrategy(BaseStrategy):
             if price_diff_to_stop <= 0: # Avoid division by zero or negative risk
                 print(f"Invalid stop loss price for {symbol}. Cannot calculate quantity.")
                 return
-            qty = int(risk_amount / price_diff_to_stop)
+            qty_from_risk = int(risk_amount / price_diff_to_stop)
+
+        # Calculate max quantity based on buying power
+        qty_from_buying_power = int(max_cash_for_trade / entry_price) if entry_price > 0 else 0
+        
+        # Use the minimum of the two to ensure we don't exceed buying power
+        qty = min(qty_from_risk, qty_from_buying_power)
 
         if qty <= 0:
             print(f"Calculated quantity for {symbol} is zero or negative. Not placing order.")
