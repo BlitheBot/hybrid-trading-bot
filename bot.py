@@ -59,7 +59,11 @@ class TradingBot:
         # 2. Run each strategy
         for strategy in self.strategies:
             print(f"Running strategy: {strategy.name} for {symbol}")
-            signal = strategy.generate_signals(data)
+            # Pass the stock_data_client for Relative Strength calculation in SMBStrategy
+            if isinstance(strategy, SMBStrategy):
+                signal = strategy.generate_signals(data, self.stock_data_client)
+            else:
+                signal = strategy.generate_signals(data)
             
             if signal:
                 print(f"Signal generated: {signal}")

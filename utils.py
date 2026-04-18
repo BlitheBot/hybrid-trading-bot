@@ -13,9 +13,9 @@ def get_finnhub_price(symbol):
     if not Config.FINNHUB_API_KEY:
         return None
     
-    # Finnhub uses different symbols for crypto (e.g., BINANCE:BTCUSDT)
-    # For now, we'll focus on stocks. If it's crypto, we'll skip Finnhub or use its crypto format.
-    if "/" in symbol:
+    # Finnhub free tier crypto is limited, so we only use it for stocks here.
+    # For crypto, we'll rely on Alpaca's real-time data if available, or accept the delay.
+    if "/" in symbol or symbol in ["BTCUSD", "ETHUSD"]:
         return None 
 
     try:
@@ -32,14 +32,15 @@ def get_finnhub_price(symbol):
 
 def get_historical_bars(symbol, timeframe, days_back, data_client, is_crypto=False):
     """
-    Fetches historical bars from Alpaca and updates the last price with Finnhub data.
+    Fetches historical bars from Alpaca and updates the last price with Finnhub data for stocks.
     """
+    # Alpaca Free Plan requires a 15-minute delay for SIP data
+    # We use 16 minutes to be safe
     end_date = datetime.now(pytz.utc) - timedelta(minutes=16)
     start_date = end_date - timedelta(days=days_back)
     
     try:
         if is_crypto:
-            # Crypto Request
             request_params = CryptoBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=timeframe,
@@ -48,17 +49,17 @@ def get_historical_bars(symbol, timeframe, days_back, data_client, is_crypto=Fal
             )
             bars = data_client.get_crypto_bars(request_params)
         else:
-            # Stock Request
             request_params = StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=timeframe,
                 start=start_date,
                 end=end_date,
-                feed='iex'
+                feed='iex' # Use IEX feed for free tier
             )
             bars = data_client.get_stock_bars(request_params)
         
         if not hasattr(bars, 'df') or bars.df is None or bars.df.empty:
+            print(f"No data returned for {symbol}")
             return None
         
         df = bars.df.copy()
@@ -74,12 +75,15 @@ def get_historical_bars(symbol, timeframe, days_back, data_client, is_crypto=Fal
         if not is_crypto:
             real_time_price = get_finnhub_price(symbol)
             if real_time_price:
+                # Append the real-time price as a new row to the dataframe
+                # This allows strategies to see the current price as the 'latest' candle
                 new_row = df.iloc[-1:].copy()
                 new_row.index = [pd.Timestamp.now(tz=pytz.utc)]
                 new_row['close'] = real_time_price
                 new_row['open'] = real_time_price
                 new_row['high'] = real_time_price
                 new_row['low'] = real_time_price
+                
                 df = pd.concat([df, new_row])
                 print(f"✅ Integrated Finnhub real-time price for {symbol}: ${real_time_price}")
         
@@ -87,3 +91,9 @@ def get_historical_bars(symbol, timeframe, days_back, data_client, is_crypto=Fal
     except Exception as e:
         print(f"Error fetching bars for {symbol}: {e}")
         return None
+
+def get_spy_data(data_client, days_back=365):
+    """
+    Fetches historical SPY data for relative strength calculations.
+    """
+    return get_historical_bars("SPY", TimeFrame.Day, days_back, data_client, is_crypto=False)
