@@ -35,13 +35,17 @@ class TradingBot:
             raise TypeError("Strategy must inherit from BaseStrategy")
         self.strategies.append(strategy)
 
-    def run_once(self, symbol, qty):
+    def run_once(self, symbol):
         """
-        Runs the bot for a single symbol and quantity.
+        Runs the bot for a single symbol.
         """
-        # 1. Fetch historical data
+        # 1. Fetch historical data (Integrated with Finnhub in utils.py)
         data = get_historical_bars(symbol, TimeFrame.Day, 365, self.stock_data_client)
         
+        if data is None:
+            print(f"Could not fetch data for {symbol}")
+            return
+
         # 2. Run each strategy
         for strategy in self.strategies:
             print(f"Running strategy: {strategy.name} for {symbol}")
@@ -59,27 +63,28 @@ class TradingBot:
             else:
                 print(f"No signal for {symbol}")
 
-    def start(self, symbol, qty, interval_seconds=3600):
+    def start(self, watchlist, interval_seconds=60):
         """
-        Starts the bot loop.
+        Starts the bot loop for a list of symbols.
         """
-        print(f"Trading bot started for {symbol}...")
+        print(f"🚀 Trading bot started for {watchlist}...")
         try:
             while True:
-                self.run_once(symbol, qty)
-                print(f"Waiting for {interval_seconds} seconds...")
+                for symbol in watchlist:
+                    self.run_once(symbol)
+                print(f"💤 Waiting for {interval_seconds} seconds...")
                 time.sleep(interval_seconds)
         except KeyboardInterrupt:
-            print("Bot stopped by user.")
+            print("🛑 Bot stopped by user.")
 
 if __name__ == "__main__":
     if not Config.ALPACA_API_KEY or not Config.ALPACA_SECRET_KEY:
         print("CRITICAL ERROR: ALPACA_API_KEY or ALPACA_SECRET_KEY is missing!")
-        print("Please add them to the 'Variables' tab in your Railway project.")
     else:
         bot = TradingBot()
         # Add SMA Crossover strategy
         bot.add_strategy(SMACrossoverStrategy("SMA Crossover", short_window=20, long_window=50))
         
-        # For demonstration, just run once
-        bot.run_once("AAPL", 1)
+        # Start the continuous loop with a watchlist
+        watchlist = ["AAPL", "BTC/USD", "ETH/USD", "TSLA", "NVDA"]
+        bot.start(watchlist, interval_seconds=60)
