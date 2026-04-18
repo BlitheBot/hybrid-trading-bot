@@ -12,6 +12,7 @@ from alpaca.data.timeframe import TimeFrame
 from config import Config
 from strategies.base_strategy import BaseStrategy
 from strategies.sma_crossover import SMACrossoverStrategy
+from strategies.smb_strategy import SMBStrategy
 from utils import get_historical_bars, get_finnhub_price
 
 class TradingBot:
@@ -91,11 +92,15 @@ if __name__ == "__main__":
         print("CRITICAL ERROR: ALPACA_API_KEY or ALPACA_SECRET_KEY is missing!")
     else:
         bot = TradingBot()
-        # Add SMA Crossover strategy
+        
+        # --- SMB CAPITAL STRATEGIES ---
+        # 1. SMB Fashionably Late Scalp (9 EMA / VWAP)
+        bot.add_strategy(SMBStrategy("SMB Late Scalp", ema_window=9, rr_ratio=3))
+        
+        # 2. Traditional SMA Crossover (as backup)
         bot.add_strategy(SMACrossoverStrategy("SMA Crossover", short_window=20, long_window=50))
         
         # Expanded Watchlist: High Volume Stocks + Corrected Crypto Symbols
-        # Alpaca Crypto usually prefers BTC/USD or ETH/USD for the Trading API
         watchlist = [
             "AAPL", "TSLA", "NVDA", "AMD", "MSFT", "AMZN", "GOOGL", "META", # High Volume Stocks
             "BTC/USD", "ETH/USD" # Crypto
