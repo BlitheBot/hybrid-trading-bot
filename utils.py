@@ -1,16 +1,37 @@
+import requests
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from datetime import datetime, timedelta
 import pytz
 import pandas as pd
+from config import Config
+
+def get_finnhub_price(symbol):
+    """
+    Fetches real-time price from Finnhub to bypass Alpaca's 15-min delay.
+    """
+    if not Config.FINNHUB_API_KEY:
+        return None
+    
+    try:
+        # Finnhub quote endpoint
+        url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={Config.FINNHUB_API_KEY}"
+        response = requests.get(url)
+        data = response.json()
+        
+        # 'c' is the current price in Finnhub's response
+        if 'c' in data and data['c'] != 0:
+            return float(data['c'])
+        return None
+    except Exception as e:
+        print(f"Error fetching Finnhub price for {symbol}: {e}")
+        return None
 
 def get_historical_bars(symbol, timeframe, days_back, data_client):
     """
-    Fetches historical bars for a given symbol, accounting for the 15-minute 
-    delay required by Alpaca's free market data plan.
+    Fetches historical bars from Alpaca and updates the last price with Finnhub data.
     """
-    # Alpaca Free Plan requires a 15-minute delay for SIP data
-    # We use 16 minutes to be safe
+    # Use Alpaca for history (with the 15-min delay to stay within free tier rules)
     end_date = datetime.now(pytz.utc) - timedelta(minutes=16)
     start_date = end_date - timedelta(days=days_back)
     
@@ -19,26 +40,38 @@ def get_historical_bars(symbol, timeframe, days_back, data_client):
         timeframe=timeframe,
         start=start_date,
         end=end_date,
-        feed='iex' # Use IEX feed for free tier
+        feed='iex'
     )
     
     try:
         bars = data_client.get_stock_bars(request_params)
         
-        # Check if we got any data
         if not hasattr(bars, 'df') or bars.df is None or bars.df.empty:
-            print(f"No data returned for {symbol}")
             return None
         
         df = bars.df.copy()
         
-        # Alpaca-py returns a MultiIndex (symbol, timestamp)
-        # We want to make it easier for our strategies to read
         if isinstance(df.index, pd.MultiIndex):
             df = df.reset_index()
-            # Rename 'timestamp' if it exists to match our strategy expectations
             if 'timestamp' in df.columns:
                 df = df.set_index('timestamp')
+        
+        # --- FINNHUB INTEGRATION ---
+        # Get the absolute real-time price from Finnhub
+        real_time_price = get_finnhub_price(symbol)
+        
+        if real_time_price:
+            # Append the real-time price as a new row to the dataframe
+            # This allows strategies to see the current price as the 'latest' candle
+            new_row = df.iloc[-1:].copy()
+            new_row.index = [pd.Timestamp.now(tz=pytz.utc)]
+            new_row['close'] = real_time_price
+            new_row['open'] = real_time_price
+            new_row['high'] = real_time_price
+            new_row['low'] = real_time_price
+            
+            df = pd.concat([df, new_row])
+            print(f"✅ Successfully integrated Finnhub real-time price for {symbol}: ${real_time_price}")
         
         return df
     except Exception as e:

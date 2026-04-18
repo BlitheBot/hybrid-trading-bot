@@ -4,6 +4,7 @@ class Config:
     # Alpaca API credentials
     ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
     ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
+    FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
     PAPER_TRADING = True  # Set to False for live trading
 
     # Risk Management Parameters
