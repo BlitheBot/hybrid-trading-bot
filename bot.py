@@ -41,6 +41,30 @@ class TradingBot:
             raise TypeError("Strategy must inherit from BaseStrategy")
         self.strategies.append(strategy)
 
+    def _check_account_status(self):
+        """
+        Checks the Alpaca account status and logs details.
+        Returns True if account is active and has buying power, False otherwise.
+        """
+        try:
+            account = self.trading_client.get_account()
+            if account:
+                print(f"DEBUG: Account object retrieved: {account}")
+                print(f"Account Status: {account.status}, Equity: {float(account.equity):.2f}, Buying Power: {float(account.buying_power):.2f}")
+                if account.status != 'ACTIVE':
+                    print(f"Account is not ACTIVE. Current status: {account.status}")
+                    return False
+                if float(account.buying_power) <= 0:
+                    print(f"Insufficient buying power. Current: {account.buying_power}")
+                    return False
+                return True
+            else:
+                print("Failed to retrieve account details from Alpaca: Account object is None.")
+                return False
+        except Exception as e:
+            print(f"Error checking account status: {e}")
+            return False
+
     def run_once(self, symbol):
         """
         Runs the bot for a single symbol.
@@ -83,6 +107,12 @@ class TradingBot:
         Starts the bot loop for a list of symbols.
         """
         print(f"🚀 Trading bot started for {watchlist}...")
+        
+        # Check account status before starting the main loop
+        if not self._check_account_status():
+            print("Bot cannot start due to account issues. Please check logs.")
+            return
+
         try:
             while True:
                 for symbol in watchlist:
