@@ -1,4 +1,10 @@
+import os
 import time
+
+# Hard override to prevent Alpaca from seeing conflicting tokens
+os.environ.pop("ALPACA_OAUTH_TOKEN", None)
+os.environ.pop("GITHUB_TOKEN", None)
+
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
@@ -10,8 +16,18 @@ from utils import get_historical_bars
 
 class TradingBot:
     def __init__(self):
-        self.trading_client = TradingClient(api_key=Config.ALPACA_API_KEY, secret_key=Config.ALPACA_SECRET_KEY, paper=Config.PAPER_TRADING)
-        self.stock_data_client = StockHistoricalDataClient(api_key=Config.ALPACA_API_KEY, secret_key=Config.ALPACA_SECRET_KEY)
+        # Explicitly passing None for oauth_token to ensure no conflict
+        self.trading_client = TradingClient(
+            api_key=Config.ALPACA_API_KEY, 
+            secret_key=Config.ALPACA_SECRET_KEY, 
+            paper=Config.PAPER_TRADING,
+            oauth_token=None
+        )
+        self.stock_data_client = StockHistoricalDataClient(
+            api_key=Config.ALPACA_API_KEY, 
+            secret_key=Config.ALPACA_SECRET_KEY,
+            oauth_token=None
+        )
         self.strategies = []
 
     def add_strategy(self, strategy: BaseStrategy):
@@ -33,7 +49,13 @@ class TradingBot:
             
             if signal:
                 print(f"Signal generated: {signal}")
-                strategy.execute_trade(signal, symbol, qty, self.trading_client)
+                strategy.execute_trade(
+                    signal, 
+                    self.trading_client, 
+                    Config.EQUITY_RISK_PER_TRADE_PERCENT,
+                    Config.STOP_LOSS_PERCENT,
+                    Config.TAKE_PROFIT_PERCENT
+                )
             else:
                 print(f"No signal for {symbol}")
 
@@ -58,10 +80,6 @@ if __name__ == "__main__":
         bot = TradingBot()
         # Add SMA Crossover strategy
         bot.add_strategy(SMACrossoverStrategy("SMA Crossover", short_window=20, long_window=50))
-        
-        # Start the bot (example: trade 1 share of AAPL every hour)
-        # Note: In a real scenario, you'd use a more frequent interval or WebSockets
-        # bot.start("AAPL", 1, interval_seconds=3600)
         
         # For demonstration, just run once
         bot.run_once("AAPL", 1)

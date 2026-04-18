@@ -1,11 +1,16 @@
+import os
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+
+# Hard override to prevent Alpaca from seeing conflicting tokens
+os.environ.pop("ALPACA_OAUTH_TOKEN", None)
+os.environ.pop("GITHUB_TOKEN", None)
+
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
 from datetime import datetime, timedelta
-import os
 from config import Config
 
 # Set Page Config
@@ -20,8 +25,13 @@ if not API_KEY or not SECRET_KEY:
     st.error("🔑 API Keys Missing! Please add ALPACA_API_KEY and ALPACA_SECRET_KEY to your Railway Variables.")
     st.stop()
 
-# Initialize Clients
-trading_client = TradingClient(api_key=API_KEY, secret_key=SECRET_KEY, paper=PAPER)
+# Initialize Clients with explicit None for oauth_token
+trading_client = TradingClient(
+    api_key=API_KEY, 
+    secret_key=SECRET_KEY, 
+    paper=PAPER,
+    oauth_token=None
+)
 
 st.title("🚀 Hybrid Trading Bot Dashboard")
 st.sidebar.header("Account Settings")
