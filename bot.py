@@ -52,7 +52,8 @@ class TradingBot:
 
 if __name__ == "__main__":
     if not Config.ALPACA_API_KEY or not Config.ALPACA_SECRET_KEY:
-        print("Please set ALPACA_API_KEY and ALPACA_SECRET_KEY in config.py or as environment variables.")
+        print("CRITICAL ERROR: ALPACA_API_KEY or ALPACA_SECRET_KEY is missing!")
+        print("Please add them to the 'Variables' tab in your Railway project.")
     else:
         bot = TradingBot()
         # Add SMA Crossover strategy

@@ -6,14 +6,19 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
 from datetime import datetime, timedelta
 import os
+from config import Config
 
 # Set Page Config
 st.set_page_config(page_title="Hybrid Bot Dashboard", layout="wide")
 
 # Authentication
-API_KEY = os.getenv("ALPACA_API_KEY")
-SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-PAPER = True # Default to paper
+API_KEY = Config.ALPACA_API_KEY
+SECRET_KEY = Config.ALPACA_SECRET_KEY
+PAPER = Config.PAPER_TRADING
+
+if not API_KEY or not SECRET_KEY:
+    st.error("🔑 API Keys Missing! Please add ALPACA_API_KEY and ALPACA_SECRET_KEY to your Railway Variables.")
+    st.stop()
 
 # Initialize Clients
 trading_client = TradingClient(API_KEY, SECRET_KEY, paper=PAPER)
@@ -76,16 +81,7 @@ try:
 except Exception as e:
     st.error(f"Error fetching orders: {e}")
 
-# --- 4. Market Watch ---
-st.subheader("🔍 Market Watch (Sample: AAPL)")
-# This is a placeholder to show how charts look
-try:
-    # Note: In a real dashboard, we'd iterate through your watchlist
-    st.write("Visualizing the latest trend for AAPL...")
-    # Add simple chart logic here if data client is available
-except Exception as e:
-    st.write("Chart unavailable. Ensure data keys are active.")
-
 st.sidebar.markdown("---")
 st.sidebar.write("Bot is running 24/7 on Railway")
-st.sidebar.button("Refresh Data")
+if st.sidebar.button("Refresh Data"):
+    st.rerun()
