@@ -6,13 +6,13 @@ os.environ.pop("ALPACA_OAUTH_TOKEN", None)
 os.environ.pop("GITHUB_TOKEN", None)
 
 from alpaca.trading.client import TradingClient
-from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
 
 from config import Config
 from strategies.base_strategy import BaseStrategy
 from strategies.sma_crossover import SMACrossoverStrategy
-from utils import get_historical_bars
+from utils import get_historical_bars, get_finnhub_price
 
 class TradingBot:
     def __init__(self):
@@ -28,6 +28,11 @@ class TradingBot:
             secret_key=Config.ALPACA_SECRET_KEY,
             oauth_token=None
         )
+        self.crypto_data_client = CryptoHistoricalDataClient(
+            api_key=Config.ALPACA_API_KEY, 
+            secret_key=Config.ALPACA_SECRET_KEY,
+            oauth_token=None
+        )
         self.strategies = []
 
     def add_strategy(self, strategy: BaseStrategy):
@@ -39,8 +44,12 @@ class TradingBot:
         """
         Runs the bot for a single symbol.
         """
+        # Determine if it's crypto or stock
+        is_crypto = "/" in symbol or symbol in ["BTCUSD", "ETHUSD"]
+        client = self.crypto_data_client if is_crypto else self.stock_data_client
+        
         # 1. Fetch historical data (Integrated with Finnhub in utils.py)
-        data = get_historical_bars(symbol, TimeFrame.Day, 365, self.stock_data_client)
+        data = get_historical_bars(symbol, TimeFrame.Day, 365, client, is_crypto=is_crypto)
         
         if data is None:
             print(f"Could not fetch data for {symbol}")
@@ -85,6 +94,10 @@ if __name__ == "__main__":
         # Add SMA Crossover strategy
         bot.add_strategy(SMACrossoverStrategy("SMA Crossover", short_window=20, long_window=50))
         
-        # Start the continuous loop with a watchlist
-        watchlist = ["AAPL", "BTC/USD", "ETH/USD", "TSLA", "NVDA"]
+        # Expanded Watchlist: High Volume Stocks + Corrected Crypto Symbols
+        # Alpaca Crypto usually prefers BTC/USD or ETH/USD for the Trading API
+        watchlist = [
+            "AAPL", "TSLA", "NVDA", "AMD", "MSFT", "AMZN", "GOOGL", "META", # High Volume Stocks
+            "BTC/USD", "ETH/USD" # Crypto
+        ]
         bot.start(watchlist, interval_seconds=60)
