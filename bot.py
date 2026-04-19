@@ -17,22 +17,26 @@ from utils import get_historical_bars, get_finnhub_price
 
 class TradingBot:
     def __init__(self):
+        print("DEBUG: Initializing TradingBot...")
+        
+        # Determine Base URL
+        base_url = "https://paper-api.alpaca.markets" if Config.PAPER_TRADING else "https://api.alpaca.markets"
+        print(f"DEBUG: Using Base URL: {base_url}")
+
         # Explicitly passing None for oauth_token to ensure no conflict
         self.trading_client = TradingClient(
             api_key=Config.ALPACA_API_KEY, 
             secret_key=Config.ALPACA_SECRET_KEY, 
             paper=Config.PAPER_TRADING,
-            oauth_token=None
+            url_override=base_url
         )
         self.stock_data_client = StockHistoricalDataClient(
             api_key=Config.ALPACA_API_KEY, 
-            secret_key=Config.ALPACA_SECRET_KEY,
-            oauth_token=None
+            secret_key=Config.ALPACA_SECRET_KEY
         )
         self.crypto_data_client = CryptoHistoricalDataClient(
             api_key=Config.ALPACA_API_KEY, 
-            secret_key=Config.ALPACA_SECRET_KEY,
-            oauth_token=None
+            secret_key=Config.ALPACA_SECRET_KEY
         )
         self.strategies = []
 
@@ -46,16 +50,14 @@ class TradingBot:
         Checks the Alpaca account status and logs details.
         Returns True if account is active and has buying power, False otherwise.
         """
+        print("DEBUG: Fetching account details from Alpaca...")
         try:
             account = self.trading_client.get_account()
             if account:
-                print(f"DEBUG: Account object retrieved: {account}")
-                print(f"Account Status: {account.status}, Equity: {float(account.equity):.2f}, Buying Power: {float(account.buying_power):.2f}")
+                print(f"DEBUG: Raw account data: {account}")
+                print(f"Account Status: {account.status}, Equity: ${float(account.equity):,.2f}, Buying Power: ${float(account.buying_power):,.2f}")
                 if account.status != 'ACTIVE':
                     print(f"Account is not ACTIVE. Current status: {account.status}")
-                    return False
-                if float(account.buying_power) <= 0:
-                    print(f"Insufficient buying power. Current: {account.buying_power}")
                     return False
                 return True
             else:
@@ -123,6 +125,7 @@ class TradingBot:
             print("🛑 Bot stopped by user.")
 
 if __name__ == "__main__":
+    print("DEBUG: Script started...")
     if not Config.ALPACA_API_KEY or not Config.ALPACA_SECRET_KEY:
         print("CRITICAL ERROR: ALPACA_API_KEY or ALPACA_SECRET_KEY is missing!")
     else:
