@@ -2,6 +2,7 @@ import os
 import time
 import asyncio
 from datetime import datetime, timedelta
+import pytz # Import pytz for timezone awareness
 
 # Hard override to prevent Alpaca from seeing conflicting tokens
 os.environ.pop("ALPACA_OAUTH_TOKEN", None)
@@ -10,12 +11,13 @@ os.environ.pop("GITHUB_TOKEN", None)
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
 from alpaca.data.timeframe import TimeFrame
+from alpaca.data.live import CryptoDataStream # Import CryptoDataStream
 
 from config import Config
 from strategies.base_strategy import BaseStrategy
 from strategies.sma_crossover import SMACrossoverStrategy
 from strategies.smb_strategy import SMBStrategy
-from strategies.swing_strategy import SwingStrategy # New Swing Strategy
+from strategies.swing_strategy import SwingStrategy
 from utils import get_historical_bars, get_finnhub_price
 
 class TradingBot:
@@ -41,11 +43,18 @@ class TradingBot:
             api_key=Config.ALPACA_API_KEY, 
             secret_key=Config.ALPACA_SECRET_KEY
         )
+        
+        # Initialize CryptoDataStream for real-time scalping
+        self.crypto_stream = CryptoDataStream(
+            api_key=Config.ALPACA_API_KEY,
+            secret_key=Config.ALPACA_SECRET_KEY,
+            paper=Config.PAPER_TRADING
+        )
         self.scalp_strategies = []
         self.swing_strategies = []
         self.daily_pnl = 0.0
         self.start_of_day_equity = 0.0
-        self.last_pnl_reset_date = datetime.now().date()
+        self.last_pnl_reset_date = datetime.now(pytz.timezone('America/New_York')).date() # Use timezone for consistent daily reset
         self.trading_halted_for_day = False
         self.active_signals = {} # To track signals and prevent over-trading
 
@@ -75,7 +84,7 @@ class TradingBot:
                     return False
                 
                 # Initialize daily PnL tracking
-                current_date = datetime.now().date()
+                current_date = datetime.now(pytz.timezone('America/New_York')).date() # Use timezone for consistent daily reset
                 if current_date != self.last_pnl_reset_date:
                     self.daily_pnl = 0.0
                     self.start_of_day_equity = float(account.equity)
@@ -84,12 +93,18 @@ class TradingBot:
                     print(f"DEBUG: Daily PnL reset for {current_date}. Starting equity: ${self.start_of_day_equity:,.2f}")
                 
                 # Update daily PnL (simple for now, will be refined with actual trade PnL)
-                if self.start_of_day_equity > 0:
-                    self.daily_pnl = float(account.equity) - self.start_of_day_equity
-                    current_daily_loss_percent = (abs(self.daily_pnl) / self.start_of_day_equity) * 100
-                    if self.daily_pnl < 0 and current_daily_loss_percent >= Config.MAX_DAILY_LOSS_PERCENT:
+                # For now, we'll use a simplified PnL calculation based on current equity vs start of day equity
+                if self.start_of_day_equity == 0.0: # First run of the day
+                    self.start_of_day_equity = float(account.equity)
+
+                current_daily_pnl = float(account.equity) - self.start_of_day_equity
+                if current_daily_pnl < 0:
+                    current_daily_loss_percent = (abs(current_daily_pnl) / self.start_of_day_equity) * 100
+                    if current_daily_loss_percent >= Config.MAX_DAILY_LOSS_PERCENT:
                         self.trading_halted_for_day = True
                         print(f"CRITICAL: Max daily loss of {Config.MAX_DAILY_LOSS_PERCENT}% hit! Trading halted for the day.")
+                
+                self.daily_pnl = current_daily_pnl # Update for dashboard
 
                 return True
             else:
@@ -99,7 +114,7 @@ class TradingBot:
             print(f"Error checking account status: {e}")
             return False
 
-    async def _process_symbol(self, symbol, strategies, is_crypto, risk_percent, stop_loss_percent, interval_seconds=None):
+    async def _process_symbol(self, symbol, strategies, is_crypto, risk_percent, stop_loss_percent, interval_seconds=None, current_price=None):
         if self.trading_halted_for_day:
             print(f"Trading halted for the day due to max daily loss. Skipping {symbol}.")
             return
@@ -107,11 +122,27 @@ class TradingBot:
         client = self.crypto_data_client if is_crypto else self.stock_data_client
         
         # 1. Fetch historical data (Integrated with Finnhub in utils.py)
+        # For scalping, we might only need the latest bar from websocket, but strategies need historical context
         data = get_historical_bars(symbol, TimeFrame.Day, 365, client, is_crypto=is_crypto)
         
         if data is None:
             print(f"Could not fetch data for {symbol}")
             return
+
+        # If current_price is provided (from websocket), append it to data for strategy calculation
+        if current_price is not None:
+            # Create a dummy DataFrame for the current price to append
+            current_bar = pd.DataFrame([{
+                'timestamp': datetime.now(pytz.utc), # Use UTC for consistency
+                'open': current_price,
+                'high': current_price,
+                'low': current_price,
+                'close': current_price,
+                'volume': 0,
+                'trade_count': 0,
+                'vwap': current_price
+            }])
+            data = pd.concat([data, current_bar], ignore_index=True)
 
         # 2. Run each strategy
         for strategy in strategies:
@@ -124,7 +155,7 @@ class TradingBot:
             
             if signal:
                 # Implement Signal Cooldown: only act once per signal until position is closed
-                signal_key = f"{symbol}-{strategy.name}-{signal['signal']}"
+                signal_key = f"{symbol}-{strategy.name}-{signal["signal"]}"
                 if signal_key in self.active_signals:
                     print(f"Signal for {symbol} already active for {strategy.name}. Skipping.")
                     continue
@@ -143,25 +174,34 @@ class TradingBot:
             else:
                 print(f"No signal for {symbol}")
 
+    async def _on_crypto_trade(self, trade):
+        symbol = trade.symbol
+        current_price = trade.price
+        print(f"DEBUG: Crypto Trade received for {symbol}: {current_price}")
+
+        # Only process if symbol is in scalp watchlist
+        if symbol in Config.SCALP_SYMBOLS:
+            await self._process_symbol(
+                symbol, 
+                self.scalp_strategies, 
+                is_crypto=True, 
+                risk_percent=Config.EQUITY_RISK_PER_TRADE_PERCENT, 
+                stop_loss_percent=Config.CRYPTO_SCALP_STOP_LOSS_PERCENT,
+                current_price=current_price # Pass real-time price
+            )
+
     async def scalp_loop(self):
-        print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS}...")
-        # Placeholder for websocket integration (Phase 4)
-        # For now, it will poll every minute
-        while True:
-            await self._check_account_status()
-            for symbol in Config.SCALP_SYMBOLS:
-                await self._process_symbol(
-                    symbol, 
-                    self.scalp_strategies, 
-                    is_crypto=True, 
-                    risk_percent=Config.EQUITY_RISK_PER_TRADE_PERCENT, 
-                    stop_loss_percent=Config.CRYPTO_SCALP_STOP_LOSS_PERCENT
-                )
-            print(f"💤 Scalp Bot waiting for 60 seconds...")
-            await asyncio.sleep(60)
+        print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS} (Websocket)...")
+        
+        # Subscribe to crypto trades
+        self.crypto_stream.subscribe_trades(self._on_crypto_trade, *Config.SCALP_SYMBOLS)
+        
+        # Start the websocket stream in a separate task
+        # The stream runs indefinitely, so we need a way to keep the main loop alive
+        await self.crypto_stream._run_forever() # This will block, so it needs to be in gather
 
     async def swing_loop(self):
-        print(f"📈 Starting Stock Swing Bot for {Config.SWING_SYMBOLS}...")
+        print(f"📈 Starting Stock Swing Bot for {Config.SWING_SYMBOLS} (Polling)...")
         while True:
             await self._check_account_status()
             for symbol in Config.SWING_SYMBOLS:
