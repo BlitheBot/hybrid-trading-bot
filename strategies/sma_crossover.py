@@ -10,15 +10,9 @@ class SMACrossoverStrategy(BaseStrategy):
         self.long_window = long_window
 
     def generate_signals(self, market_data):
-        """
-        Generates buy/sell signals based on SMA crossover.
-        :param market_data: A pandas DataFrame containing historical bar data for a single symbol.
-        :return: A signal dictionary with symbol, signal, confidence, and entry_price.
-        """
         if market_data is None or len(market_data) < self.long_window:
             return None
 
-        # Calculate moving averages
         market_data["SMA_short"] = market_data["close"].rolling(window=self.short_window).mean()
         market_data["SMA_long"] = market_data["close"].rolling(window=self.long_window).mean()
 
@@ -33,83 +27,67 @@ class SMACrossoverStrategy(BaseStrategy):
 
         if last_short > last_long and prev_short <= prev_long: # Golden Cross
             signal = "buy"
-            confidence = (last_short - last_long) / last_long # Confidence based on spread
+            confidence = (last_short - last_long) / last_long
         elif last_short < last_long and prev_short >= prev_long: # Death Cross
             signal = "sell"
-            confidence = (last_long - last_short) / last_long # Confidence based on spread
+            confidence = (last_long - last_short) / last_long
         
         if signal:
             return {
                 "symbol": market_data["symbol"].iloc[-1] if "symbol" in market_data.columns else "UNKNOWN",
                 "signal": signal,
-                "confidence": min(confidence * 10, 1.0), # Scale confidence to max 1.0
+                "confidence": min(confidence * 10, 1.0),
                 "entry_price": current_price
             }
         return None
 
     def execute_trade(self, signal, trading_client, equity_risk_percent, stop_loss_percent, take_profit_percent, max_buying_power_utilization_percent):
-        """
-        Executes a trade based on the generated signal and risk management parameters.
-        """
         if signal is None or signal["signal"] == "hold":
             return
 
         symbol = signal["symbol"]
+        
+        # 1. SAFETY CHECK: Are we already in this position?
+        if self.is_already_in_position(symbol, trading_client):
+            # print(f"Skipping {symbol} - already in position or order pending.")
+            return
+
         entry_price = signal["entry_price"]
         side = OrderSide.BUY if signal["signal"] == "buy" else OrderSide.SELL
 
-        # Get account details to calculate position size
         account = trading_client.get_account()
         if not account:
-            print("Could not retrieve account details.")
             return
 
-        current_equity = float(account.equity)
-        risk_amount = current_equity * (equity_risk_percent / 100)
-        max_cash_for_trade = float(account.buying_power) * (max_buying_power_utilization_percent / 100)
-
-        # Calculate stop loss and take profit prices
+        # 2. Calculate Stop/Target
         if side == OrderSide.BUY:
             stop_price = entry_price * (1 - (stop_loss_percent / 100))
             take_profit_price = entry_price * (1 + (take_profit_percent / 100))
-            # Calculate quantity based on risk amount and stop loss
-            price_diff_to_stop = entry_price - stop_price
-            if price_diff_to_stop <= 0: # Avoid division by zero or negative risk
-                print(f"Invalid stop loss price for {symbol}. Cannot calculate quantity.")
-                return
-            qty_from_risk = int(risk_amount / price_diff_to_stop)
-        else: # Sell (short)
+        else:
             stop_price = entry_price * (1 + (stop_loss_percent / 100))
             take_profit_price = entry_price * (1 - (take_profit_percent / 100))
-            # Calculate quantity based on risk amount and stop loss
-            price_diff_to_stop = stop_price - entry_price
-            if price_diff_to_stop <= 0: # Avoid division by zero or negative risk
-                print(f"Invalid stop loss price for {symbol}. Cannot calculate quantity.")
-                return
-            qty_from_risk = int(risk_amount / price_diff_to_stop)
 
-        # Calculate max quantity based on buying power
-        qty_from_buying_power = int(max_cash_for_trade / entry_price) if entry_price > 0 else 0
-        
-        # Use the minimum of the two to ensure we don't exceed buying power
-        qty = min(qty_from_risk, qty_from_buying_power)
+        # 3. SAFETY LOCK: Calculate Safe Quantity
+        qty = self.calculate_safe_quantity(
+            symbol, entry_price, stop_price, account, 
+            equity_risk_percent, max_buying_power_utilization_percent
+        )
 
         if qty <= 0:
-            print(f"Calculated quantity for {symbol} is zero or negative. Not placing order.")
             return
 
-        # Place a bracket order (market order with stop loss and take profit)
+        # 4. Place Order
         order_data = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
             side=side,
-            time_in_force=TimeInForce.GTC, # Good 'Til Canceled
+            time_in_force=TimeInForce.GTC,
             take_profit=TakeProfitRequest(limit_price=take_profit_price),
             stop_loss=StopLossRequest(stop_price=stop_price)
         )
         
         try:
-            order = trading_client.submit_order(order_data=order_data)
-            print(f"Successfully placed {side} bracket order for {symbol} (Qty: {qty}) at {entry_price}. SL: {stop_price}, TP: {take_profit_price}. Order ID: {order.id}")
+            trading_client.submit_order(order_data=order_data)
+            print(f"✅ Order Placed: {side} {symbol} (Qty: {qty}) at {entry_price}. SL: {stop_price}, TP: {take_profit_price}")
         except Exception as e:
-            print(f"Failed to place {side} bracket order for {symbol}: {e}")
+            print(f"❌ Order Failed for {symbol}: {e}")
