@@ -18,7 +18,7 @@ class SMBStrategy(BaseStrategy):
         v = df_filtered["volume"].values
         tp = (df_filtered["low"] + df_filtered["high"] + df_filtered["close"]).values / 3
         vwap_series = pd.Series((tp * v).cumsum() / v.cumsum(), index=df_filtered.index)
-        return vwap_series.reindex(df.index, method=\'ffill\')
+        return vwap_series.reindex(df.index, method='ffill')
 
     def calculate_relative_strength(self, stock_data, spy_data):
         if stock_data is None or spy_data is None or len(stock_data) < 2 or len(spy_data) < 2:
