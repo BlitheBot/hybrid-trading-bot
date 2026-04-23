@@ -137,8 +137,15 @@ class TradingBot:
             
             if signal:
                 signal_key = f"{symbol}-{strategy.name}-{signal['signal']}"
+                
+                # Check if signal is active and within cooldown period (e.g., 1 hour)
                 if signal_key in self.active_signals:
-                    continue
+                    last_signal_time = self.active_signals[signal_key]
+                    if datetime.now() - last_signal_time < timedelta(hours=1):
+                        continue
+                    else:
+                        # Cooldown expired, remove from active signals
+                        del self.active_signals[signal_key]
 
                 print(f"Signal generated: {signal}")
                 strategy.execute_trade(
@@ -149,7 +156,8 @@ class TradingBot:
                     Config.TAKE_PROFIT_PERCENT,
                     Config.MAX_BUYING_POWER_UTILIZATION_PERCENT
                 )
-                self.active_signals[signal_key] = True
+                # Record the time the signal was generated
+                self.active_signals[signal_key] = datetime.now()
 
     async def _on_crypto_trade(self, trade):
         await self._process_symbol(
