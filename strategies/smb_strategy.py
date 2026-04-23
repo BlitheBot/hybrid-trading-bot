@@ -18,7 +18,7 @@ class SMBStrategy(BaseStrategy):
         v = df_filtered["volume"].values
         tp = (df_filtered["low"] + df_filtered["high"] + df_filtered["close"]).values / 3
         vwap_series = pd.Series((tp * v).cumsum() / v.cumsum(), index=df_filtered.index)
-        return vwap_series.reindex(df.index, method='ffill')
+        return vwap_series.reindex(df.index, method=\'ffill\')
 
     def calculate_relative_strength(self, stock_data, spy_data):
         if stock_data is None or spy_data is None or len(stock_data) < 2 or len(spy_data) < 2:
@@ -40,7 +40,7 @@ class SMBStrategy(BaseStrategy):
         df["VWAP"] = self.calculate_vwap(df)
         if df["EMA_9"].isnull().any() or df["VWAP"].isnull().any():
             return None
-        symbol = str(df["symbol"].iloc[-1]) if "symbol" in df.columns else "UNKNOWN"NOWN"
+        symbol = str(df["symbol"].iloc[-1]) if "symbol" in df.columns else "UNKNOWN"
         is_crypto = "/" in symbol or symbol in ["BTCUSD", "ETHUSD"]
         if not is_crypto:
             spy_data = get_spy_data(stock_data_client, days_back=len(df))
