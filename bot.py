@@ -141,7 +141,7 @@ class TradingBot:
                 # Check if signal is active and within cooldown period (e.g., 1 hour)
                 if signal_key in self.active_signals:
                     last_signal_time = self.active_signals[signal_key]
-                    if datetime.now() - last_signal_time < timedelta(hours=1):
+                    if datetime.now(pytz.utc) - last_signal_time < timedelta(hours=1):
                         continue
                     else:
                         # Cooldown expired, remove from active signals
@@ -157,7 +157,7 @@ class TradingBot:
                     Config.MAX_BUYING_POWER_UTILIZATION_PERCENT
                 )
                 # Record the time the signal was generated
-                self.active_signals[signal_key] = datetime.now()
+                self.active_signals[signal_key] = datetime.now(pytz.utc)
 
     async def _on_crypto_trade(self, trade):
         await self._process_symbol(
