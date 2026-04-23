@@ -40,7 +40,7 @@ class SMBStrategy(BaseStrategy):
         df["VWAP"] = self.calculate_vwap(df)
         if df["EMA_9"].isnull().any() or df["VWAP"].isnull().any():
             return None
-        symbol = df["symbol"].iloc[-1] if "symbol" in df.columns else "UNKNOWN"
+        symbol = str(df["symbol"].iloc[-1]) if "symbol" in df.columns else "UNKNOWN"NOWN"
         is_crypto = "/" in symbol or symbol in ["BTCUSD", "ETHUSD"]
         if not is_crypto:
             spy_data = get_spy_data(stock_data_client, days_back=len(df))
