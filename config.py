@@ -7,6 +7,12 @@ class Config:
     FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
     PAPER_TRADING = True  # Set to False for live trading
 
+    # Slack Webhooks
+    SLACK_ALERTS_WEBHOOK = os.getenv("SLACK_ALERTS_WEBHOOK")
+    SLACK_DECISIONS_WEBHOOK = os.getenv("SLACK_DECISIONS_WEBHOOK")
+    SLACK_PERFORMANCE_WEBHOOK = os.getenv("SLACK_PERFORMANCE_WEBHOOK")
+    SLACK_HEALTH_WEBHOOK = os.getenv("SLACK_HEALTH_WEBHOOK")
+
     # Risk Management Parameters (General)
     EQUITY_RISK_PER_TRADE_PERCENT = 2.0  # Percentage of total equity to risk per trade
     STOP_LOSS_PERCENT = 2.0              # Percentage drop from entry price to trigger stop-loss

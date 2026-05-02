@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import pytz
 import pandas as pd
 from flask import Flask, jsonify
+import notifications
 
 # Hard override to prevent Alpaca from seeing conflicting tokens
 os.environ.pop("ALPACA_OAUTH_TOKEN", None)
@@ -116,19 +117,22 @@ class TradingBot:
                 if current_daily_pnl < 0:
                     current_daily_loss_percent = (abs(current_daily_pnl) / self.start_of_day_equity) * 100
                     if current_daily_loss_percent >= Config.MAX_DAILY_LOSS_PERCENT:
-                        self.trading_halted_for_day = True
-                        print(f"CRITICAL: Max daily loss of {Config.MAX_DAILY_LOSS_PERCENT}% hit! Trading halted for the day.")
+                        if not self.trading_halted_for_day:
+                            self.trading_halted_for_day = True
+                            msg = f"CRITICAL: Max daily loss of {Config.MAX_DAILY_LOSS_PERCENT}% hit! Trading halted for the day."
+                            print(msg)
+                            asyncio.create_task(notifications.notify_alert(msg, level="CRITICAL"))
                 
                 self.daily_pnl = current_daily_pnl
                 return True
             return False
         except Exception as e:
-            print(f"Error checking account status: {e}")
+            msg = f"Error checking account status: {e}"
+            print(msg)
+            asyncio.create_task(notifications.notify_alert(msg))
             return False
 
     async def _process_symbol(self, symbol, strategies, is_crypto, risk_percent, stop_loss_percent, current_price=None):
-        if self.trading_halted_for_day:
-            return
 
         client = self.crypto_data_client if is_crypto else self.stock_data_client
         data = get_historical_bars(symbol, TimeFrame.Day, 365, client, is_crypto=is_crypto)
@@ -161,26 +165,43 @@ class TradingBot:
                 signal = strategy.generate_signals(data)
             
             if signal:
+                if self.trading_halted_for_day:
+                    asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, "Daily loss limit hit"))
+                    continue
+                    
+                if signal['signal'] == "hold":
+                    asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, "Signal was hold (insufficient RR ratio or bear case stronger)"))
+                    continue
+
                 signal_key = f"{symbol}-{strategy.name}-{signal['signal']}"
                 
                 # Check if signal is active and within cooldown period (e.g., 1 hour)
                 if signal_key in self.active_signals:
                     last_signal_time = self.active_signals[signal_key]
                     if datetime.now(pytz.utc) - last_signal_time < timedelta(hours=1):
+                        asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, "Symbol on cooldown"))
                         continue
                     else:
                         # Cooldown expired, remove from active signals
                         del self.active_signals[signal_key]
 
                 print(f"Signal generated: {signal}")
-                strategy.execute_trade(
-                    signal, 
-                    self.trading_client, 
-                    risk_percent,
-                    stop_loss_percent,
-                    Config.TAKE_PROFIT_PERCENT,
-                    Config.MAX_BUYING_POWER_UTILIZATION_PERCENT
-                )
+                asyncio.create_task(notifications.notify_trade_decision(symbol, strategy.name, signal))
+                
+                try:
+                    strategy.execute_trade(
+                        signal, 
+                        self.trading_client, 
+                        risk_percent,
+                        stop_loss_percent,
+                        Config.TAKE_PROFIT_PERCENT,
+                        Config.MAX_BUYING_POWER_UTILIZATION_PERCENT
+                    )
+                except Exception as e:
+                    msg = f"Error executing trade for {symbol}: {e}"
+                    print(msg)
+                    asyncio.create_task(notifications.notify_alert(msg))
+                    
                 # Record the time the signal was generated
                 self.active_signals[signal_key] = datetime.now(pytz.utc)
 
@@ -213,7 +234,9 @@ class TradingBot:
                 # If _run_forever gracefully exits (unlikely), still consider resetting backoff
                 retry_delay = 5
             except Exception as e:
-                print(f"WebSocket connection error: {e}. Retrying in {retry_delay} seconds...")
+                msg = f"WebSocket connection error: {e}. Retrying in {retry_delay} seconds..."
+                print(msg)
+                asyncio.create_task(notifications.notify_alert(msg))
                 await asyncio.sleep(retry_delay)
                 
                 # If connection was alive for a while, reset the backoff, otherwise increase it
@@ -236,12 +259,60 @@ class TradingBot:
                 )
             await asyncio.sleep(86400)
 
+    async def health_report_loop(self):
+        print("🏥 Starting Daily Health Report Loop (9:00 AM EST)...")
+        while True:
+            now = datetime.now(pytz.timezone('America/New_York'))
+            target = now.replace(hour=9, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target += timedelta(days=1)
+            
+            sleep_seconds = (target - now).total_seconds()
+            await asyncio.sleep(sleep_seconds)
+            
+            await self._check_account_status()
+            account = self.trading_client.get_account()
+            if account:
+                uptime_seconds = (datetime.now(pytz.utc) - _bot_start_time).total_seconds()
+                uptime_str = str(timedelta(seconds=int(uptime_seconds)))
+                equity = float(account.equity)
+                buying_power = float(account.buying_power)
+                asyncio.create_task(notifications.notify_daily_health(uptime_str, equity, buying_power, self.daily_pnl))
+
+    async def performance_report_loop(self):
+        print("📊 Starting Weekly Performance Report Loop (Sunday 6:00 PM EST)...")
+        while True:
+            now = datetime.now(pytz.timezone('America/New_York'))
+            days_ahead = 6 - now.weekday() # Sunday is 6
+            target = now.replace(hour=18, minute=0, second=0, microsecond=0) + timedelta(days=days_ahead)
+            if now >= target:
+                target += timedelta(days=7)
+                
+            sleep_seconds = (target - now).total_seconds()
+            await asyncio.sleep(sleep_seconds)
+            
+            account = self.trading_client.get_account()
+            if account:
+                equity = float(account.equity)
+                try:
+                    positions = self.trading_client.get_all_positions()
+                    active_positions_count = len(positions)
+                except:
+                    active_positions_count = 0
+                
+                asyncio.create_task(notifications.notify_weekly_performance(equity, active_positions_count, self.daily_pnl))
+
     async def start_dual_engine(self):
         if not await self._check_account_status():
             return
         self.add_scalp_strategy(SMBStrategy("SMB Late Scalp", ema_window=9, rr_ratio=3))
         self.add_swing_strategy(SwingStrategy("Swing Trader", ema_short=50, ema_long=200))
-        await asyncio.gather(self.scalp_loop(), self.swing_loop())
+        await asyncio.gather(
+            self.scalp_loop(), 
+            self.swing_loop(),
+            self.health_report_loop(),
+            self.performance_report_loop()
+        )
 
 if __name__ == "__main__":
     start_health_server(port=8501)
