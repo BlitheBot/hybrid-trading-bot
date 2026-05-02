@@ -4,10 +4,7 @@ pytz
 streamlit
 plotly
 requests
-numpy==2.2.6
-numba==0.61.2
-llvmlite==0.44.0
-msvc-runtime
+numpy
 pandas-ta
 scipy
 matplotlib
