@@ -196,6 +196,7 @@ class TradingBot:
 
     async def scalp_loop(self):
         print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS} (Websocket)...")
+        retry_delay = 5
         while True:
             try:
                 # Re-initialize CryptoDataStream on each attempt to ensure a fresh connection
@@ -205,10 +206,21 @@ class TradingBot:
                     secret_key=Config.ALPACA_SECRET_KEY
                 )
                 self.crypto_stream.subscribe_trades(self._on_crypto_trade, *Config.SCALP_SYMBOLS)
+                
+                connect_time = time.time()
                 await self.crypto_stream._run_forever()
+                
+                # If _run_forever gracefully exits (unlikely), still consider resetting backoff
+                retry_delay = 5
             except Exception as e:
-                print(f"WebSocket connection error: {e}. Retrying in 60 seconds...")
-                await asyncio.sleep(60) # Wait for 60 seconds before retrying
+                print(f"WebSocket connection error: {e}. Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+                
+                # If connection was alive for a while, reset the backoff, otherwise increase it
+                if 'connect_time' in locals() and time.time() - connect_time > 60:
+                    retry_delay = 5
+                else:
+                    retry_delay = min(retry_delay * 2, 60)
 
     async def swing_loop(self):
         print(f"📈 Starting Stock Swing Bot for {Config.SWING_SYMBOLS} (Polling)...")
