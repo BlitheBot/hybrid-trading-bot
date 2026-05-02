@@ -13,6 +13,8 @@ class MeanReversionStrategy(BaseStrategy):
         if market_data is None or len(market_data) < self.window:
             return None
 
+        market_data = market_data.copy()
+
         # Calculate Bollinger Bands
         market_data["rolling_mean"] = market_data["close"].rolling(window=self.window).mean()
         market_data["rolling_std"] = market_data["close"].rolling(window=self.window).std()
@@ -41,7 +43,7 @@ class MeanReversionStrategy(BaseStrategy):
             }
         return None
 
-    def execute_trade(self, signal, trading_client, equity_risk_percent, stop_loss_percent, take_profit_percent):
+    def execute_trade(self, signal, trading_client, equity_risk_percent, stop_loss_percent, take_profit_percent, max_buying_power_utilization_percent):
         if signal is None or signal["signal"] == "hold":
             return
 

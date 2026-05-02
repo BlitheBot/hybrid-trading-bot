@@ -3,3 +3,10 @@ pandas
 pytz
 streamlit
 plotly
+requests
+numpy
+pandas-ta
+scipy
+matplotlib
+seaborn
+flask

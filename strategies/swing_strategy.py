@@ -131,6 +131,8 @@ class SwingStrategy(BaseStrategy):
         
         try:
             trading_client.submit_order(order_data=order_data)
-            print(f"✅ Swing Order Placed: {side} {symbol} (Qty: {qty}) @ {entry_price}. SL: {signal["stop_price"]}, TP: {signal["target_price"]}")
+            sl_price = signal["stop_price"]
+            tp_price = signal["target_price"]
+            print(f"✅ Swing Order Placed: {side} {symbol} (Qty: {qty}) @ {entry_price}. SL: {sl_price}, TP: {tp_price}")
         except Exception as e:
             print(f"❌ Swing Order Failed for {symbol}: {e}")

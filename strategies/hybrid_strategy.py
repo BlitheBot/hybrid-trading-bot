@@ -69,7 +69,7 @@ class HybridStrategy(BaseStrategy):
             }
         return None
 
-    def execute_trade(self, signal, trading_client, equity_risk_percent, stop_loss_percent, take_profit_percent):
+    def execute_trade(self, signal, trading_client, equity_risk_percent, stop_loss_percent, take_profit_percent, max_buying_power_utilization_percent):
         if signal is None or signal["signal"] == "hold":
             return
 

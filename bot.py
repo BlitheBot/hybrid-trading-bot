@@ -1,9 +1,11 @@
 import os
 import time
 import asyncio
+import threading
 from datetime import datetime, timedelta
 import pytz
 import pandas as pd
+from flask import Flask, jsonify
 
 # Hard override to prevent Alpaca from seeing conflicting tokens
 os.environ.pop("ALPACA_OAUTH_TOKEN", None)
@@ -20,6 +22,29 @@ from strategies.sma_crossover import SMACrossoverStrategy
 from strategies.smb_strategy import SMBStrategy
 from strategies.swing_strategy import SwingStrategy
 from utils import get_historical_bars, get_finnhub_price
+
+# ── Flask Health Endpoint (Bug 5) ───────────────────────────────────
+_health_app = Flask(__name__)
+_bot_start_time = datetime.now(pytz.utc)
+
+@_health_app.route("/health", methods=["GET"])
+def health_check():
+    uptime_seconds = (datetime.now(pytz.utc) - _bot_start_time).total_seconds()
+    return jsonify({
+        "status": "running",
+        "uptime_seconds": round(uptime_seconds, 2),
+        "started_at": _bot_start_time.isoformat()
+    }), 200
+
+def start_health_server(port=8501):
+    """Run the Flask health server in a daemon thread so it never blocks the bot."""
+    thread = threading.Thread(
+        target=lambda: _health_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False),
+        daemon=True
+    )
+    thread.start()
+    print(f"🩺 Health endpoint running on http://0.0.0.0:{port}/health")
+
 
 class TradingBot:
     def __init__(self):
@@ -207,5 +232,6 @@ class TradingBot:
         await asyncio.gather(self.scalp_loop(), self.swing_loop())
 
 if __name__ == "__main__":
+    start_health_server(port=8501)
     bot = TradingBot()
     asyncio.run(bot.start_dual_engine())
