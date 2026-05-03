@@ -5,20 +5,13 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from .base_strategy import BaseStrategy
 from utils import get_spy_data
 
+import pandas_ta as ta
+
 class SMBStrategy(BaseStrategy):
     def __init__(self, name, ema_window=9, rr_ratio=3):
         super().__init__(name)
         self.ema_window = ema_window
         self.rr_ratio = rr_ratio
-
-    def calculate_vwap(self, df):
-        df_filtered = df[df["volume"] > 0]
-        if df_filtered.empty:
-            return pd.Series(np.nan, index=df.index)
-        v = df_filtered["volume"].values
-        tp = (df_filtered["low"] + df_filtered["high"] + df_filtered["close"]).values / 3
-        vwap_series = pd.Series((tp * v).cumsum() / v.cumsum(), index=df_filtered.index)
-        return vwap_series.reindex(df.index, method='ffill')
 
     def calculate_relative_strength(self, stock_data, spy_data):
         if stock_data is None or spy_data is None or len(stock_data) < 2 or len(spy_data) < 2:
@@ -33,13 +26,18 @@ class SMBStrategy(BaseStrategy):
         return stock_performance - spy_performance
 
     def generate_signals(self, market_data, stock_data_client):
-        if market_data is None or len(market_data) < self.ema_window + 1:
+        if market_data is None or len(market_data) < self.ema_window + 14:
             return None
         df = market_data.copy()
-        df["EMA_9"] = df["close"].ewm(span=self.ema_window, adjust=False).mean()
-        df["VWAP"] = self.calculate_vwap(df)
-        if df["EMA_9"].isnull().any() or df["VWAP"].isnull().any():
+        
+        # Replace manual calculations with pandas-ta
+        df["EMA_9"] = ta.ema(df["close"], length=self.ema_window)
+        df["VWAP"] = ta.vwap(high=df["high"], low=df["low"], close=df["close"], volume=df["volume"])
+        df["ATR"] = ta.atr(high=df["high"], low=df["low"], close=df["close"], length=14)
+        
+        if df["EMA_9"].isnull().any() or df["VWAP"].isnull().any() or df["ATR"].isnull().all():
             return None
+            
         symbol = str(df["symbol"].iloc[-1]) if "symbol" in df.columns else "UNKNOWN"
         is_crypto = "/" in symbol or symbol in ["BTCUSD", "ETHUSD"]
         if not is_crypto:
@@ -47,27 +45,31 @@ class SMBStrategy(BaseStrategy):
             relative_strength = self.calculate_relative_strength(df, spy_data)
             if relative_strength is None or relative_strength <= 0:
                 return None
+                
         curr_ema, prev_ema = df["EMA_9"].iloc[-1], df["EMA_9"].iloc[-2]
         curr_vwap, prev_vwap = df["VWAP"].iloc[-1], df["VWAP"].iloc[-2]
         current_price = df["close"].iloc[-1]
-        lod, hod = df["low"].min(), df["high"].max()
+        atr = df["ATR"].iloc[-1]
+        
         signal = None
         if curr_ema > curr_vwap and prev_ema <= prev_vwap and curr_ema > prev_ema:
             signal = "buy"
         elif curr_ema < curr_vwap and prev_ema >= prev_vwap and curr_ema < prev_ema:
             signal = "sell"
-        if signal:
+            
+        if signal and not np.isnan(atr):
             if signal == "buy":
-                distance = current_price - lod
-                stop_price = current_price - (distance / self.rr_ratio)
-                target_price = current_price + distance
+                distance = atr * 1.5 # Use 1.5x ATR for stop distance
+                stop_price = current_price - distance
+                target_price = current_price + (distance * self.rr_ratio)
             else:
-                distance = hod - current_price
-                stop_price = current_price + (distance / self.rr_ratio)
-                target_price = current_price - distance
+                distance = atr * 1.5
+                stop_price = current_price + distance
+                target_price = current_price - (distance * self.rr_ratio)
             return {
                 "symbol": symbol, "signal": signal, "confidence": 0.8,
-                "entry_price": current_price, "stop_price": stop_price, "target_price": target_price
+                "entry_price": current_price, "stop_price": stop_price, "target_price": target_price,
+                "reasoning": f"VWAP Crossover. ATR(14): {atr:.4f}"
             }
         return None
 

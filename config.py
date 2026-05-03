@@ -19,8 +19,17 @@ class Config:
     TAKE_PROFIT_PERCENT = 6.0            # Percentage gain from entry price to trigger take-profit
     MAX_BUYING_POWER_UTILIZATION_PERCENT = 10.0 # Max percentage of buying power to use for a single trade
 
-    # New: Daily Loss Limit
-    MAX_DAILY_LOSS_PERCENT = 3.0 # If hit, stop all new trading for the rest of the day
+    # Graduated Daily Loss Limits
+    DAILY_LOSS_REDUCTION_1_PERCENT = 2.0  # Reduce new position sizes by 25%
+    DAILY_LOSS_REDUCTION_2_PERCENT = 3.5  # Reduce new position sizes by 50%
+    MAX_DAILY_LOSS_PERCENT = 5.0          # Stop all new trading for the day
+    
+    # Advanced Swing & Risk Parameters
+    SWING_MIN_RR_RATIO = 2.0
+    TRAILING_STOP_ACTIVATION_PCT = 0.03
+    TRAILING_STOP_TRAIL_PCT = 0.015
+    SYMBOL_COOLDOWN_MINUTES = 120
+    MIN_PRICE_MOVEMENT_PCT = 0.0015
 
     # Scalping Bot Parameters (Crypto)
     SCALP_SYMBOLS = ["BTC/USD", "ETH/USD"]

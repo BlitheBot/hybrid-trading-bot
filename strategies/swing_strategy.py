@@ -5,6 +5,8 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from .base_strategy import BaseStrategy
 from config import Config
 
+import pandas_ta as ta
+
 class SwingStrategy(BaseStrategy):
     def __init__(self, name, ema_short=50, ema_long=200, macd_fast=12, macd_slow=26, macd_signal=9):
         super().__init__(name)
@@ -14,36 +16,27 @@ class SwingStrategy(BaseStrategy):
         self.macd_slow = macd_slow
         self.macd_signal = macd_signal
 
-    def calculate_macd(self, df):
-        exp1 = df['close'].ewm(span=self.macd_fast, adjust=False).mean()
-        exp2 = df['close'].ewm(span=self.macd_slow, adjust=False).mean()
-        macd = exp1 - exp2
-        signal = macd.ewm(span=self.macd_signal, adjust=False).mean()
-        return macd, signal
-
-    def calculate_rsi(self, df, window=14):
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        return rsi
-
     def generate_signals(self, market_data):
         if market_data is None or len(market_data) < self.ema_long + self.macd_slow + self.macd_signal + 14:
             return None
 
         df = market_data.copy()
 
-        # Calculate EMAs
-        df['EMA_short'] = df['close'].ewm(span=self.ema_short, adjust=False).mean()
-        df['EMA_long'] = df['close'].ewm(span=self.ema_long, adjust=False).mean()
+        # Calculate EMAs with pandas-ta
+        df['EMA_short'] = ta.ema(df['close'], length=self.ema_short)
+        df['EMA_long'] = ta.ema(df['close'], length=self.ema_long)
 
-        # Calculate MACD
-        df['MACD'], df['MACD_Signal'] = self.calculate_macd(df)
+        # Calculate MACD with pandas-ta
+        macd_df = ta.macd(df['close'], fast=self.macd_fast, slow=self.macd_slow, signal=self.macd_signal)
+        if macd_df is not None and not macd_df.empty:
+            df['MACD'] = macd_df.iloc[:, 0]
+            df['MACD_Signal'] = macd_df.iloc[:, 2]
+        else:
+            df['MACD'] = np.nan
+            df['MACD_Signal'] = np.nan
 
-        # Calculate RSI
-        df['RSI'] = self.calculate_rsi(df)
+        # Calculate RSI with pandas-ta
+        df['RSI'] = ta.rsi(df['close'], length=14)
 
         # Ensure we have enough data for calculations
         if df['EMA_short'].isnull().any() or df['EMA_long'].isnull().any() or \
@@ -66,19 +59,26 @@ class SwingStrategy(BaseStrategy):
            40 <= last_rsi <= 60:
             signal = "buy"
             confidence = 0.7
+            reasoning = f"50EMA({last_ema_short:.2f}) > 200EMA({last_ema_long:.2f}), MACD Cross Up, RSI({last_rsi:.2f}) in [40,60]"
 
-        # Exit conditions (for existing positions, not new short signals)
+        # Exit conditions (for existing positions)
         # RSI above 70 or MACD reversal
         elif (last_rsi > 70) or \
              (last_macd < last_macd_signal and df['MACD'].iloc[-2] >= df['MACD_Signal'].iloc[-2]):
-            # This is an exit signal for an existing long position
-            # For now, we'll just return None for new trades, and handle exits in bot.py
-            pass
+            signal = "sell"
+            confidence = 0.9
+            reasoning = f"Exit Condition Met: RSI({last_rsi:.2f}) > 70 OR MACD Reversal Down"
 
         if signal == "buy":
-            # Use general risk parameters for swing trades
             stop_loss_price = current_price * (1 - (Config.STOP_LOSS_PERCENT / 100))
             take_profit_price = current_price * (1 + (Config.TAKE_PROFIT_PERCENT / 100))
+            
+            # Enforce 1:2 R/R Check
+            risk = current_price - stop_loss_price
+            reward = take_profit_price - current_price
+            if risk > 0 and (reward / risk) < Config.SWING_MIN_RR_RATIO:
+                signal = "hold"
+                reasoning = f"Insufficient RR Ratio: {(reward/risk):.2f} < {Config.SWING_MIN_RR_RATIO}"
 
             return {
                 "symbol": market_data["symbol"].iloc[-1] if "symbol" in market_data.columns else "UNKNOWN",
@@ -86,7 +86,15 @@ class SwingStrategy(BaseStrategy):
                 "confidence": confidence,
                 "entry_price": current_price,
                 "stop_price": stop_loss_price,
-                "target_price": take_profit_price
+                "target_price": take_profit_price,
+                "reasoning": reasoning
+            }
+        elif signal == "sell":
+            return {
+                "symbol": market_data["symbol"].iloc[-1] if "symbol" in market_data.columns else "UNKNOWN",
+                "signal": signal,
+                "confidence": confidence,
+                "reasoning": reasoning
             }
         return None
 
@@ -96,13 +104,22 @@ class SwingStrategy(BaseStrategy):
 
         symbol = signal["symbol"]
         
+        # Handle Exit Signals
+        if signal["signal"] == "sell":
+            try:
+                trading_client.close_position(symbol)
+                print(f"✅ Swing Position Closed for {symbol} due to exit signal.")
+            except Exception as e:
+                print(f"❌ Failed to close position for {symbol}: {e}")
+            return
+            
         # 1. SAFETY CHECK: Are we already in this position?
         if self.is_already_in_position(symbol, trading_client):
             print(f"Skipping {symbol} - already in position or order pending.")
             return
 
         entry_price = signal["entry_price"]
-        side = OrderSide.BUY if signal["signal"] == "buy" else OrderSide.SELL
+        side = OrderSide.BUY
 
         account = trading_client.get_account()
         if not account:

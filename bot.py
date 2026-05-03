@@ -7,6 +7,9 @@ import pytz
 import pandas as pd
 from flask import Flask, jsonify
 import notifications
+import time
+from alpaca.trading.requests import GetOrdersRequest
+from alpaca.trading.enums import QueryOrderStatus
 
 # Hard override to prevent Alpaca from seeing conflicting tokens
 os.environ.pop("ALPACA_OAUTH_TOKEN", None)
@@ -83,7 +86,10 @@ class TradingBot:
         self.start_of_day_equity = 0.0
         self.last_pnl_reset_date = datetime.now(pytz.timezone('America/New_York')).date()
         self.trading_halted_for_day = False
+        self.risk_multiplier = 1.0
         self.active_signals = {}
+        self.last_loss_times = {}
+        self.last_evaluated_price = {}
 
     def add_scalp_strategy(self, strategy: BaseStrategy):
         if not isinstance(strategy, BaseStrategy):
@@ -114,6 +120,7 @@ class TradingBot:
                     self.start_of_day_equity = float(account.equity)
 
                 current_daily_pnl = float(account.equity) - self.start_of_day_equity
+                self.risk_multiplier = 1.0
                 if current_daily_pnl < 0:
                     current_daily_loss_percent = (abs(current_daily_pnl) / self.start_of_day_equity) * 100
                     if current_daily_loss_percent >= Config.MAX_DAILY_LOSS_PERCENT:
@@ -122,6 +129,10 @@ class TradingBot:
                             msg = f"CRITICAL: Max daily loss of {Config.MAX_DAILY_LOSS_PERCENT}% hit! Trading halted for the day."
                             print(msg)
                             asyncio.create_task(notifications.notify_alert(msg, level="CRITICAL"))
+                    elif current_daily_loss_percent >= Config.DAILY_LOSS_REDUCTION_2_PERCENT:
+                        self.risk_multiplier = 0.50
+                    elif current_daily_loss_percent >= Config.DAILY_LOSS_REDUCTION_1_PERCENT:
+                        self.risk_multiplier = 0.75
                 
                 self.daily_pnl = current_daily_pnl
                 return True
@@ -132,7 +143,30 @@ class TradingBot:
             asyncio.create_task(notifications.notify_alert(msg))
             return False
 
+    def _update_loss_cache(self):
+        try:
+            # Check recently filled orders to see if any were stop losses
+            req = GetOrdersRequest(
+                status=QueryOrderStatus.CLOSED,
+                limit=50,
+                after=datetime.now(pytz.utc) - timedelta(minutes=Config.SYMBOL_COOLDOWN_MINUTES)
+            )
+            orders = self.trading_client.get_orders(req)
+            for order in orders:
+                # If a 'stop' order was filled, it's a loss exit
+                if order.status.value == "filled" and (order.order_type.value == "stop" or order.order_type.value == "trailing_stop"):
+                    self.last_loss_times[order.symbol] = order.filled_at
+        except Exception as e:
+            print(f"Failed to update loss cache: {e}")
+
     async def _process_symbol(self, symbol, strategies, is_crypto, risk_percent, stop_loss_percent, current_price=None):
+        if self.trading_halted_for_day:
+            return
+
+        self._update_loss_cache()
+        if symbol in self.last_loss_times:
+            if datetime.now(pytz.utc) - self.last_loss_times[symbol] < timedelta(minutes=Config.SYMBOL_COOLDOWN_MINUTES):
+                return # Blocked by cooldown
 
         client = self.crypto_data_client if is_crypto else self.stock_data_client
         data = get_historical_bars(symbol, TimeFrame.Day, 365, client, is_crypto=is_crypto)
@@ -173,6 +207,14 @@ class TradingBot:
                     asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, "Signal was hold (insufficient RR ratio or bear case stronger)"))
                     continue
 
+                if signal['signal'] == "buy":
+                    try:
+                        self.trading_client.get_open_position(symbol)
+                        asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, "One position per symbol limit"))
+                        continue
+                    except:
+                        pass # No open position, proceed
+
                 signal_key = f"{symbol}-{strategy.name}-{signal['signal']}"
                 
                 # Check if signal is active and within cooldown period (e.g., 1 hour)
@@ -189,10 +231,11 @@ class TradingBot:
                 asyncio.create_task(notifications.notify_trade_decision(symbol, strategy.name, signal))
                 
                 try:
+                    scaled_risk_percent = risk_percent * self.risk_multiplier
                     strategy.execute_trade(
                         signal, 
                         self.trading_client, 
-                        risk_percent,
+                        scaled_risk_percent,
                         stop_loss_percent,
                         Config.TAKE_PROFIT_PERCENT,
                         Config.MAX_BUYING_POWER_UTILIZATION_PERCENT
@@ -205,14 +248,50 @@ class TradingBot:
                 # Record the time the signal was generated
                 self.active_signals[signal_key] = datetime.now(pytz.utc)
 
+    async def _get_stronger_momentum_crypto(self):
+        now = datetime.now(pytz.utc)
+        if hasattr(self, '_momentum_winner_cache') and hasattr(self, '_momentum_winner_time') and (now - self._momentum_winner_time).total_seconds() < 300:
+            return self._momentum_winner_cache
+            
+        import pandas_ta as ta
+        from utils import get_historical_bars
+        from alpaca.data.timeframe import TimeFrame
+        
+        rsi_scores = {}
+        for sym in Config.SCALP_SYMBOLS:
+            df = get_historical_bars(sym, TimeFrame.Hour, 7, self.crypto_data_client, is_crypto=True)
+            if df is not None and len(df) > 14:
+                df['RSI'] = ta.rsi(df['close'], length=14)
+                rsi_scores[sym] = df['RSI'].iloc[-1]
+                
+        if len(rsi_scores) == 2:
+            winner = max(rsi_scores, key=rsi_scores.get)
+            self._momentum_winner_cache = winner
+            self._momentum_winner_time = now
+            return winner
+        return None
+
     async def _on_crypto_trade(self, trade):
+        symbol = trade.symbol
+        price = trade.price
+        
+        if symbol in self.last_evaluated_price:
+            last_price = self.last_evaluated_price[symbol]
+            if abs(price - last_price) / last_price < Config.MIN_PRICE_MOVEMENT_PCT:
+                return # Not enough movement
+        self.last_evaluated_price[symbol] = price
+        
+        winner = await self._get_stronger_momentum_crypto()
+        if winner and symbol != winner:
+            return # Skip if this symbol doesn't have the strongest momentum
+            
         await self._process_symbol(
-            trade.symbol, 
+            symbol, 
             self.scalp_strategies, 
             is_crypto=True, 
             risk_percent=Config.EQUITY_RISK_PER_TRADE_PERCENT, 
             stop_loss_percent=Config.CRYPTO_SCALP_STOP_LOSS_PERCENT,
-            current_price=trade.price
+            current_price=price
         )
 
     async def scalp_loop(self):
@@ -245,9 +324,57 @@ class TradingBot:
                 else:
                     retry_delay = min(retry_delay * 2, 60)
 
-    async def swing_loop(self):
-        print(f"📈 Starting Stock Swing Bot for {Config.SWING_SYMBOLS} (Polling)...")
+    async def trailing_stop_monitor_loop(self):
+        print("🛡️ Starting Trailing Stop Monitor Loop...")
+        from alpaca.trading.requests import TrailingStopOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
         while True:
+            await asyncio.sleep(60) # check every minute
+            try:
+                positions = self.trading_client.get_all_positions()
+                for pos in positions:
+                    unrealized_pct = float(pos.unrealized_plpc)
+                    if unrealized_pct >= Config.TRAILING_STOP_ACTIVATION_PCT:
+                        # Find open stop loss order for this symbol and replace it
+                        req = GetOrdersRequest(
+                            status=QueryOrderStatus.OPEN,
+                            symbols=[pos.symbol]
+                        )
+                        orders = self.trading_client.get_orders(req)
+                        for order in orders:
+                            if order.order_type.value == "stop": # static stop loss found
+                                msg = f"Activating Trailing Stop for {pos.symbol} at {unrealized_pct*100:.2f}% profit!"
+                                print(msg)
+                                asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
+                                
+                                self.trading_client.cancel_order_by_id(order.id)
+                                new_sl = TrailingStopOrderRequest(
+                                    symbol=pos.symbol,
+                                    qty=abs(float(pos.qty)),
+                                    side=OrderSide.SELL if pos.side == "long" else OrderSide.BUY,
+                                    time_in_force=TimeInForce.GTC,
+                                    trail_percent=Config.TRAILING_STOP_TRAIL_PCT * 100
+                                )
+                                self.trading_client.submit_order(new_sl)
+            except Exception as e:
+                pass
+
+    async def swing_loop(self):
+        print(f"📈 Starting Stock Swing Bot for {Config.SWING_SYMBOLS} (10:30 AM EST Polling)...")
+        while True:
+            now = datetime.now(pytz.timezone('America/New_York'))
+            target = now.replace(hour=10, minute=30, second=0, microsecond=0)
+            
+            # If it's past 10:30 AM, move to tomorrow.
+            if now >= target:
+                target += timedelta(days=1)
+            # Skip weekends
+            while target.weekday() > 4: # 5=Sat, 6=Sun
+                target += timedelta(days=1)
+                
+            sleep_seconds = (target - now).total_seconds()
+            await asyncio.sleep(sleep_seconds)
+            
             await self._check_account_status()
             for symbol in Config.SWING_SYMBOLS:
                 await self._process_symbol(
@@ -257,7 +384,6 @@ class TradingBot:
                     risk_percent=Config.SWING_EQUITY_RISK_PERCENT, 
                     stop_loss_percent=Config.STOP_LOSS_PERCENT
                 )
-            await asyncio.sleep(86400)
 
     async def health_report_loop(self):
         print("🏥 Starting Daily Health Report Loop (9:00 AM EST)...")
@@ -315,7 +441,8 @@ class TradingBot:
             self.scalp_loop(), 
             self.swing_loop(),
             self.health_report_loop(),
-            self.performance_report_loop()
+            self.performance_report_loop(),
+            self.trailing_stop_monitor_loop()
         )
 
 if __name__ == "__main__":
