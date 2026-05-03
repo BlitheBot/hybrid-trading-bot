@@ -428,10 +428,25 @@ class TradingBot:
                 
                 asyncio.create_task(notifications.notify_weekly_performance(equity, active_positions_count, self.daily_pnl))
 
+    async def _test_all_slack_webhooks(self):
+        print("Sending test messages to all 4 Slack channels...")
+        alerts_msg = "🧪 TEST — Alerts channel working. You will receive: bot startup, errors, daily loss limit hits, websocket failures."
+        decisions_msg = "🧪 TEST — Decisions channel working. You will receive: every trade taken with full reasoning, every trade skipped with reason why."
+        health_msg = "🧪 TEST — Health channel working. You will receive: daily report every morning at 9am EST with equity, uptime, and component status."
+        perf_msg = "🧪 TEST — Performance channel working. You will receive: weekly summary every Sunday at 6pm EST with equity, P&L, and open positions."
+        
+        await notifications._post_to_slack(Config.SLACK_ALERTS_WEBHOOK, {"text": alerts_msg})
+        await notifications._post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, {"text": decisions_msg})
+        await notifications._post_to_slack(Config.SLACK_HEALTH_WEBHOOK, {"text": health_msg})
+        await notifications._post_to_slack(Config.SLACK_PERFORMANCE_WEBHOOK, {"text": perf_msg})
+
     async def start_dual_engine(self):
         msg = "🚀 Hybrid Trading Bot has successfully started and connected to Slack!"
         print(msg)
         asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
+        
+        # Fire temporary test
+        await self._test_all_slack_webhooks()
         
         if not await self._check_account_status():
             return
