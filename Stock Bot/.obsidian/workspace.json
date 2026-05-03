@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "Welcome.md",
+                "file": "Trading_Bot_Roadmap.md",
                 "mode": "preview",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Welcome"
+              "title": "Trading_Bot_Roadmap"
             }
           }
         ]
@@ -185,8 +185,9 @@
   },
   "active": "5ae40cd8b4c81893",
   "lastOpenFiles": [
-    "Trading_Bot_Roadmap.md for obsidian.md",
     "Welcome.md",
+    "Trading_Bot_Roadmap.md",
+    "Trading_Bot_Roadmap.md for obsidian.md",
     "Untitled"
   ]
 }

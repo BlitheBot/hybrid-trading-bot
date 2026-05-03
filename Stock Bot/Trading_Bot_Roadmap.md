@@ -9,15 +9,21 @@
 |------|--------|
 | Bot deployed on Railway | ✅ Live |
 | GitHub repo connected | ✅ BlitheBot/hybrid-trading-bot |
-| Alpaca paper trading | ✅ Active — $99,887 equity |
+| Alpaca paper trading | ✅ Active — $98,806 equity |
 | Slack webhook | ✅ Set up and tested |
-| Uptime Robot monitor | ✅ Running |
-| Antigravity installed | ✅ Ready |
-| Claude Code installed | ✅ Ready |
+| Uptime Robot monitor | ✅ Running — health endpoint live |
+| Antigravity installed | ✅ Primary dev tool |
+| Claude Code installed | ✅ Backup dev tool |
 | Git installed | ✅ Ready |
 | Repo cloned locally | ✅ C:\Users\mjshi\hybrid-trading-bot |
-| Claude Pro subscription | ⏳ Subscribe at claude.ai/upgrade |
+| Python 3.12.10 installed | ✅ Local environment |
+| Obsidian vault | ✅ vault/ folder in repo |
+| Phase 1 bug fixes | ✅ All 5 bugs fixed and deployed |
+| Health endpoint | ✅ /health returning JSON |
+| Crypto websocket | ✅ BTC/ETH scanning |
+| Swing bot | ✅ 6 symbols scanning |
 | Anthropic API key | ⏳ Add to Railway variables |
+| Claude Pro subscription | ⏳ Subscribe at claude.ai/upgrade |
 
 ---
 
@@ -82,7 +88,30 @@ Strategy Discovery Engine (finds new edges autonomously)
 
 ---
 
-## 🗺️ Development Phases
+## 🧠 Inspired by TradingAgents (UCLA/MIT Framework)
+
+> TradingAgents is an open-source multi-agent trading framework with 29.9k GitHub stars built by UCLA/MIT researchers. It mirrors real trading firms by having specialized AI agents debate each other before any trade executes. Three concepts are worth integrating into your bot.
+
+### What They Have That You're Missing
+
+**1. Bull/Bear Debate — most important**
+Before any swing trade executes, two Claude API calls challenge the signal from opposite sides. One agent argues FOR the trade, one argues AGAINST it, then a third synthesizes the debate and makes the final call. This forces the system to consider why a trade might fail before entering — something your current system never does. Expected impact: significant win rate improvement on swing trades by filtering out signals that look good technically but have real weaknesses.
+
+**2. Fundamentals Analyst**
+TradingAgents checks company financials before every swing trade — P/E ratio, earnings growth, revenue trend, debt levels. Your bot currently trades purely on technicals and sentiment, ignoring whether the company itself is healthy. Simple rule: don't swing trade a company with negative earnings growth or deteriorating fundamentals regardless of how good the chart looks. Finnhub's free API already in your stack provides this data.
+
+**3. Explainability Logging**
+TradingAgents saves a full reasoning transcript for every decision. Your bot executes and sends a Slack alert with no explanation of why. Adding a reasoning field — "Entered NVDA long: EMA crossover ✅, MACD bullish ✅, RSI 54 ✅, news sentiment +8.2 ✅, bull case stronger than bear case" — to both Slack alerts and PostgreSQL logs helps you understand what conditions actually produce winning trades over time.
+
+### Where Your Bot Already Beats TradingAgents
+- ✅ Live 24/7 autonomous execution on Alpaca (TradingAgents is research only)
+- ✅ Real-time websocket crypto scalping (TradingAgents does daily swing only)
+- ✅ Truth Social + political sentiment layer (no equivalent in TradingAgents)
+- ✅ Strategy Discovery Engine planned (TradingAgents uses fixed strategies)
+- ✅ Production infrastructure — Railway, Uptime Robot, Sentry, health monitoring
+- ✅ Options flow + congressional trading planned (Unusual Whales, Quiver Quant)
+
+---
 
 ### ✅ Phase 0 — Foundation (Complete)
 - [x] Bot built by Manus and deployed on Railway
@@ -171,6 +200,9 @@ Strategy Discovery Engine (finds new edges autonomously)
 - [ ] Matplotlib equity curve charts generated
 - [ ] Weekly Slack report with Seaborn correlation heatmaps
 - [ ] EV tracking per strategy (positive EV required to stay active)
+- [ ] **Bull/Bear Debate** — two Claude API calls before every swing trade entry. Bull agent argues FOR, Bear agent argues AGAINST, Trader agent synthesizes and decides. Log full reasoning to Slack and PostgreSQL.
+- [ ] **Fundamentals Analyst** — before any swing trade check Finnhub fundamentals. Skip trade if: negative earnings growth, P/E ratio extreme outlier, earnings within 48 hours, debt-to-equity above 3.
+- [ ] **Explainability logging** — every trade decision logged with full reasoning: which signals fired, bull/bear debate summary, conviction score, why it was taken or skipped.
 
 ---
 
