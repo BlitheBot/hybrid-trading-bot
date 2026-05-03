@@ -303,6 +303,10 @@ class TradingBot:
                 asyncio.create_task(notifications.notify_weekly_performance(equity, active_positions_count, self.daily_pnl))
 
     async def start_dual_engine(self):
+        msg = "🚀 Hybrid Trading Bot has successfully started and connected to Slack!"
+        print(msg)
+        asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
+        
         if not await self._check_account_status():
             return
         self.add_scalp_strategy(SMBStrategy("SMB Late Scalp", ema_window=9, rr_ratio=3))
