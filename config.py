@@ -39,7 +39,15 @@ class Config:
     SWING_SYMBOLS = ["MSFT", "AAPL", "NVDA", "AMZN", "SPY", "QQQ"]
     SWING_EQUITY_RISK_PERCENT = 1.0 # Smaller position sizes for swing trades
 
-    # Trading parameters (will be dynamically calculated based on risk management)
-    # TRADE_AMOUNT = 100  # No longer a fixed amount, calculated dynamically
+    # Anthropic API credentials
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-    # Add more configuration parameters as needed
+    # Sentiment & News Parameters
+    NEWS_SIGNAL_ALERT_THRESHOLD = 7
+    NEWS_SIGNAL_AUTO_TRADE_THRESHOLD = 13
+    TRUTH_SOCIAL_ALERT_THRESHOLD = 7
+    TRUTH_SOCIAL_AUTO_TRADE_THRESHOLD = 13
+    
+    TRUTH_SOCIAL_STOP_LOSS = 2.0  # 2% stop loss
+    TRUTH_SOCIAL_TAKE_PROFIT = 8.0 # 8% take profit
+    TRUTH_SOCIAL_POSITION_SIZE_MULTIPLIER = 0.50 # 50% of normal size
