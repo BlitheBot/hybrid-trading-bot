@@ -299,6 +299,7 @@ class TradingBot:
     async def scalp_loop(self):
         print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS} (Websocket)...")
         retry_delay = 5
+        connect_time = None
         while True:
             try:
                 # Re-initialize CryptoDataStream on each attempt to ensure a fresh connection
@@ -312,19 +313,25 @@ class TradingBot:
                 connect_time = time.time()
                 await self.crypto_stream._run_forever()
                 
-                # If _run_forever gracefully exits (unlikely), still consider resetting backoff
+                # If _run_forever gracefully exits (unlikely), reset backoff
                 retry_delay = 5
             except Exception as e:
-                msg = f"WebSocket connection error: {e}. Retrying in {retry_delay} seconds..."
+                # Determine next delay BEFORE sleeping
+                if connect_time is not None and (time.time() - connect_time) > 60:
+                    # Connection was stable for >60s — reset backoff
+                    retry_delay = 5
+                    print(f"WebSocket was stable for >60s. Backoff reset to {retry_delay}s.")
+                
+                msg = f"WebSocket connection error: {e}"
                 print(msg)
-                asyncio.create_task(notifications.notify_alert(msg))
+                asyncio.create_task(notifications.notify_alert(f"{msg} Retrying in {retry_delay}s..."))
+                
+                print(f"Websocket retry in {retry_delay} seconds...")
                 await asyncio.sleep(retry_delay)
                 
-                # If connection was alive for a while, reset the backoff, otherwise increase it
-                if 'connect_time' in locals() and time.time() - connect_time > 60:
-                    retry_delay = 5
-                else:
-                    retry_delay = min(retry_delay * 2, 60)
+                # Double the delay for the NEXT failure (capped at 60s)
+                retry_delay = min(retry_delay * 2, 60)
+                connect_time = None  # Clear so stale values can't leak
 
     async def trailing_stop_monitor_loop(self):
         print("🛡️ Starting Trailing Stop Monitor Loop...")
@@ -378,7 +385,9 @@ class TradingBot:
             await asyncio.sleep(sleep_seconds)
             
             await self._check_account_status()
+            print(f"📈 Swing evaluation starting at {datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d %I:%M:%S %p')} EST")
             for symbol in Config.SWING_SYMBOLS:
+                print(f"Evaluating {symbol} for swing signals")
                 await self._process_symbol(
                     symbol, 
                     self.swing_strategies, 
@@ -386,6 +395,7 @@ class TradingBot:
                     risk_percent=Config.SWING_EQUITY_RISK_PERCENT, 
                     stop_loss_percent=Config.STOP_LOSS_PERCENT
                 )
+            print(f"📈 Swing evaluation complete for {len(Config.SWING_SYMBOLS)} symbols.")
 
     async def health_report_loop(self):
         print("🏥 Starting Daily Health Report Loop (9:00 AM EST)...")
