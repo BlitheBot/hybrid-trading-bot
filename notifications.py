@@ -140,3 +140,108 @@ async def notify_weekly_performance(equity, active_positions_count, weekly_pnl):
         ]
     }
     await _post_to_slack(Config.SLACK_PERFORMANCE_WEBHOOK, payload)
+
+async def notify_news_signal(ticker, headline, sentiment, score, action):
+    """Sends a Benzinga news sentiment signal to #trading-decisions (alert only, no trade yet)."""
+    payload = {
+        "text": f"📰 *NEWS SIGNAL: {action.upper()} {ticker}* (Score: {score:.1f})",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"📰 News Signal: {action.upper()} {ticker}"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Ticker:*\n{ticker}"},
+                    {"type": "mrkdwn", "text": f"*Sentiment:*\n{sentiment.capitalize()}"},
+                    {"type": "mrkdwn", "text": f"*Score:*\n{score:.1f}"},
+                    {"type": "mrkdwn", "text": f"*Action:*\n{action.upper()}"},
+                ]
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Headline:*\n```{headline}```"}
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
+
+async def notify_news_trade(ticker, headline, direction, entry_price, position_size):
+    """Sends a Benzinga news-triggered trade execution to #trading-alerts."""
+    payload = {
+        "text": f"📰🚀 *NEWS TRADE EXECUTED: {direction.upper()} {ticker}*",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"📰🚀 News Trade: {direction.upper()} {ticker}"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Ticker:*\n{ticker}"},
+                    {"type": "mrkdwn", "text": f"*Direction:*\n{direction.upper()}"},
+                    {"type": "mrkdwn", "text": f"*Entry Price:*\n${entry_price:.2f}"},
+                    {"type": "mrkdwn", "text": f"*Position Size:*\n{position_size} shares"},
+                ]
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Trigger Headline:*\n```{headline}```"}
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_ALERTS_WEBHOOK, payload)
+
+async def notify_truth_social_signal(post_text, tickers, sentiment, score, action):
+    """Sends a Truth Social sentiment signal to #trading-decisions (alert only, no trade yet)."""
+    ticker_str = ", ".join(tickers) if tickers else "N/A"
+    payload = {
+        "text": f"🇺🇸 *TRUTH SOCIAL SIGNAL: {action.upper()} {ticker_str}* (Score: {score:.1f})",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"🇺🇸 Truth Social Signal: {action.upper()}"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Affected Tickers:*\n{ticker_str}"},
+                    {"type": "mrkdwn", "text": f"*Sentiment:*\n{sentiment.capitalize()}"},
+                    {"type": "mrkdwn", "text": f"*Score:*\n{score:.1f}"},
+                    {"type": "mrkdwn", "text": f"*Action:*\n{action.upper()}"},
+                ]
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Post:*\n```{post_text[:500]}```"}
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
+
+async def notify_truth_social_trade(ticker, post_text, direction, entry_price, position_size):
+    """Sends a Truth Social-triggered trade execution to #trading-alerts."""
+    payload = {
+        "text": f"🇺🇸🚀 *TRUTH SOCIAL TRADE EXECUTED: {direction.upper()} {ticker}*",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"🇺🇸🚀 Truth Social Trade: {direction.upper()} {ticker}"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Ticker:*\n{ticker}"},
+                    {"type": "mrkdwn", "text": f"*Direction:*\n{direction.upper()}"},
+                    {"type": "mrkdwn", "text": f"*Entry Price:*\n${entry_price:.2f}"},
+                    {"type": "mrkdwn", "text": f"*Position Size:*\n{position_size} shares"},
+                ]
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Trigger Post:*\n```{post_text[:500]}```"}
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_ALERTS_WEBHOOK, payload)

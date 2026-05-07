@@ -25,6 +25,8 @@ from strategies.base_strategy import BaseStrategy
 from strategies.sma_crossover import SMACrossoverStrategy
 from strategies.smb_strategy import SMBStrategy
 from strategies.swing_strategy import SwingStrategy
+from strategies.news_strategy import NewsStrategy, _get_scan_sleep_seconds
+from strategies.truth_social_strategy import TruthSocialStrategy
 from utils import get_historical_bars, get_finnhub_price
 
 # ── Flask Health Endpoint (Bug 5) ───────────────────────────────────
@@ -428,18 +430,175 @@ class TradingBot:
                 
                 asyncio.create_task(notifications.notify_weekly_performance(equity, active_positions_count, self.daily_pnl))
 
+    async def news_loop(self):
+        """Continuously polls Benzinga news via Alpaca and routes signals to Slack / trade execution."""
+        print("📰 Starting Benzinga News Sentiment Loop...")
+        strategy = NewsStrategy()
+        while True:
+            try:
+                if not self.trading_halted_for_day:
+                    signals = await strategy.scan_once()
+                    for sig in signals:
+                        ticker  = sig["ticker"]
+                        strength = sig["strength"]
+                        action  = sig["action"]
+
+                        # Always alert Slack about the signal
+                        asyncio.create_task(notifications.notify_news_signal(
+                            ticker, sig["headline"], sig["sentiment"], strength, action
+                        ))
+
+                        if not sig["auto_trade"]:
+                            continue
+
+                        # Guard: symbol cooldown
+                        self._update_loss_cache()
+                        if ticker in self.last_loss_times:
+                            if datetime.now(pytz.utc) - self.last_loss_times[ticker] < timedelta(minutes=Config.SYMBOL_COOLDOWN_MINUTES):
+                                asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "Symbol on cooldown (news)"))
+                                continue
+
+                        # Guard: one position per symbol
+                        try:
+                            self.trading_client.get_open_position(ticker)
+                            asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "One position per symbol limit (news)"))
+                            continue
+                        except Exception:
+                            pass  # No open position — proceed
+
+                        # Execute using swing risk parameters
+                        try:
+                            from alpaca.trading.requests import MarketOrderRequest
+                            from alpaca.trading.enums import OrderSide, TimeInForce
+
+                            account = self.trading_client.get_account()
+                            equity = float(account.equity)
+                            scaled_risk = Config.SWING_EQUITY_RISK_PERCENT * self.risk_multiplier
+                            risk_dollars = equity * (scaled_risk / 100.0)
+
+                            latest = self.stock_data_client.get_stock_latest_trade({ticker: ticker})
+                            entry_price = float(list(latest.values())[0].price)
+                            stop_distance = entry_price * (Config.STOP_LOSS_PERCENT / 100.0)
+                            qty = max(1, int(risk_dollars / stop_distance))
+
+                            max_dollars = float(account.buying_power) * (Config.MAX_BUYING_POWER_UTILIZATION_PERCENT / 100.0)
+                            qty = min(qty, max(1, int(max_dollars / entry_price)))
+
+                            side = OrderSide.BUY if action == "buy" else OrderSide.SELL
+                            self.trading_client.submit_order(MarketOrderRequest(
+                                symbol=ticker, qty=qty, side=side, time_in_force=TimeInForce.DAY
+                            ))
+
+                            asyncio.create_task(notifications.notify_news_trade(
+                                ticker, sig["headline"], action, entry_price, qty
+                            ))
+                            self.active_signals[f"{ticker}-news-{action}"] = datetime.now(pytz.utc)
+
+                        except Exception as e:
+                            msg = f"[NewsLoop] Trade execution error for {ticker}: {e}"
+                            print(msg)
+                            asyncio.create_task(notifications.notify_alert(msg))
+
+            except Exception as e:
+                print(f"[NewsLoop] Unexpected error: {e}")
+            finally:
+                await asyncio.sleep(_get_scan_sleep_seconds())
+
+    async def truth_social_loop(self):
+        """Continuously polls Trump's Truth Social RSS feed and routes signals to Slack / trade execution."""
+        print("🇺🇸 Starting Truth Social Sentiment Loop (60s polling)...")
+        strategy = TruthSocialStrategy()
+        while True:
+            try:
+                if not self.trading_halted_for_day:
+                    signals = await strategy.scan_once(trading_client=self.trading_client)
+                    for sig in signals:
+                        ticker  = sig["ticker"]
+                        strength = sig["strength"]
+                        action  = sig["action"]
+
+                        # Always alert Slack about the signal
+                        asyncio.create_task(notifications.notify_truth_social_signal(
+                            sig["post_text"], [ticker], sig["sentiment"], strength, action
+                        ))
+
+                        if not sig["auto_trade"]:
+                            continue
+
+                        # Guard: symbol cooldown
+                        self._update_loss_cache()
+                        if ticker in self.last_loss_times:
+                            if datetime.now(pytz.utc) - self.last_loss_times[ticker] < timedelta(minutes=Config.SYMBOL_COOLDOWN_MINUTES):
+                                asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "Symbol on cooldown (TS)"))
+                                continue
+
+                        # Guard: one position per symbol
+                        try:
+                            self.trading_client.get_open_position(ticker)
+                            asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "One position per symbol limit (TS)"))
+                            continue
+                        except Exception:
+                            pass
+
+                        # Execute using Truth Social risk overrides (50% size, 2% SL, 8% TP)
+                        try:
+                            from alpaca.trading.requests import MarketOrderRequest
+                            from alpaca.trading.enums import OrderSide, TimeInForce
+
+                            account = self.trading_client.get_account()
+                            equity = float(account.equity)
+                            scaled_risk = (
+                                Config.SWING_EQUITY_RISK_PERCENT
+                                * self.risk_multiplier
+                                * Config.TRUTH_SOCIAL_POSITION_SIZE_MULTIPLIER
+                            )
+                            risk_dollars = equity * (scaled_risk / 100.0)
+
+                            entry_price = sig.get("current_price", 0.0)
+                            if entry_price <= 0:
+                                latest = self.stock_data_client.get_stock_latest_trade({ticker: ticker})
+                                entry_price = float(list(latest.values())[0].price)
+
+                            stop_distance = entry_price * (Config.TRUTH_SOCIAL_STOP_LOSS / 100.0)
+                            qty = max(1, int(risk_dollars / stop_distance))
+
+                            max_dollars = float(account.buying_power) * (Config.MAX_BUYING_POWER_UTILIZATION_PERCENT / 100.0)
+                            qty = min(qty, max(1, int(max_dollars / entry_price)))
+
+                            side = OrderSide.BUY if action == "buy" else OrderSide.SELL
+                            self.trading_client.submit_order(MarketOrderRequest(
+                                symbol=ticker, qty=qty, side=side, time_in_force=TimeInForce.DAY
+                            ))
+
+                            asyncio.create_task(notifications.notify_truth_social_trade(
+                                ticker, sig["post_text"], action, entry_price, qty
+                            ))
+                            self.active_signals[f"{ticker}-ts-{action}"] = datetime.now(pytz.utc)
+
+                        except Exception as e:
+                            msg = f"[TruthSocialLoop] Trade execution error for {ticker}: {e}"
+                            print(msg)
+                            asyncio.create_task(notifications.notify_alert(msg))
+
+            except Exception as e:
+                print(f"[TruthSocialLoop] Unexpected error: {e}")
+            finally:
+                await asyncio.sleep(60)
+
     async def start_dual_engine(self):
         msg = "🚀 Hybrid Trading Bot has successfully started and connected to Slack!"
         print(msg)
         asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
-        
+
         if not await self._check_account_status():
             return
         self.add_scalp_strategy(SMBStrategy("SMB Late Scalp", ema_window=9, rr_ratio=3))
         self.add_swing_strategy(SwingStrategy("Swing Trader", ema_short=50, ema_long=200))
         await asyncio.gather(
-            self.scalp_loop(), 
+            self.scalp_loop(),
             self.swing_loop(),
+            self.news_loop(),
+            self.truth_social_loop(),
             self.health_report_loop(),
             self.performance_report_loop(),
             self.trailing_stop_monitor_loop()
@@ -449,3 +608,4 @@ if __name__ == "__main__":
     start_health_server(port=8501)
     bot = TradingBot()
     asyncio.run(bot.start_dual_engine())
+
