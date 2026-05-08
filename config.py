@@ -51,3 +51,9 @@ class Config:
     TRUTH_SOCIAL_STOP_LOSS = 2.0  # 2% stop loss
     TRUTH_SOCIAL_TAKE_PROFIT = 8.0 # 8% take profit
     TRUTH_SOCIAL_POSITION_SIZE_MULTIPLIER = 0.50 # 50% of normal size
+
+    # Backtester / Strategy Discovery Engine
+    BACKTEST_START_DATE = "2022-01-01"
+    BACKTEST_END_DATE = "2024-12-31"
+    WALK_FORWARD_TRAIN_MONTHS = 12
+    WALK_FORWARD_TEST_MONTHS = 3
