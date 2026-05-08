@@ -230,7 +230,7 @@ class Backtester:
         end = end or Config.BACKTEST_END_DATE
 
         print(f"\n{'='*60}")
-        print(f"Backtest  {start} → {end}")
+        print(f"Backtest  {start} to {end}")
         print(f"Capital ${self.initial_capital:,.0f}/symbol  |  Risk {self.risk_pct}%  "
               f"|  Slippage {self.slippage_bps}bps  |  Commission ${self.commission_per_share}/sh")
         print(f"Symbols: {', '.join(self.symbols)}")
@@ -343,7 +343,7 @@ class Backtester:
                         "degradation": degradation,
                     })
                     print(
-                        f"    W{w_idx + 1} [{win_start} → {test_end}]  "
+                        f"    W{w_idx + 1} [{win_start} to {test_end}]  "
                         f"train={tr['sharpe']:.2f}  test={ts['sharpe']:.2f}  "
                         f"degradation={degradation:+.2f}"
                     )

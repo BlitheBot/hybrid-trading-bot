@@ -38,9 +38,10 @@ class SwingStrategy(BaseStrategy):
         # Calculate RSI with pandas-ta
         df['RSI'] = ta.rsi(df['close'], length=14)
 
-        # Ensure we have enough data for calculations
-        if df['EMA_short'].isnull().any() or df['EMA_long'].isnull().any() or \
-           df['MACD'].isnull().any() or df['MACD_Signal'].isnull().any() or df['RSI'].isnull().any():
+        # Check only the last row — early rows always have NaN from rolling warmup
+        if (pd.isna(df['EMA_short'].iloc[-1]) or pd.isna(df['EMA_long'].iloc[-1]) or
+                pd.isna(df['MACD'].iloc[-1]) or pd.isna(df['MACD_Signal'].iloc[-1]) or
+                pd.isna(df['RSI'].iloc[-1])):
             return None
 
         last_ema_short = df['EMA_short'].iloc[-1]
