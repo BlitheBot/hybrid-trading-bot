@@ -181,10 +181,14 @@ Rules:
 
     async def scan_once(self, trading_client=None) -> list[dict]:
         """
-        Fetch the RSS feed, analyse each new post, and return confirmed signal
-        dicts for any post that passes the alert threshold and the 60-second
-        price confirmation check.
+        Disabled: truthsocial.com returns HTML (bot-detection / CAPTCHA) rather than
+        RSS XML when accessed programmatically. Re-enable once a browser-automation
+        or authenticated API approach is available.
         """
+        print("[TruthSocialStrategy] Disabled — Truth Social requires browser automation to access. Skipping scan.")
+        return []
+
+        # ── Dead code below — preserved for when a working feed source is wired up ──
         signals = []
         posts = await asyncio.to_thread(self._fetch_rss)
 

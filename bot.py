@@ -300,6 +300,9 @@ class TradingBot:
         print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS} (Websocket)...")
         retry_delay = 5
         while True:
+            print(f"WebSocket retry in {retry_delay}s...")
+            await asyncio.sleep(retry_delay)
+
             connect_time = time.time()
             try:
                 self.crypto_stream = CryptoDataStream(
@@ -307,22 +310,20 @@ class TradingBot:
                     secret_key=Config.ALPACA_SECRET_KEY
                 )
                 self.crypto_stream.subscribe_trades(self._on_crypto_trade, *Config.SCALP_SYMBOLS)
-                await self.crypto_stream._run_forever()
+                # _connect() makes a single connection attempt and returns when it drops.
+                # _run_forever() has an internal retry loop that bypasses our backoff — avoid it.
+                await self.crypto_stream._connect()
                 print("WebSocket stream closed cleanly.")
-            except BaseException as e:
-                # BaseException covers CancelledError and other non-Exception subclasses
-                # that would otherwise bypass the sleep below and cause instant reconnect spam.
-                msg = f"WebSocket connection error: {type(e).__name__}: {e}"
+            except Exception as e:
+                msg = f"WebSocket error: {e}"
                 print(msg)
                 asyncio.create_task(notifications.notify_alert(f"{msg} Retrying in {retry_delay}s..."))
 
-            # Sleep is OUTSIDE and UNCONDITIONAL — runs after every exit, clean or crashed.
             if time.time() - connect_time > 60:
                 retry_delay = 5
-                print(f"WebSocket was stable for >60s. Backoff reset to {retry_delay}s.")
-            print(f"WebSocket retry in {retry_delay}s...")
-            await asyncio.sleep(retry_delay)
-            retry_delay = min(retry_delay * 2, 60)
+                print(f"WebSocket was stable for >60s. Backoff reset to 5s.")
+            else:
+                retry_delay = min(retry_delay * 2, 60)
 
     async def trailing_stop_monitor_loop(self):
         print("🛡️ Starting Trailing Stop Monitor Loop...")
