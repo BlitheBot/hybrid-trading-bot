@@ -150,7 +150,7 @@ Respond with ONLY a valid JSON object using exactly this schema:
             for i in range(0, len(SP500_TICKERS), batch_size):
                 batch = SP500_TICKERS[i : i + batch_size]
                 req = NewsRequest(
-                    symbols=batch,
+                    symbols=",".join(batch),
                     start=datetime.now(pytz.utc) - timedelta(hours=2),
                     sort="desc",
                     limit=10,

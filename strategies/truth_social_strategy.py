@@ -37,7 +37,7 @@ class TruthSocialStrategy(BaseStrategy):
         """Fetch and parse the RSS feed. Returns list of {guid, title, description, link}."""
         posts = []
         try:
-            resp = requests.get(TRUTH_RSS_URL, timeout=15)
+            resp = requests.get(TRUTH_RSS_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
             resp.raise_for_status()
             root = ET.fromstring(resp.text)
             channel = root.find("channel")

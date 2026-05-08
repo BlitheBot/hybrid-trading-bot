@@ -299,39 +299,30 @@ class TradingBot:
     async def scalp_loop(self):
         print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS} (Websocket)...")
         retry_delay = 5
-        connect_time = None
         while True:
+            connect_time = None
             try:
-                # Re-initialize CryptoDataStream on each attempt to ensure a fresh connection
-                # This helps to avoid connection limit issues by ensuring a clean state.
                 self.crypto_stream = CryptoDataStream(
                     api_key=Config.ALPACA_API_KEY,
                     secret_key=Config.ALPACA_SECRET_KEY
                 )
                 self.crypto_stream.subscribe_trades(self._on_crypto_trade, *Config.SCALP_SYMBOLS)
-                
                 connect_time = time.time()
                 await self.crypto_stream._run_forever()
-                
-                # If _run_forever gracefully exits (unlikely), reset backoff
-                retry_delay = 5
+                print("WebSocket stream closed cleanly.")
             except Exception as e:
-                # Determine next delay BEFORE sleeping
-                if connect_time is not None and (time.time() - connect_time) > 60:
-                    # Connection was stable for >60s — reset backoff
-                    retry_delay = 5
-                    print(f"WebSocket was stable for >60s. Backoff reset to {retry_delay}s.")
-                
                 msg = f"WebSocket connection error: {e}"
                 print(msg)
                 asyncio.create_task(notifications.notify_alert(f"{msg} Retrying in {retry_delay}s..."))
-                
-                print(f"Websocket retry in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-                
-                # Double the delay for the NEXT failure (capped at 60s)
-                retry_delay = min(retry_delay * 2, 60)
-                connect_time = None  # Clear so stale values can't leak
+
+            # Always backoff before reconnecting — covers both clean exits and exceptions
+            if connect_time is not None and (time.time() - connect_time) > 60:
+                retry_delay = 5
+                print(f"WebSocket was stable for >60s. Backoff reset to {retry_delay}s.")
+
+            print(f"WebSocket retry in {retry_delay}s...")
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60)
 
     async def trailing_stop_monitor_loop(self):
         print("🛡️ Starting Trailing Stop Monitor Loop...")
