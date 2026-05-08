@@ -39,7 +39,12 @@ class TruthSocialStrategy(BaseStrategy):
         try:
             resp = requests.get(TRUTH_RSS_URL, timeout=15, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
             resp.raise_for_status()
-            root = ET.fromstring(resp.text)
+            print(f"[TruthSocialStrategy] RSS raw response (first 500 chars): {resp.text[:500]}")
+            try:
+                root = ET.fromstring(resp.text)
+            except ET.ParseError as xml_err:
+                print(f"[TruthSocialStrategy] RSS response is not valid XML ({xml_err}). Skipping.")
+                return posts
             channel = root.find("channel")
             if channel is None:
                 return posts

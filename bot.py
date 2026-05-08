@@ -300,26 +300,26 @@ class TradingBot:
         print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS} (Websocket)...")
         retry_delay = 5
         while True:
-            connect_time = None
+            connect_time = time.time()
             try:
                 self.crypto_stream = CryptoDataStream(
                     api_key=Config.ALPACA_API_KEY,
                     secret_key=Config.ALPACA_SECRET_KEY
                 )
                 self.crypto_stream.subscribe_trades(self._on_crypto_trade, *Config.SCALP_SYMBOLS)
-                connect_time = time.time()
                 await self.crypto_stream._run_forever()
                 print("WebSocket stream closed cleanly.")
-            except Exception as e:
-                msg = f"WebSocket connection error: {e}"
+            except BaseException as e:
+                # BaseException covers CancelledError and other non-Exception subclasses
+                # that would otherwise bypass the sleep below and cause instant reconnect spam.
+                msg = f"WebSocket connection error: {type(e).__name__}: {e}"
                 print(msg)
                 asyncio.create_task(notifications.notify_alert(f"{msg} Retrying in {retry_delay}s..."))
 
-            # Always backoff before reconnecting — covers both clean exits and exceptions
-            if connect_time is not None and (time.time() - connect_time) > 60:
+            # Sleep is OUTSIDE and UNCONDITIONAL — runs after every exit, clean or crashed.
+            if time.time() - connect_time > 60:
                 retry_delay = 5
                 print(f"WebSocket was stable for >60s. Backoff reset to {retry_delay}s.")
-
             print(f"WebSocket retry in {retry_delay}s...")
             await asyncio.sleep(retry_delay)
             retry_delay = min(retry_delay * 2, 60)
