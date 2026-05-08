@@ -36,7 +36,7 @@ class Config:
     CRYPTO_SCALP_STOP_LOSS_PERCENT = 4.0 # Wider stop losses for crypto scalp trades (4-8%)
 
     # Swing Bot Parameters (Stocks)
-    SWING_SYMBOLS = ["MSFT", "AAPL", "NVDA", "AMZN", "SPY", "QQQ"]
+    SWING_SYMBOLS = ["JPM", "SPY", "COST", "BRK.B", "PG", "V"]
     SWING_EQUITY_RISK_PERCENT = 1.0 # Smaller position sizes for swing trades
 
     # Anthropic API credentials
