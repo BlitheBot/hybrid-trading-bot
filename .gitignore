@@ -4,3 +4,4 @@ Stock Bot/
 __pycache__/
 *.pyc
 *.pyo
+.env

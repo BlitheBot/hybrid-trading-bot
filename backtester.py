@@ -1,6 +1,9 @@
 import math
 from datetime import datetime
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import numpy as np
 import pandas as pd
 from dateutil.relativedelta import relativedelta
