@@ -181,11 +181,12 @@ Rules:
 
     async def scan_once(self, trading_client=None) -> list[dict]:
         """
-        Disabled: truthsocial.com returns HTML (bot-detection / CAPTCHA) rather than
-        RSS XML when accessed programmatically. Re-enable once a browser-automation
-        or authenticated API approach is available.
+        Disabled: truthsocial.com blocks all automated access including authenticated
+        sessions. Will be re-enabled in Phase 2 via Quiver Quantitative API.
         """
-        print("[TruthSocialStrategy] Disabled — Truth Social requires browser automation to access. Skipping scan.")
+        print("[TruthSocialStrategy] Disabled — Truth Social blocks all automated access "
+              "including authenticated sessions. Will be re-enabled in Phase 2 when Quiver "
+              "Quantitative integration provides Trump post monitoring via their API.")
         return []
 
         # ── Dead code below — preserved for when a working feed source is wired up ──
