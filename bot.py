@@ -84,6 +84,7 @@ class TradingBot:
         )
         self.scalp_strategies = []
         self.swing_strategies = []
+        self.swing_symbol_strategies: dict[str, SwingStrategy] = {}
         self.daily_pnl = 0.0
         self.start_of_day_equity = 0.0
         self.last_pnl_reset_date = datetime.now(pytz.timezone('America/New_York')).date()
@@ -370,29 +371,37 @@ class TradingBot:
 
     async def swing_loop(self):
         print(f"📈 Starting Stock Swing Bot for {Config.SWING_SYMBOLS} (10:30 AM EST Polling)...")
+        # Symbols with no statistically validated edge — evaluated but flagged in logs
+        _no_edge = {"JPM", "PG"}
         while True:
             now = datetime.now(pytz.timezone('America/New_York'))
             target = now.replace(hour=10, minute=30, second=0, microsecond=0)
-            
+
             # If it's past 10:30 AM, move to tomorrow.
             if now >= target:
                 target += timedelta(days=1)
             # Skip weekends
             while target.weekday() > 4: # 5=Sat, 6=Sun
                 target += timedelta(days=1)
-                
+
             sleep_seconds = (target - now).total_seconds()
             await asyncio.sleep(sleep_seconds)
-            
+
             await self._check_account_status()
             print(f"📈 Swing evaluation starting at {datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d %I:%M:%S %p')} EST")
             for symbol in Config.SWING_SYMBOLS:
-                print(f"Evaluating {symbol} for swing signals")
+                if symbol in _no_edge:
+                    print(f"[Swing] {symbol}: no statistically validated edge (p>0.05 across all 243 discovery combos) — monitoring only")
+                strategy = self.swing_symbol_strategies.get(symbol)
+                if strategy is None:
+                    print(f"[Swing] {symbol}: no strategy configured, skipping")
+                    continue
+                print(f"Evaluating {symbol} for swing signals [{strategy.name}]")
                 await self._process_symbol(
-                    symbol, 
-                    self.swing_strategies, 
-                    is_crypto=False, 
-                    risk_percent=Config.SWING_EQUITY_RISK_PERCENT, 
+                    symbol,
+                    [strategy],
+                    is_crypto=False,
+                    risk_percent=Config.SWING_EQUITY_RISK_PERCENT,
                     stop_loss_percent=Config.STOP_LOSS_PERCENT
                 )
             print(f"📈 Swing evaluation complete for {len(Config.SWING_SYMBOLS)} symbols.")
@@ -637,7 +646,21 @@ class TradingBot:
         asyncio.create_task(notifications.notify_alert(startup_msg, level="INFO"))
 
         self.add_scalp_strategy(SMBStrategy("SMB Late Scalp", ema_window=9, rr_ratio=3))
-        self.add_swing_strategy(SwingStrategy("Swing Trader", ema_short=50, ema_long=200))
+
+        # Per-symbol swing strategies — parameters from Discovery Engine walk-forward validation
+        self.swing_symbol_strategies = {
+            # 125/243 combos validated, best test Sharpe 0.87 — short EMA crossover dominates
+            "COST":  SwingStrategy("COST Swing",  ema_short=20, ema_long=100, rsi_period=10, rsi_entry_low=35, rsi_entry_high=65),
+            # 24/243 combos validated, best test Sharpe 0.90 — RSI21 + wide upper band required
+            "BRK.B": SwingStrategy("BRK.B Swing", rsi_period=21, rsi_entry_low=40, rsi_entry_high=65),
+            # 9/243 combos validated — EMA50/200 with RSI upper=60 already matches defaults
+            "SPY":   SwingStrategy("SPY Swing"),
+            # 0/243 combos validated — defaults until further data
+            "V":     SwingStrategy("V Swing"),
+            # 0/243 combos validated — monitoring only (see swing_loop warning)
+            "JPM":   SwingStrategy("JPM Swing"),
+            "PG":    SwingStrategy("PG Swing"),
+        }
         await asyncio.gather(
             self.scalp_loop(),
             self.swing_loop(),
