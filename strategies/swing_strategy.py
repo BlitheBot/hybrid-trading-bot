@@ -92,6 +92,8 @@ class SwingStrategy(BaseStrategy):
                 "entry_price": current_price,
                 "stop_price": stop_loss_price,
                 "target_price": take_profit_price,
+                "rsi_at_entry": float(last_rsi),
+                "macd_at_entry": float(last_macd),
                 "reasoning": reasoning
             }
         elif signal == "sell":

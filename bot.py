@@ -15,6 +15,9 @@ from alpaca.trading.enums import QueryOrderStatus
 os.environ.pop("ALPACA_OAUTH_TOKEN", None)
 os.environ.pop("GITHUB_TOKEN", None)
 
+import anthropic
+import requests as _requests
+
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest
@@ -86,6 +89,9 @@ class TradingBot:
         self.scalp_strategies = []
         self.swing_strategies = []
         self.swing_symbol_strategies: dict[str, SwingStrategy] = {}
+        self._open_trade_ids: dict = {}       # symbol → (row_id, entry_price, entry_time)
+        self._regime_cache = None             # (regime_str, timestamp)
+        self._claude = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
         self.daily_pnl = 0.0
         self.start_of_day_equity = 0.0
         self.last_pnl_reset_date = datetime.now(pytz.timezone('America/New_York')).date()
@@ -163,7 +169,251 @@ class TradingBot:
         except Exception as e:
             print(f"Failed to update loss cache: {e}")
 
-    async def _process_symbol(self, symbol, strategies, is_crypto, risk_percent, stop_loss_percent, current_price=None):
+    # ── Database helpers (Task 1) ─────────────────────────────────────────────
+
+    def _get_db_conn(self):
+        try:
+            import psycopg2
+            url = Config.DATABASE_URL
+            if not url:
+                return None
+            return psycopg2.connect(url)
+        except ImportError:
+            return None
+        except Exception as e:
+            print(f"[DB] Connection failed: {e}")
+            return None
+
+    def _ensure_signal_outcomes_table(self):
+        conn = self._get_db_conn()
+        if not conn:
+            return
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS signal_outcomes (
+                        id            SERIAL PRIMARY KEY,
+                        symbol        VARCHAR(10),
+                        signal_type   VARCHAR(20),
+                        entry_time    TIMESTAMP,
+                        exit_time     TIMESTAMP,
+                        entry_price   FLOAT,
+                        exit_price    FLOAT,
+                        pnl_pct       FLOAT,
+                        hold_bars     INTEGER,
+                        ema_short     INTEGER,
+                        ema_long      INTEGER,
+                        rsi_at_entry  FLOAT,
+                        macd_at_entry FLOAT,
+                        market_regime VARCHAR(20),
+                        exit_reason   VARCHAR(30),
+                        discovered_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+            conn.commit()
+            print("[DB] signal_outcomes table verified")
+        except Exception as e:
+            print(f"[DB] Table setup failed: {e}")
+        finally:
+            conn.close()
+
+    def _log_trade_entry(self, symbol: str, signal_type: str, entry_price: float,
+                          ema_short: int, ema_long: int, rsi_at_entry: float,
+                          macd_at_entry: float, regime: str, entry_time) -> int | None:
+        conn = self._get_db_conn()
+        if not conn:
+            return None
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO signal_outcomes
+                        (symbol, signal_type, entry_time, entry_price, ema_short, ema_long,
+                         rsi_at_entry, macd_at_entry, market_regime)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    symbol, signal_type, entry_time,
+                    float(entry_price), int(ema_short), int(ema_long),
+                    float(rsi_at_entry), float(macd_at_entry), regime,
+                ))
+                row_id = cur.fetchone()[0]
+            conn.commit()
+            print(f"[DB] Logged {signal_type} entry for {symbol} (row={row_id})")
+            return row_id
+        except Exception as e:
+            print(f"[DB] Entry log failed for {symbol}: {e}")
+            return None
+        finally:
+            conn.close()
+
+    def _update_trade_exit(self, row_id: int, exit_price: float, exit_reason: str,
+                            exit_time, hold_bars: int, pnl_pct: float):
+        conn = self._get_db_conn()
+        if not conn:
+            return
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE signal_outcomes
+                    SET exit_time=%s, exit_price=%s, pnl_pct=%s, hold_bars=%s, exit_reason=%s
+                    WHERE id=%s
+                """, (exit_time, float(exit_price), float(pnl_pct), int(hold_bars), exit_reason, row_id))
+            conn.commit()
+            print(f"[DB] Exit logged row={row_id}: {exit_reason} @ {exit_price:.2f} ({pnl_pct:+.2f}%)")
+        except Exception as e:
+            print(f"[DB] Exit update failed row={row_id}: {e}")
+        finally:
+            conn.close()
+
+    # ── Market regime (Task 1) ────────────────────────────────────────────────
+
+    async def _get_market_regime(self) -> str:
+        if self._regime_cache is not None:
+            regime, ts = self._regime_cache
+            if time.time() - ts < 900:
+                return regime
+        try:
+            bars = await asyncio.to_thread(
+                get_historical_bars, "SPY", TimeFrame.Day, 210, self.stock_data_client, False
+            )
+            if bars is not None and len(bars) >= 200:
+                spy_close  = float(bars['close'].iloc[-1])
+                spy_ema200 = float(bars['close'].ewm(span=200, adjust=False).mean().iloc[-1])
+                regime = 'bull' if spy_close > spy_ema200 else 'bear'
+            else:
+                regime = 'neutral'
+        except Exception as e:
+            print(f"[MarketRegime] Failed: {e}")
+            regime = 'neutral'
+        self._regime_cache = (regime, time.time())
+        return regime
+
+    # ── Fundamentals check (Task 3) ───────────────────────────────────────────
+
+    async def _check_fundamentals(self, symbol: str) -> tuple[bool, str | None]:
+        try:
+            api_key = Config.FINNHUB_API_KEY
+            if not api_key:
+                return True, None
+
+            base = "https://finnhub.io/api/v1"
+            today = datetime.now(pytz.timezone("America/New_York")).date()
+
+            def _fetch_metrics():
+                return _requests.get(
+                    f"{base}/stock/metric",
+                    params={"symbol": symbol, "metric": "all", "token": api_key},
+                    timeout=10,
+                ).json()
+
+            metrics = await asyncio.to_thread(_fetch_metrics)
+            m = metrics.get("metric", {})
+
+            pe = m.get("peBasicExclExtraTTM")
+            if pe is not None and float(pe) < 0:
+                return False, f"Negative P/E ({float(pe):.1f}) — company not profitable"
+
+            eps_list = metrics.get("series", {}).get("annual", {}).get("eps", [])
+            if len(eps_list) >= 2:
+                recent = eps_list[-1].get("v") or 0
+                prior  = eps_list[-2].get("v") or 1
+                if prior != 0:
+                    growth_pct = (recent - prior) / abs(prior) * 100
+                    if growth_pct < -20:
+                        return False, f"EPS declined {growth_pct:.1f}% YoY"
+
+            def _fetch_calendar():
+                return _requests.get(
+                    f"{base}/calendar/earnings",
+                    params={
+                        "from":   str(today),
+                        "to":     str(today + timedelta(days=2)),
+                        "symbol": symbol,
+                        "token":  api_key,
+                    },
+                    timeout=10,
+                ).json()
+
+            cal    = await asyncio.to_thread(_fetch_calendar)
+            events = cal.get("earningsCalendar", [])
+            if events:
+                report_date = events[0].get("date", "within 48h")
+                return False, f"Earnings report {report_date} — avoid pre-earnings volatility"
+
+            return True, None
+
+        except Exception as e:
+            print(f"[Fundamentals] {symbol} check failed ({e}) — proceeding without")
+            return True, None
+
+    # ── Bull/Bear debate (Task 2) ─────────────────────────────────────────────
+
+    async def _debate_trade(self, symbol: str, signal: dict, strategy) -> tuple[bool, str]:
+        try:
+            shared_data = (
+                f"Symbol: {symbol}  Price: ${signal.get('entry_price', 0):.2f}  "
+                f"RSI({getattr(strategy, 'rsi_period', 14)}): {signal.get('rsi_at_entry', 'N/A')}  "
+                f"MACD: {signal.get('macd_at_entry', 'N/A')}  "
+                f"EMA{getattr(strategy, 'ema_short', 50)} crossed above EMA{getattr(strategy, 'ema_long', 200)}.  "
+                f"Signal detail: {signal.get('reasoning', '')}"
+            )
+
+            def _call(prompt):
+                return self._claude.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=150,
+                    messages=[{"role": "user", "content": prompt}],
+                ).content[0].text.strip()
+
+            bull = await asyncio.to_thread(_call,
+                f"You are a bullish stock analyst. Make the strongest case FOR buying {symbol} right now. "
+                f"Data: {shared_data}  Respond in 2 sentences only."
+            )
+            bear = await asyncio.to_thread(_call,
+                f"You are a bearish stock analyst. Make the strongest case AGAINST buying {symbol} right now. "
+                f"Data: {shared_data}  Respond in 2 sentences only."
+            )
+            decision = await asyncio.to_thread(_call,
+                f"Bull case: {bull}\nBear case: {bear}\n"
+                f"Should we buy {symbol} right now? "
+                f"Start your response with BUY or SKIP, then give one sentence reason."
+            )
+
+            proceed = decision.upper().startswith("BUY")
+            summary = f"*Bull:* {bull}\n*Bear:* {bear}\n*Decision:* {decision}"
+            return proceed, summary
+
+        except Exception as e:
+            print(f"[Debate] {symbol} failed: {e}")
+            return True, "debate unavailable"
+
+    # ── Pre-trade hook: fundamentals → debate (Tasks 2 & 3) ──────────────────
+
+    async def _swing_pre_trade_hook(self, symbol: str, signal: dict, strategy) -> tuple[bool, str]:
+        # Task 3 — Fundamentals check
+        proceed, reason = await self._check_fundamentals(symbol)
+        if not proceed:
+            print(f"[Fundamentals] Blocking {symbol}: {reason}")
+            asyncio.create_task(notifications.notify_trade_skipped(symbol, "Fundamentals", reason))
+            return False, f"Fundamentals: {reason}"
+
+        # Task 2 — Bull/Bear debate
+        proceed, debate_summary = await self._debate_trade(symbol, signal, strategy)
+        action_label = "BUY" if proceed else "SKIP"
+        asyncio.create_task(notifications.notify_trade_decision(
+            symbol, "Bull/Bear Debate",
+            {"signal": "buy" if proceed else "hold",
+             "reasoning": f"[{action_label}] {debate_summary}",
+             "confidence": 0.0},
+        ))
+
+        if not proceed:
+            return False, f"Debate SKIP — {debate_summary}"
+
+        return True, debate_summary
+
+    async def _process_symbol(self, symbol, strategies, is_crypto, risk_percent, stop_loss_percent,
+                              current_price=None, pre_execute_hook=None):
         if self.trading_halted_for_day:
             return
 
@@ -219,6 +469,13 @@ class TradingBot:
                     except:
                         pass # No open position, proceed
 
+                    # Pre-execute hook: fundamentals check + bull/bear debate (swing only)
+                    if pre_execute_hook:
+                        hook_proceed, hook_reason = await pre_execute_hook(symbol, signal, strategy)
+                        if not hook_proceed:
+                            asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, hook_reason))
+                            continue
+
                 signal_key = f"{symbol}-{strategy.name}-{signal['signal']}"
                 
                 # Check if signal is active and within cooldown period (e.g., 1 hour)
@@ -233,22 +490,38 @@ class TradingBot:
 
                 print(f"Signal generated: {signal}")
                 asyncio.create_task(notifications.notify_trade_decision(symbol, strategy.name, signal))
-                
+
+                entry_time = datetime.now(pytz.utc)
                 try:
                     scaled_risk_percent = risk_percent * self.risk_multiplier
                     strategy.execute_trade(
-                        signal, 
-                        self.trading_client, 
+                        signal,
+                        self.trading_client,
                         scaled_risk_percent,
                         stop_loss_percent,
                         Config.TAKE_PROFIT_PERCENT,
                         Config.MAX_BUYING_POWER_UTILIZATION_PERCENT
                     )
+
+                    # Task 1 — log entry to signal_outcomes after successful execute_trade
+                    if signal['signal'] == 'buy':
+                        signal_type = 'swing_long' if isinstance(strategy, SwingStrategy) else 'scalp_long'
+                        regime = await self._get_market_regime()
+                        row_id = await asyncio.to_thread(
+                            self._log_trade_entry,
+                            symbol, signal_type, float(signal.get('entry_price', 0)),
+                            getattr(strategy, 'ema_short', 50), getattr(strategy, 'ema_long', 200),
+                            float(signal.get('rsi_at_entry', 0)), float(signal.get('macd_at_entry', 0)),
+                            regime, entry_time,
+                        )
+                        if row_id:
+                            self._open_trade_ids[symbol] = (row_id, float(signal.get('entry_price', 0)), entry_time)
+
                 except Exception as e:
                     msg = f"Error executing trade for {symbol}: {e}"
                     print(msg)
                     asyncio.create_task(notifications.notify_alert(msg))
-                    
+
                 # Record the time the signal was generated
                 self.active_signals[signal_key] = datetime.now(pytz.utc)
 
@@ -370,6 +643,54 @@ class TradingBot:
             except Exception as e:
                 pass
 
+    # ── Task 1 — exit monitor: updates signal_outcomes when positions close ───
+
+    async def _exit_monitor_loop(self):
+        print("[DB] Exit monitor loop started (10-min polling)")
+        while True:
+            await asyncio.sleep(600)
+            if not self._open_trade_ids:
+                continue
+            try:
+                req = GetOrdersRequest(
+                    status=QueryOrderStatus.CLOSED,
+                    limit=50,
+                    after=datetime.now(pytz.utc) - timedelta(hours=24),
+                )
+                orders = await asyncio.to_thread(self.trading_client.get_orders, req)
+                for order in orders:
+                    sym = order.symbol
+                    if sym not in self._open_trade_ids:
+                        continue
+                    if order.status.value != 'filled':
+                        continue
+                    if not hasattr(order, 'side') or order.side.value != 'sell':
+                        continue
+
+                    row_id, entry_price, entry_time = self._open_trade_ids.pop(sym, (None, 0.0, None))
+                    if row_id is None:
+                        continue
+
+                    exit_price = float(order.filled_avg_price) if order.filled_avg_price else 0.0
+                    exit_time  = order.filled_at or datetime.now(pytz.utc)
+                    pnl_pct    = (exit_price - entry_price) / entry_price * 100 if entry_price else 0.0
+
+                    order_type = order.order_type.value if hasattr(order, 'order_type') else 'unknown'
+                    if order_type in ('stop', 'trailing_stop'):
+                        exit_reason = 'stop'
+                    elif order_type == 'limit':
+                        exit_reason = 'target'
+                    else:
+                        exit_reason = 'manual'
+
+                    hold_days = int((exit_time - entry_time).total_seconds() / 86400) if entry_time else 0
+                    await asyncio.to_thread(
+                        self._update_trade_exit,
+                        row_id, exit_price, exit_reason, exit_time, hold_days, pnl_pct,
+                    )
+            except Exception as e:
+                print(f"[DB] Exit monitor error: {e}")
+
     async def swing_loop(self):
         print(f"📈 Starting Stock Swing Bot for {Config.SWING_SYMBOLS} (10:30 AM EST Polling)...")
         # Symbols with no statistically validated edge — evaluated but flagged in logs
@@ -403,7 +724,8 @@ class TradingBot:
                     [strategy],
                     is_crypto=False,
                     risk_percent=Config.SWING_EQUITY_RISK_PERCENT,
-                    stop_loss_percent=Config.STOP_LOSS_PERCENT
+                    stop_loss_percent=Config.STOP_LOSS_PERCENT,
+                    pre_execute_hook=self._swing_pre_trade_hook,
                 )
             print(f"📈 Swing evaluation complete for {len(Config.SWING_SYMBOLS)} symbols.")
 
@@ -646,6 +968,9 @@ class TradingBot:
         print(startup_msg)
         asyncio.create_task(notifications.notify_alert(startup_msg, level="INFO"))
 
+        # Ensure signal_outcomes table exists (creates if missing on Railway PostgreSQL)
+        await asyncio.to_thread(self._ensure_signal_outcomes_table)
+
         self.add_scalp_strategy(SMBStrategy("SMB Late Scalp", ema_window=9, rr_ratio=3))
 
         # Per-symbol swing strategies — parameters from Discovery Engine walk-forward validation
@@ -669,7 +994,8 @@ class TradingBot:
             self.truth_social_loop(),
             self.health_report_loop(),
             self.performance_report_loop(),
-            self.trailing_stop_monitor_loop()
+            self.trailing_stop_monitor_loop(),
+            self._exit_monitor_loop(),
         )
 
 if __name__ == "__main__":
