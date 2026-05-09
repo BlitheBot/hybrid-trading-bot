@@ -299,6 +299,7 @@ class TradingBot:
     async def scalp_loop(self):
         print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS} (Websocket)...")
         retry_delay = 5
+        consecutive_failures = 0
         while True:
             print(f"WebSocket retry in {retry_delay}s...")
             await asyncio.sleep(retry_delay)
@@ -321,9 +322,16 @@ class TradingBot:
 
             if time.time() - connect_time > 60:
                 retry_delay = 5
+                consecutive_failures = 0
                 print(f"WebSocket was stable for >60s. Backoff reset to 5s.")
             else:
                 retry_delay = min(retry_delay * 2, 60)
+                consecutive_failures += 1
+                if consecutive_failures >= 10:
+                    asyncio.create_task(notifications.notify_alert(
+                        "Crypto websocket has failed 10 consecutive times — possible Alpaca outage"
+                    ))
+                    consecutive_failures = 0
 
     async def trailing_stop_monitor_loop(self):
         print("🛡️ Starting Trailing Stop Monitor Loop...")

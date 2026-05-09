@@ -26,10 +26,9 @@ class TruthSocialStrategy(BaseStrategy):
     def __init__(self, name: str = "Truth Social Sentiment"):
         super().__init__(name)
         self._claude = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
-        # Set of already-processed post GUIDs / links
         self._seen_posts: set = set()
-        # {ticker: baseline_price} captured just before we wait for confirmation
         self._baseline_prices: dict[str, float] = {}
+        self._disabled_logged: bool = False
 
     # ── RSS helpers ──────────────────────────────────────────────────────────
 
@@ -184,9 +183,11 @@ Rules:
         Disabled: truthsocial.com blocks all automated access including authenticated
         sessions. Will be re-enabled in Phase 2 via Quiver Quantitative API.
         """
-        print("[TruthSocialStrategy] Disabled — Truth Social blocks all automated access "
-              "including authenticated sessions. Will be re-enabled in Phase 2 when Quiver "
-              "Quantitative integration provides Trump post monitoring via their API.")
+        if not self._disabled_logged:
+            print("[TruthSocialStrategy] Disabled — Truth Social blocks all automated access "
+                  "including authenticated sessions. Will be re-enabled in Phase 2 when Quiver "
+                  "Quantitative integration provides Trump post monitoring via their API.")
+            self._disabled_logged = True
         return []
 
         # ── Dead code below — preserved for when a working feed source is wired up ──
