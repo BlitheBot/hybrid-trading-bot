@@ -54,6 +54,12 @@ class Config:
     TRUTH_SOCIAL_TAKE_PROFIT = 8.0 # 8% take profit
     TRUTH_SOCIAL_POSITION_SIZE_MULTIPLIER = 0.50 # 50% of normal size
 
+    # SEC EDGAR Insider Trading Signal Parameters
+    SEC_EDGAR_ALERT_THRESHOLD = 6        # minimum strength to send Slack alert
+    SEC_EDGAR_AUTO_TRADE_THRESHOLD = 13  # $1M+ insider buys only (strength=14)
+    SEC_EDGAR_MIN_BUY_VALUE = 100_000    # ignore buys below $100k
+    SEC_EDGAR_MIN_SELL_VALUE = 500_000   # ignore sells below $500k
+
     # Backtester / Strategy Discovery Engine
     BACKTEST_START_DATE = "2019-01-01"
     BACKTEST_END_DATE = "2024-12-31"

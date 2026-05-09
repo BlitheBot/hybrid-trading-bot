@@ -31,6 +31,7 @@ from strategies.smb_strategy import SMBStrategy
 from strategies.swing_strategy import SwingStrategy
 from strategies.news_strategy import NewsStrategy, _get_scan_sleep_seconds
 from strategies.truth_social_strategy import TruthSocialStrategy
+from strategies.sec_edgar_strategy import SECEdgarStrategy
 from utils import get_historical_bars, get_finnhub_price
 
 # ── Flask Health Endpoint (Bug 5) ───────────────────────────────────
@@ -930,6 +931,85 @@ class TradingBot:
             finally:
                 await asyncio.sleep(60)
 
+    async def sec_edgar_loop(self):
+        """Polls SEC EDGAR Form 4 insider trade filings every 30 minutes."""
+        print("📋 Starting SEC EDGAR Insider Trade Loop (30-min polling)...")
+        strategy = SECEdgarStrategy()
+        while True:
+            signals: list[dict] = []
+            try:
+                if not self.trading_halted_for_day:
+                    signals = await strategy.scan_once()
+                    for sig in signals:
+                        ticker   = sig["ticker"]
+                        strength = sig["strength"]
+                        action   = sig["action"]
+
+                        # Always send to #trading-decisions with 📋 emoji
+                        asyncio.create_task(notifications.notify_edgar_signal(
+                            ticker, sig["headline"], sig["sentiment"], strength, action
+                        ))
+
+                        if not sig["auto_trade"]:
+                            continue
+
+                        # Guard: symbol cooldown
+                        self._update_loss_cache()
+                        if ticker in self.last_loss_times:
+                            if datetime.now(pytz.utc) - self.last_loss_times[ticker] < timedelta(minutes=Config.SYMBOL_COOLDOWN_MINUTES):
+                                asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "Symbol on cooldown (EDGAR)"))
+                                continue
+
+                        # Guard: one position per symbol
+                        try:
+                            self.trading_client.get_open_position(ticker)
+                            asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "One position per symbol limit (EDGAR)"))
+                            continue
+                        except Exception:
+                            pass
+
+                        # Execute using swing risk parameters (buys only)
+                        if action != "buy":
+                            continue
+                        try:
+                            from alpaca.trading.requests import MarketOrderRequest
+                            from alpaca.trading.enums import OrderSide, TimeInForce
+
+                            account = self.trading_client.get_account()
+                            equity = float(account.equity)
+                            scaled_risk = Config.SWING_EQUITY_RISK_PERCENT * self.risk_multiplier
+                            risk_dollars = equity * (scaled_risk / 100.0)
+
+                            latest = self.stock_data_client.get_stock_latest_trade(
+                                StockLatestTradeRequest(symbol_or_symbols=ticker)
+                            )
+                            entry_price = float(latest[ticker].price)
+                            stop_distance = entry_price * (Config.STOP_LOSS_PERCENT / 100.0)
+                            qty = max(1, int(risk_dollars / stop_distance))
+
+                            max_dollars = float(account.buying_power) * (Config.MAX_BUYING_POWER_UTILIZATION_PERCENT / 100.0)
+                            qty = min(qty, max(1, int(max_dollars / entry_price)))
+
+                            self.trading_client.submit_order(MarketOrderRequest(
+                                symbol=ticker, qty=qty,
+                                side=OrderSide.BUY, time_in_force=TimeInForce.DAY
+                            ))
+                            asyncio.create_task(notifications.notify_news_trade(
+                                ticker, sig["headline"], action, entry_price, qty
+                            ))
+                            self.active_signals[f"{ticker}-edgar-buy"] = datetime.now(pytz.utc)
+
+                        except Exception as e:
+                            msg = f"[EDGARLoop] Trade execution error for {ticker}: {e}"
+                            print(msg)
+                            asyncio.create_task(notifications.notify_alert(msg))
+
+            except Exception as e:
+                print(f"[EDGARLoop] Unexpected error: {e}")
+            finally:
+                print(f"📋 EDGAR scan complete — {len(signals)} insider signals above threshold, next scan in 30 min")
+                await asyncio.sleep(1800)
+
     async def _validate_swing_symbols(self):
         """Fetch latest trade for each SWING_SYMBOLS entry to catch config typos at startup."""
         print("Validating swing symbols...")
@@ -992,6 +1072,7 @@ class TradingBot:
             self.swing_loop(),
             self.news_loop(),
             self.truth_social_loop(),
+            self.sec_edgar_loop(),
             self.health_report_loop(),
             self.performance_report_loop(),
             self.trailing_stop_monitor_loop(),

@@ -193,6 +193,33 @@ async def notify_news_trade(ticker, headline, direction, entry_price, position_s
     }
     await _post_to_slack(Config.SLACK_ALERTS_WEBHOOK, payload)
 
+async def notify_edgar_signal(ticker, headline, sentiment, strength, action):
+    """Sends a SEC EDGAR insider trade signal to #trading-decisions with 📋 emoji."""
+    sentiment_emoji = "🟢" if sentiment == "bullish" else "🔴"
+    payload = {
+        "text": f"📋 *EDGAR INSIDER: {action.upper()} {ticker}* (Strength: {strength:.1f})",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"📋 SEC EDGAR Insider: {action.upper()} {ticker}"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Ticker:*\n{ticker}"},
+                    {"type": "mrkdwn", "text": f"*Sentiment:*\n{sentiment_emoji} {sentiment.capitalize()}"},
+                    {"type": "mrkdwn", "text": f"*Strength:*\n{strength:.1f}"},
+                    {"type": "mrkdwn", "text": f"*Action:*\n{action.upper()}"},
+                ]
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Filing:*\n```{headline}```"}
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
+
 async def notify_truth_social_signal(post_text, tickers, sentiment, score, action):
     """Sends a Truth Social sentiment signal to #trading-decisions (alert only, no trade yet)."""
     ticker_str = ", ".join(tickers) if tickers else "N/A"
