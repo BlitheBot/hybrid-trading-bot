@@ -17,6 +17,7 @@ os.environ.pop("GITHUB_TOKEN", None)
 
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
+from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.data.live import CryptoDataStream
 
@@ -495,8 +496,8 @@ class TradingBot:
                             scaled_risk = Config.SWING_EQUITY_RISK_PERCENT * self.risk_multiplier
                             risk_dollars = equity * (scaled_risk / 100.0)
 
-                            latest = self.stock_data_client.get_stock_latest_trade({ticker: ticker})
-                            entry_price = float(list(latest.values())[0].price)
+                            latest = self.stock_data_client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=ticker))
+                            entry_price = float(latest[ticker].price)
                             stop_distance = entry_price * (Config.STOP_LOSS_PERCENT / 100.0)
                             qty = max(1, int(risk_dollars / stop_distance))
 
@@ -578,8 +579,8 @@ class TradingBot:
 
                             entry_price = sig.get("current_price", 0.0)
                             if entry_price <= 0:
-                                latest = self.stock_data_client.get_stock_latest_trade({ticker: ticker})
-                                entry_price = float(list(latest.values())[0].price)
+                                latest = self.stock_data_client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=ticker))
+                                entry_price = float(latest[ticker].price)
 
                             stop_distance = entry_price * (Config.TRUTH_SOCIAL_STOP_LOSS / 100.0)
                             qty = max(1, int(risk_dollars / stop_distance))
@@ -612,7 +613,7 @@ class TradingBot:
         print("Validating swing symbols...")
         for symbol in Config.SWING_SYMBOLS:
             try:
-                self.stock_data_client.get_stock_latest_trade({symbol: symbol})
+                self.stock_data_client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=symbol))
                 print(f"  {symbol} OK")
             except Exception as e:
                 msg = f"WARNING: Symbol {symbol} failed validation — check config ({e})"
