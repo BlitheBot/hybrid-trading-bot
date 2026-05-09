@@ -512,7 +512,10 @@ class TradingBot:
             except Exception as e:
                 print(f"[NewsLoop] Unexpected error: {e}")
             finally:
-                await asyncio.sleep(_get_scan_sleep_seconds())
+                sleep_seconds = _get_scan_sleep_seconds()
+                print(f"📰 News scan complete — {strategy._last_articles_scanned} headlines analyzed, "
+                      f"{len(signals)} signals above threshold, next scan in {sleep_seconds}s")
+                await asyncio.sleep(sleep_seconds)
 
     async def truth_social_loop(self):
         """Continuously polls Trump's Truth Social RSS feed and routes signals to Slack / trade execution."""
@@ -595,13 +598,44 @@ class TradingBot:
             finally:
                 await asyncio.sleep(60)
 
+    async def _validate_swing_symbols(self):
+        """Fetch latest trade for each SWING_SYMBOLS entry to catch config typos at startup."""
+        print("Validating swing symbols...")
+        for symbol in Config.SWING_SYMBOLS:
+            try:
+                self.stock_data_client.get_stock_latest_trade({symbol: symbol})
+                print(f"  {symbol} OK")
+            except Exception as e:
+                msg = f"WARNING: Symbol {symbol} failed validation — check config ({e})"
+                print(msg)
+                asyncio.create_task(notifications.notify_alert(msg))
+
     async def start_dual_engine(self):
-        msg = "🚀 Hybrid Trading Bot has successfully started and connected to Slack!"
-        print(msg)
-        asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
+        print("🚀 Hybrid Trading Bot starting...")
 
         if not await self._check_account_status():
             return
+
+        await self._validate_swing_symbols()
+
+        try:
+            account = self.trading_client.get_account()
+            equity = float(account.equity)
+            pnl = self.daily_pnl
+            pnl_sign = "+" if pnl >= 0 else ""
+            startup_msg = (
+                f"🚀 Hybrid Trading Bot started\n"
+                f"Equity: ${equity:,.2f}  |  "
+                f"Opening equity: ${self.start_of_day_equity:,.2f}  |  "
+                f"Daily P&L: {pnl_sign}${pnl:,.2f}\n"
+                f"Swing watchlist: {', '.join(Config.SWING_SYMBOLS)}"
+            )
+        except Exception:
+            startup_msg = "🚀 Hybrid Trading Bot has successfully started and connected to Slack!"
+
+        print(startup_msg)
+        asyncio.create_task(notifications.notify_alert(startup_msg, level="INFO"))
+
         self.add_scalp_strategy(SMBStrategy("SMB Late Scalp", ema_window=9, rr_ratio=3))
         self.add_swing_strategy(SwingStrategy("Swing Trader", ema_short=50, ema_long=200))
         await asyncio.gather(

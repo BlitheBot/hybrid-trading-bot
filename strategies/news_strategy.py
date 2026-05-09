@@ -79,8 +79,8 @@ class NewsStrategy(BaseStrategy):
             secret_key=Config.ALPACA_SECRET_KEY,
         )
         self._claude = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
-        # {ticker: last_processed_datetime} — 2-hour dedup window per ticker
         self._last_seen: dict[str, datetime] = {}
+        self._last_articles_scanned: int = 0
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
@@ -144,7 +144,6 @@ Respond with ONLY a valid JSON object using exactly this schema:
         """
         signals = []
         try:
-            # Alpaca API supports batches of up to 50 tickers per request
             batch_size = 50
             all_articles = []
             for i in range(0, len(SP500_TICKERS), batch_size):
@@ -161,6 +160,8 @@ Respond with ONLY a valid JSON object using exactly this schema:
                         all_articles.extend(resp.news)
                 except Exception as e:
                     print(f"[NewsStrategy] Batch fetch error (batch {i//batch_size}): {e}")
+
+            self._last_articles_scanned = len(all_articles)
 
             for article in all_articles:
                 tickers = getattr(article, "symbols", []) or []
