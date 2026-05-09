@@ -12,3 +12,5 @@ seaborn
 flask
 anthropic
 python-dotenv
+psycopg2-binary
+pyarrow

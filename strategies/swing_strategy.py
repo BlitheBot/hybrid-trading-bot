@@ -8,13 +8,16 @@ from config import Config
 import pandas_ta as ta
 
 class SwingStrategy(BaseStrategy):
-    def __init__(self, name, ema_short=50, ema_long=200, macd_fast=12, macd_slow=26, macd_signal=9):
+    def __init__(self, name, ema_short=50, ema_long=200, macd_fast=12, macd_slow=26, macd_signal=9,
+                 rsi_entry_low=40, rsi_entry_high=60):
         super().__init__(name)
         self.ema_short = ema_short
         self.ema_long = ema_long
         self.macd_fast = macd_fast
         self.macd_slow = macd_slow
         self.macd_signal = macd_signal
+        self.rsi_entry_low = rsi_entry_low
+        self.rsi_entry_high = rsi_entry_high
 
     def generate_signals(self, market_data):
         if market_data is None or len(market_data) < self.ema_long + self.macd_slow + self.macd_signal + 14:
@@ -54,13 +57,13 @@ class SwingStrategy(BaseStrategy):
         signal = None
         confidence = 0.0
 
-        # Entry conditions: 50 EMA > 200 EMA + MACD crossover + RSI between 40-60
+        # Entry conditions: EMA_short > EMA_long + MACD crossover + RSI in configured range
         if last_ema_short > last_ema_long and \
            last_macd > last_macd_signal and df['MACD'].iloc[-2] <= df['MACD_Signal'].iloc[-2] and \
-           40 <= last_rsi <= 60:
+           self.rsi_entry_low <= last_rsi <= self.rsi_entry_high:
             signal = "buy"
             confidence = 0.7
-            reasoning = f"50EMA({last_ema_short:.2f}) > 200EMA({last_ema_long:.2f}), MACD Cross Up, RSI({last_rsi:.2f}) in [40,60]"
+            reasoning = f"EMA{self.ema_short}({last_ema_short:.2f}) > EMA{self.ema_long}({last_ema_long:.2f}), MACD Cross Up, RSI({last_rsi:.2f}) in [{self.rsi_entry_low},{self.rsi_entry_high}]"
 
         # Exit conditions (for existing positions)
         # RSI above 70 or MACD reversal
