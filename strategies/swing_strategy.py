@@ -9,18 +9,19 @@ import pandas_ta as ta
 
 class SwingStrategy(BaseStrategy):
     def __init__(self, name, ema_short=50, ema_long=200, macd_fast=12, macd_slow=26, macd_signal=9,
-                 rsi_entry_low=40, rsi_entry_high=60):
+                 rsi_period=14, rsi_entry_low=40, rsi_entry_high=60):
         super().__init__(name)
         self.ema_short = ema_short
         self.ema_long = ema_long
         self.macd_fast = macd_fast
         self.macd_slow = macd_slow
         self.macd_signal = macd_signal
+        self.rsi_period = rsi_period
         self.rsi_entry_low = rsi_entry_low
         self.rsi_entry_high = rsi_entry_high
 
     def generate_signals(self, market_data):
-        if market_data is None or len(market_data) < self.ema_long + self.macd_slow + self.macd_signal + 14:
+        if market_data is None or len(market_data) < self.ema_long + self.macd_slow + self.macd_signal + self.rsi_period:
             return None
 
         df = market_data.copy()
@@ -39,7 +40,7 @@ class SwingStrategy(BaseStrategy):
             df['MACD_Signal'] = np.nan
 
         # Calculate RSI with pandas-ta
-        df['RSI'] = ta.rsi(df['close'], length=14)
+        df['RSI'] = ta.rsi(df['close'], length=self.rsi_period)
 
         # Check only the last row — early rows always have NaN from rolling warmup
         if (pd.isna(df['EMA_short'].iloc[-1]) or pd.isna(df['EMA_long'].iloc[-1]) or
