@@ -1,12 +1,26 @@
+# Hybrid Trading Bot — Claude Code Session Rules
+
+## Operating Rules
+
+1. **Read this entire file** before touching any code file — the architecture notes and known issues section prevent repeat mistakes.
+2. **Never auto-deploy strategies** — all strategy logic changes require explicit user confirmation before Railway deployment.
+3. **Always run syntax check** before committing:
+   ```
+   python -c "import ast, pathlib; [ast.parse(p.read_text(encoding='utf-8')) for p in pathlib.Path('.').rglob('*.py') if '.git' not in str(p) and 'discovery/data' not in str(p)]"
+   ```
+4. **Always commit and push** after completing code changes.
+
+---
+
 # Hybrid Trading Bot — System Reference
 
-This file gives a Claude Code session instant context on the full system. Read this before touching anything.
+This file gives a Claude Code session instant context on the full system.
 
 ---
 
 ## What This Bot Does
 
-A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops covering crypto scalping (WebSocket), stock swing trading (daily), news sentiment (Benzinga via Alpaca), political sentiment (Truth Social), insider trade signals (SEC EDGAR Form 4), and housekeeping (trailing stops, DB exit logging, Slack health reports). All trade decisions go to Slack. High-conviction signals auto-trade via Alpaca. All completed trades are logged to PostgreSQL for ML training data.
+A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops covering crypto scalping (WebSocket), stock swing trading (daily), news sentiment (Benzinga via Alpaca), political sentiment (Truth Social — currently disabled), insider trade signals (SEC EDGAR Form 4), and housekeeping (trailing stops, DB exit logging, Slack health reports). All trade decisions go to Slack. High-conviction signals auto-trade via Alpaca. All completed trades are logged to PostgreSQL via SQLAlchemy for ML training data.
 
 ---
 
@@ -16,11 +30,11 @@ A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops
 
 | File | Purpose |
 |---|---|
-| `bot.py` | Main `TradingBot` class — 9 async loops, all trade execution, DB logging, market regime check, bull/bear debate, fundamentals gate |
+| `bot.py` | Main `TradingBot` class — 9 async loops, all trade execution, SQLAlchemy DB logging, market regime check, bull/bear debate, fundamentals gate |
 | `config.py` | All config constants as class attributes; reads `.env` via `load_dotenv()` before class definition (critical — class attributes are evaluated at import time) |
 | `notifications.py` | Slack webhook functions for each channel: alerts, decisions, health, performance |
 | `utils.py` | `get_historical_bars()` (Alpaca + Finnhub real-time overlay), `get_spy_data()`, `get_finnhub_price()` |
-| `dashboard.py` | Streamlit dashboard — account metrics, open positions, recent orders, signal_outcomes, discovery results, analytics |
+| `dashboard.py` | 5-tab Streamlit dashboard — Account, Positions, Trade Log (signal_outcomes via SQLAlchemy), Discovery (strategy_results), Analytics (P&L chart + win rate) |
 | `requirements.txt` | All dependencies (see Dependencies section) |
 
 ### Strategies (Active)
@@ -29,10 +43,10 @@ A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops
 |---|---|---|
 | `strategies/base_strategy.py` | All strategies | Abstract base: `generate_signals()`, `execute_trade()`, `calculate_safe_quantity()`, `is_already_in_position()` |
 | `strategies/swing_strategy.py` | `swing_loop` | EMA crossover + MACD + RSI swing signals with configurable per-symbol params; R/R ratio gate |
-| `strategies/smb_strategy.py` | `scalp_loop` | Late-day crypto scalp; EMA9, relative strength vs SPY, 3:1 R/R; used for BTC/USD + ETH/USD |
-| `strategies/news_strategy.py` | `news_loop` | Benzinga news via Alpaca News API; Claude NLP scoring with keyword fallback; dynamic sleep interval |
-| `strategies/truth_social_strategy.py` | `truth_social_loop` | Trump Truth Social RSS; Claude NLP for ticker extraction + sentiment |
-| `strategies/sec_edgar_strategy.py` | `sec_edgar_loop` | SEC EDGAR Form 4 insider trades; ElementTree XML parsing; strength-tiered scoring |
+| `strategies/smb_strategy.py` | `scalp_loop` | Crypto scalp; EMA9 vs VWAP crossover, ATR-based stops, 3:1 R/R; BTC/USD + ETH/USD. Null check uses `iloc[-2:]` not full DataFrame (early rows have NaN from rolling indicators) |
+| `strategies/news_strategy.py` | `news_loop` | Benzinga news via Alpaca News API; Claude NLP scoring with keyword fallback; dynamic sleep; 429 retry (10s/20s/30s) per batch |
+| `strategies/truth_social_strategy.py` | `truth_social_loop` | Disabled — `TRUTH_SOCIAL_ENABLED=False`; scan_once() returns [] immediately. Re-enable when Quiver Quantitative API is integrated |
+| `strategies/sec_edgar_strategy.py` | `sec_edgar_loop` | SEC EDGAR Form 4 insider trades; ElementTree XML parsing; strength-tiered scoring; exponential 429 backoff (30s/60s/120s) |
 
 ### Strategies (Legacy — in repo, not wired into bot)
 
@@ -53,25 +67,28 @@ A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops
 
 ---
 
-## 9 Concurrent Loops (`asyncio.gather` in `start_dual_engine`)
+## 10 Concurrent Loops (`asyncio.gather` in `start_dual_engine`)
 
 | # | Method | Interval | What It Does |
 |---|---|---|---|
-| 1 | `scalp_loop` | WebSocket (continuous) | Crypto scalp on BTC/USD + ETH/USD via CryptoDataStream; evaluates whichever has stronger RSI momentum |
-| 2 | `swing_loop` | Daily 10:30 AM EST | Evaluates all 6 SWING_SYMBOLS with per-symbol SwingStrategy instances; gates via fundamentals check + Claude bull/bear debate |
-| 3 | `news_loop` | 60s–15min (dynamic) | Scans all S&P 500 tickers for Benzinga headlines; Claude NLP scores each; alerts to Slack, auto-trades if strength ≥ threshold |
-| 4 | `truth_social_loop` | 60s | Polls Trump's Truth Social RSS; Claude extracts tickers + sentiment; 50% position sizing, wider TP |
-| 5 | `sec_edgar_loop` | 30 min | Polls EDGAR Form 4 RSS; parses XML for open-market transactions; alerts on buys ≥ $100k and sells ≥ $500k; auto-trades on $1M+ buys |
+| 1 | `scalp_loop` | WebSocket (continuous) | Crypto scalp on BTC/USD + ETH/USD via CryptoDataStream; evaluates whichever has stronger RSI momentum; sets `websocket_connected` in `_health_state` |
+| 2 | `swing_loop` | Daily 10:30 AM EST | Evaluates all 6 SWING_SYMBOLS with per-symbol SwingStrategy instances; gates via fundamentals check + Claude bull/bear debate (bull+bear run in parallel via `asyncio.gather`) |
+| 3 | `news_loop` | 60s–15min (dynamic) | Scans all S&P 500 tickers for Benzinga headlines; Claude NLP scores each; alerts to Slack, auto-trades if strength ≥ threshold; sets `last_news_scan_utc` in `_health_state` |
+| 4 | `truth_social_loop` | — | **Disabled** (`TRUTH_SOCIAL_ENABLED=False`); returns immediately on startup |
+| 5 | `sec_edgar_loop` | 30 min | Polls EDGAR Form 4 RSS; parses XML for open-market transactions; alerts on buys ≥ $100k and sells ≥ $500k; auto-trades on $1M+ buys; sets `last_edgar_scan_utc` in `_health_state` |
 | 6 | `health_report_loop` | Daily 9 AM EST | Sends uptime, equity, buying power, daily P&L to #trading-health |
 | 7 | `performance_report_loop` | Weekly Sun 6 PM EST | Sends weekly equity + active positions to #trading-performance |
-| 8 | `trailing_stop_monitor_loop` | Every 60s | Upgrades static stop-loss orders to trailing stops once unrealized gain ≥ `TRAILING_STOP_ACTIVATION_PCT` (3%) |
-| 9 | `_exit_monitor_loop` | Every 10 min | Queries Alpaca for closed sell orders; updates `signal_outcomes` with exit price, P&L%, and exit reason (stop/target/manual) |
+| 8 | `trailing_stop_monitor_loop` | Every `TRAILING_STOP_MONITOR_INTERVAL` (60s) | Upgrades static stop-loss orders to trailing stops once unrealized gain ≥ `TRAILING_STOP_ACTIVATION_PCT` (3%) |
+| 9 | `_exit_monitor_loop` | Every 10 min | Queries Alpaca for closed sell orders (7-day lookback, limit 200); updates `signal_outcomes` with exit price, P&L%, and exit reason (stop/target/manual). Protected by `_trade_ids_lock` |
+| 10 | `market_open_notification_loop` | Daily 9:30 AM EST (Mon–Fri) | Sends morning briefing to #trading-alerts: equity, market regime, swing watchlist, reminder that swing evaluation fires at 10:30 AM EST |
 
 ---
 
 ## Database Schema (PostgreSQL)
 
-Both tables are created by `_ensure_signal_outcomes_table()` in `bot.py` on startup, and by `_ensure_tables()` in `discovery_engine.py` when the discovery engine runs.
+Both tables are created by `_ensure_signal_outcomes_table()` in `bot.py` on startup (via SQLAlchemy), and by `_ensure_tables()` in `discovery_engine.py` when the discovery engine runs.
+
+**Discovery Engine results** were written to Railway PostgreSQL on 2026-05-10: 1215 rows across 5 symbols (JPM 0, SPY 9, COST 125, BRK.B 24, PG 0 validated of 243 combos each).
 
 ### `signal_outcomes` — Live trade log (primary ML training data)
 
@@ -96,7 +113,7 @@ CREATE TABLE IF NOT EXISTS signal_outcomes (
 );
 ```
 
-Entry is logged after `execute_trade()` succeeds. Exit is backfilled by `_exit_monitor_loop` every 10 minutes.
+Entry is logged after `execute_trade()` succeeds. Exit is backfilled by `_exit_monitor_loop` every 10 minutes (7-day lookback window).
 
 ### `strategy_results` — Discovery Engine walk-forward results
 
@@ -177,15 +194,22 @@ CRYPTO_SCALP_STOP_LOSS_PERCENT = 4.0  # wider stop for crypto volatility
 TRAILING_STOP_ACTIVATION_PCT = 0.03   # activate trailing stop at 3% unrealized gain
 TRAILING_STOP_TRAIL_PCT = 0.015       # trail at 1.5% below high-water mark
 
-# Cooldowns
+# Cooldowns & Rate Limits
 SYMBOL_COOLDOWN_MINUTES = 120         # block re-entry after a stop-loss on same symbol
 MIN_PRICE_MOVEMENT_PCT = 0.0015       # ignore crypto ticks smaller than 0.15% move
+NEWS_DEDUP_HOURS = 2                  # per-ticker cooldown and news lookback window
+NEWS_BATCH_SIZE = 50                  # symbols per Alpaca News API request (10 batches for 500 tickers)
+SEC_EDGAR_COOLDOWN_HOURS = 4          # per-ticker cooldown after an EDGAR signal fires
+SEC_EDGAR_RATE_LIMIT_SLEEP = 0.15     # seconds between EDGAR HTTP requests
+MARKET_REGIME_CACHE_SECONDS = 900     # 15-min SPY/EMA-200 regime cache TTL
+TRAILING_STOP_MONITOR_INTERVAL = 60   # seconds between trailing-stop checks
 
 # News / Benzinga
 NEWS_SIGNAL_ALERT_THRESHOLD = 7       # strength ≥ 7 → Slack alert
 NEWS_SIGNAL_AUTO_TRADE_THRESHOLD = 13 # strength ≥ 13 → auto-trade
 
 # Truth Social
+TRUTH_SOCIAL_ENABLED = False          # disabled; re-enable with Quiver Quantitative API
 TRUTH_SOCIAL_ALERT_THRESHOLD = 7
 TRUTH_SOCIAL_AUTO_TRADE_THRESHOLD = 13
 TRUTH_SOCIAL_STOP_LOSS = 2.0          # 2% SL (tighter — political news fades fast)
@@ -235,6 +259,29 @@ Set these in Railway → Project → Variables:
 
 ---
 
+## Port Architecture
+
+| Port | Service | Notes |
+|---|---|---|
+| 8501 | Streamlit dashboard | Railway public domain routes here |
+| 8502 | Flask `/health` endpoint | Internal only; polled by dashboard sidebar |
+
+The `/health` endpoint returns:
+```json
+{
+  "status": "running",
+  "uptime_seconds": 3600.0,
+  "started_at": "2026-05-12T09:30:00+00:00",
+  "db_connected": true,
+  "alpaca_connected": true,
+  "last_news_scan": "2026-05-12T10:32:00+00:00",
+  "last_edgar_scan": "2026-05-12T10:00:00+00:00",
+  "websocket_connected": true
+}
+```
+
+---
+
 ## Swing Trade Signal Flow
 
 ```
@@ -254,22 +301,24 @@ swing_loop() [daily 10:30 AM EST]
             │    │    ├─ EPS decline > 20% YoY → BLOCK
             │    │    └─ Earnings within 48h → BLOCK
             │    │
-            │    └─ _debate_trade(symbol, signal, strategy)   ← 3 Claude calls
-            │         ├─ Call 1: Bull case (2 sentences)
-            │         ├─ Call 2: Bear case (2 sentences)
-            │         └─ Call 3: BUY or SKIP verdict
+            │    └─ _debate_trade(symbol, signal, strategy)   ← 2+1 Claude calls
+            │         ├─ asyncio.gather(bull_call, bear_call)  ← parallel
+            │         └─ verdict_call(bull, bear) → BUY or SKIP
             │              └─ SKIP → notify_trade_skipped → abort
             │
             ├─ strategy.execute_trade(signal, trading_client, ...)
             │    └─ MarketOrderRequest with TakeProfitRequest + StopLossRequest (bracket order)
             │
-            └─ _log_trade_entry(symbol, ...)   ← INSERT into signal_outcomes
-                 └─ stores (row_id, entry_price, entry_time) in _open_trade_ids[symbol]
+            └─ _log_trade_entry(symbol, ...)   ← INSERT into signal_outcomes via SQLAlchemy
+                 └─ async with _trade_ids_lock:
+                      _open_trade_ids[symbol] = (row_id, entry_price, entry_time)
 
 _exit_monitor_loop() [every 10 min, concurrent]
-  └─ get_orders(CLOSED, last 24h)
-       └─ for each filled sell order matching _open_trade_ids:
-            └─ _update_trade_exit(row_id, exit_price, exit_reason, pnl_pct)
+  └─ snapshot = dict(_open_trade_ids)   ← locked read
+  └─ get_orders(CLOSED, last 7 days, limit=200)
+       └─ for each filled sell order matching snapshot:
+            └─ async with _trade_ids_lock: pop(sym)
+            └─ _update_trade_exit(row_id, exit_price, exit_reason, pnl_pct)  ← SQLAlchemy
 ```
 
 ---
@@ -296,23 +345,42 @@ _exit_monitor_loop() [every 10 min, concurrent]
 
 ---
 
+## Architecture Notes
+
+### Async safety
+- All `trading_client.*` SDK calls are wrapped in `asyncio.to_thread()` — no blocking calls on the event loop
+- `_open_trade_ids` is protected by `self._trade_ids_lock = asyncio.Lock()` — all reads and writes acquire the lock
+- `_update_loss_cache()` is `async def` — all callers use `await`
+- Bull/bear debate runs both Claude calls in parallel via `asyncio.gather()`
+
+### Database (SQLAlchemy)
+- `bot.py` uses `create_engine(url, pool_pre_ping=True)` stored as `self._db_engine`
+- `dashboard.py` uses `@st.cache_resource` engine via `_get_engine()`
+- Both use `engine.begin()` for writes (auto-commit on context exit) and `text()` with named `:params`
+- Raw psycopg2 was fully removed from both files
+
+### Signal cooldown key
+- Key is `f"{symbol}-{strategy.name}"` (NOT including signal direction) — prevents buy/sell having separate cooldown windows on the same symbol+strategy
+
+---
+
 ## Known Issues and Tech Debt
 
-1. **`news_strategy.py` uses `claude-opus-4-5`** — this model ID may be outdated. Current IDs: `claude-sonnet-4-6`, `claude-opus-4-7`, `claude-haiku-4-5-20251001`. Consider updating to `claude-sonnet-4-6` to reduce cost.
+1. **`bot.py` is ~1100 lines** — monolithic. The DB methods, regime check, fundamentals gate, and debate could be extracted into `trading/risk.py` or similar, but this is low priority until the bot needs significant new features.
 
-2. **`bot.py` is ~1050 lines** — monolithic. The DB methods, regime check, fundamentals gate, and debate could be extracted into `trading/risk.py` or similar, but this is low priority until the bot needs significant new features.
+2. **V, JPM, PG have no validated edge** — they remain in `SWING_SYMBOLS` to accumulate live `signal_outcomes` data. Consider removing after 6 months if they don't signal (or are consistently blocked by fundamentals gate).
 
-3. **V, JPM, PG have no validated edge** — they remain in `SWING_SYMBOLS` to accumulate live `signal_outcomes` data. Consider removing after 6 months if they don't signal (or are consistently blocked by fundamentals gate).
+3. **Alpaca 15-minute delay** — free IEX feed has 15-min delay for stocks. Mitigated by Finnhub real-time price overlay in `get_historical_bars()`. Crypto is unaffected (real-time WebSocket).
 
-4. **Alpaca 15-minute delay** — free IEX feed has 15-min delay for stocks. Mitigated by Finnhub real-time price overlay in `get_historical_bars()`. Crypto is unaffected (real-time WebSocket).
+4. **`_seen_accessions` in `SECEdgarStrategy` is in-memory** — on Railway restart, it re-processes the last 40 filings. The `SEC_EDGAR_COOLDOWN_HOURS` (4h) per ticker prevents duplicate signals, but ~80 duplicate HTTP requests happen on each cold start. Acceptable for 30-min polling.
 
-5. **`_seen_accessions` in `SECEdgarStrategy` is in-memory** — on Railway restart, it re-processes the last 40 filings. The 4-hour cooldown per ticker prevents duplicate signals but ~80 duplicate HTTP requests will happen on each cold start. Acceptable for 30-min polling.
+5. **Truth Social loop is dead code** — `truth_social_loop` exists in `bot.py` and is included in `asyncio.gather()`, but `TRUTH_SOCIAL_ENABLED=False` causes it to return immediately. No performance impact, but the loop registration and import are still present. Will be cleaned up when Quiver API integration is ready.
 
-6. **`dashboard.py` PostgreSQL integration** — the existing dashboard connects to Alpaca only. The DB views (signal_outcomes, strategy_results) are a planned enhancement.
+6. **No structured logging** — all output is `print()`. No log levels, no rotation, no file output. Hard to filter signal vs. noise in Railway logs.
 
-7. **`strategies/sma_crossover.py` is imported at top of `bot.py`** — it's unused but still imported. Can be removed.
+7. **Exit monitor symbol-only matching** — `_exit_monitor_loop` matches closed sell orders to `_open_trade_ids` by symbol. If two sell orders for the same symbol fill in one 10-min window (shouldn't happen in practice), only the first match is logged.
 
-8. **`backtester.py`, `run_all.py`** — purpose unclear; these may be early prototypes. Do not modify without understanding them first.
+8. **`backtester.py`** — early prototype. Do not modify without understanding it first.
 
 ---
 
@@ -328,12 +396,13 @@ pytz
 requests
 anthropic          # Claude API (NLP scoring, bull/bear debate)
 python-dotenv      # .env loading
-flask              # /health endpoint (port 8501)
-streamlit          # Dashboard
+flask              # /health endpoint (port 8502)
+streamlit          # Dashboard (port 8501)
 plotly             # Charts in dashboard
 matplotlib
 seaborn
-psycopg2-binary    # PostgreSQL driver
+psycopg2-binary    # PostgreSQL driver (still needed by SQLAlchemy for pg:// URLs)
+sqlalchemy         # ORM/connection layer for bot.py and dashboard.py
 pyarrow            # Parquet cache for discovery engine
 ```
 
@@ -342,16 +411,16 @@ pyarrow            # Parquet cache for discovery engine
 ## Running Locally
 
 ```bash
-# Bot
+# Bot only
 python bot.py
 
-# Dashboard
+# Dashboard only
 streamlit run dashboard.py
 
-# Discovery Engine (full 243-combo run, ~7 min)
-python -m discovery.discovery_engine
+# Both (with restart supervision)
+python run_all.py
 
-# Discovery Engine (quick test — edit PARAM_GRID in discovery_engine.py first)
+# Discovery Engine (full 243-combo run, ~7 min)
 python -m discovery.discovery_engine
 ```
 

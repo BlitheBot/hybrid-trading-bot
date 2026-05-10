@@ -224,8 +224,9 @@ class TradingBot:
                         discovered_at TIMESTAMP DEFAULT NOW()
                     )
                 """))
+                count = conn.execute(sql_text("SELECT COUNT(*) FROM signal_outcomes")).scalar()
             _health_state["db_connected"] = True
-            print("[DB] signal_outcomes table verified")
+            print(f"[DB] signal_outcomes table verified — {count} existing rows")
         except Exception as e:
             _health_state["db_connected"] = False
             print(f"[DB] Table setup failed: {e}")
@@ -1060,6 +1061,35 @@ class TradingBot:
                 print(msg)
                 asyncio.create_task(notifications.notify_alert(msg))
 
+    async def market_open_notification_loop(self):
+        """Sends a morning briefing to #trading-alerts at 9:30 AM EST, weekdays only."""
+        print("🔔 Starting Market Open Notification Loop (9:30 AM EST, Mon-Fri)...")
+        est = pytz.timezone('America/New_York')
+        while True:
+            now = datetime.now(est)
+            target = now.replace(hour=9, minute=30, second=0, microsecond=0)
+            if now >= target:
+                target += timedelta(days=1)
+            # Advance past weekend days
+            while target.weekday() >= 5:
+                target += timedelta(days=1)
+
+            await asyncio.sleep((target - now).total_seconds())
+
+            # Double-check we landed on a weekday (clock skew guard)
+            if datetime.now(est).weekday() >= 5:
+                continue
+
+            try:
+                account = await asyncio.to_thread(self.trading_client.get_account)
+                equity = float(account.equity) if account else 0.0
+            except Exception:
+                equity = 0.0
+
+            regime = await self._get_market_regime()
+            watchlist = ", ".join(Config.SWING_SYMBOLS)
+            asyncio.create_task(notifications.notify_market_open(equity, watchlist, regime))
+
     async def start_dual_engine(self):
         print("🚀 Hybrid Trading Bot starting...")
 
@@ -1115,6 +1145,7 @@ class TradingBot:
             self.performance_report_loop(),
             self.trailing_stop_monitor_loop(),
             self._exit_monitor_loop(),
+            self.market_open_notification_loop(),
         )
 
 if __name__ == "__main__":

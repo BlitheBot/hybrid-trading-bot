@@ -247,6 +247,29 @@ async def notify_truth_social_signal(post_text, tickers, sentiment, score, actio
     }
     await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
 
+async def notify_market_open(equity: float, watchlist: str, regime: str):
+    """Sends a morning briefing to #trading-alerts at 9:30 AM EST market open."""
+    regime_emoji = "🐂" if regime == "bull" else ("🐻" if regime == "bear" else "⚖️")
+    payload = {
+        "text": "🔔 *Market Open — Morning Briefing*",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "🔔 Market Open — Morning Briefing"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Equity:*\n${equity:,.2f}"},
+                    {"type": "mrkdwn", "text": f"*Market Regime:*\n{regime_emoji} {regime.capitalize()}"},
+                    {"type": "mrkdwn", "text": f"*Swing Watchlist:*\n{watchlist}"},
+                    {"type": "mrkdwn", "text": "*Next Event:*\nSwing evaluation at 10:30 AM EST"},
+                ]
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_ALERTS_WEBHOOK, payload)
+
 async def notify_truth_social_trade(ticker, post_text, direction, entry_price, position_size):
     """Sends a Truth Social-triggered trade execution to #trading-alerts."""
     payload = {
