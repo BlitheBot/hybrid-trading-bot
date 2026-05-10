@@ -47,7 +47,7 @@ def health_check():
         "started_at": _bot_start_time.isoformat()
     }), 200
 
-def start_health_server(port=8501):
+def start_health_server(port=8502):
     """Run the Flask health server in a daemon thread so it never blocks the bot."""
     thread = threading.Thread(
         target=lambda: _health_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False),
@@ -1080,7 +1080,7 @@ class TradingBot:
         )
 
 if __name__ == "__main__":
-    start_health_server(port=8501)
+    start_health_server(port=8502)
     bot = TradingBot()
     asyncio.run(bot.start_dual_engine())
 

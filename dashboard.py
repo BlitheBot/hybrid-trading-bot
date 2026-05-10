@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import plotly.graph_objects as go
 import pytz
+import requests as _requests
 import streamlit as st
 
 # Remove conflicting environment tokens before importing Alpaca
@@ -36,6 +37,28 @@ if st.sidebar.button("🔄 Refresh Data"):
 
 now_est = datetime.now(pytz.timezone("America/New_York"))
 st.sidebar.caption(f"Data cached 60s. Refreshed {now_est.strftime('%I:%M:%S %p EST')}")
+
+st.sidebar.markdown("---")
+
+# Bot health — pings Flask /health on port 8502 (internal, same Railway instance)
+@st.cache_data(ttl=30)
+def _bot_health():
+    try:
+        r = _requests.get("http://localhost:8502/health", timeout=3)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+_health = _bot_health()
+if _health:
+    uptime_s = int(_health.get("uptime_seconds", 0))
+    h, rem = divmod(uptime_s, 3600)
+    m, s   = divmod(rem, 60)
+    st.sidebar.success(f"🟢 Bot online — {h}h {m}m {s}s uptime")
+else:
+    st.sidebar.error("🔴 Bot offline or unreachable")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Swing Watchlist**")
