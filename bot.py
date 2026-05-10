@@ -7,7 +7,6 @@ import pytz
 import pandas as pd
 from flask import Flask, jsonify
 import notifications
-import time
 from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
 
@@ -26,7 +25,6 @@ from alpaca.data.live import CryptoDataStream
 
 from config import Config
 from strategies.base_strategy import BaseStrategy
-from strategies.sma_crossover import SMACrossoverStrategy
 from strategies.smb_strategy import SMBStrategy
 from strategies.swing_strategy import SwingStrategy
 from strategies.news_strategy import NewsStrategy, _get_scan_sleep_seconds
@@ -91,6 +89,7 @@ class TradingBot:
         self.swing_strategies = []
         self.swing_symbol_strategies: dict[str, SwingStrategy] = {}
         self._open_trade_ids: dict = {}       # symbol → (row_id, entry_price, entry_time)
+        self._trade_ids_lock = asyncio.Lock() # guards all _open_trade_ids mutations
         self._regime_cache = None             # (regime_str, timestamp)
         self._claude = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
         self.daily_pnl = 0.0
@@ -115,7 +114,7 @@ class TradingBot:
     async def _check_account_status(self):
         print("DEBUG: Fetching account details from Alpaca...")
         try:
-            account = self.trading_client.get_account()
+            account = await asyncio.to_thread(self.trading_client.get_account)
             if account:
                 print(f"Account Status: {account.status}, Equity: ${float(account.equity):,.2f}, Buying Power: ${float(account.buying_power):,.2f}")
                 
@@ -154,17 +153,15 @@ class TradingBot:
             asyncio.create_task(notifications.notify_alert(msg))
             return False
 
-    def _update_loss_cache(self):
+    async def _update_loss_cache(self):
         try:
-            # Check recently filled orders to see if any were stop losses
             req = GetOrdersRequest(
                 status=QueryOrderStatus.CLOSED,
                 limit=50,
                 after=datetime.now(pytz.utc) - timedelta(minutes=Config.SYMBOL_COOLDOWN_MINUTES)
             )
-            orders = self.trading_client.get_orders(req)
+            orders = await asyncio.to_thread(self.trading_client.get_orders, req)
             for order in orders:
-                # If a 'stop' order was filled, it's a loss exit
                 if order.status.value == "filled" and (order.order_type.value == "stop" or order.order_type.value == "trailing_stop"):
                     self.last_loss_times[order.symbol] = order.filled_at
         except Exception as e:
@@ -366,13 +363,15 @@ class TradingBot:
                     messages=[{"role": "user", "content": prompt}],
                 ).content[0].text.strip()
 
-            bull = await asyncio.to_thread(_call,
-                f"You are a bullish stock analyst. Make the strongest case FOR buying {symbol} right now. "
-                f"Data: {shared_data}  Respond in 2 sentences only."
-            )
-            bear = await asyncio.to_thread(_call,
-                f"You are a bearish stock analyst. Make the strongest case AGAINST buying {symbol} right now. "
-                f"Data: {shared_data}  Respond in 2 sentences only."
+            bull, bear = await asyncio.gather(
+                asyncio.to_thread(_call,
+                    f"You are a bullish stock analyst. Make the strongest case FOR buying {symbol} right now. "
+                    f"Data: {shared_data}  Respond in 2 sentences only."
+                ),
+                asyncio.to_thread(_call,
+                    f"You are a bearish stock analyst. Make the strongest case AGAINST buying {symbol} right now. "
+                    f"Data: {shared_data}  Respond in 2 sentences only."
+                ),
             )
             decision = await asyncio.to_thread(_call,
                 f"Bull case: {bull}\nBear case: {bear}\n"
@@ -418,7 +417,7 @@ class TradingBot:
         if self.trading_halted_for_day:
             return
 
-        self._update_loss_cache()
+        await self._update_loss_cache()
         if symbol in self.last_loss_times:
             if datetime.now(pytz.utc) - self.last_loss_times[symbol] < timedelta(minutes=Config.SYMBOL_COOLDOWN_MINUTES):
                 return # Blocked by cooldown
@@ -464,11 +463,14 @@ class TradingBot:
 
                 if signal['signal'] == "buy":
                     try:
-                        self.trading_client.get_open_position(symbol)
+                        await asyncio.to_thread(self.trading_client.get_open_position, symbol)
                         asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, "One position per symbol limit"))
                         continue
-                    except:
-                        pass # No open position, proceed
+                    except Exception as e:
+                        err = str(e).lower()
+                        if "position" not in err and "not found" not in err and "404" not in err:
+                            print(f"[ProcessSymbol] Unexpected error checking position for {symbol}: {e}")
+                            continue  # Don't trade on unexpected API errors
 
                     # Pre-execute hook: fundamentals check + bull/bear debate (swing only)
                     if pre_execute_hook:
@@ -477,9 +479,9 @@ class TradingBot:
                             asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, hook_reason))
                             continue
 
-                signal_key = f"{symbol}-{strategy.name}-{signal['signal']}"
-                
-                # Check if signal is active and within cooldown period (e.g., 1 hour)
+                signal_key = f"{symbol}-{strategy.name}"
+
+                # Check if signal is active and within cooldown period (1 hour, per symbol+strategy)
                 if signal_key in self.active_signals:
                     last_signal_time = self.active_signals[signal_key]
                     if datetime.now(pytz.utc) - last_signal_time < timedelta(hours=1):
@@ -516,7 +518,8 @@ class TradingBot:
                             regime, entry_time,
                         )
                         if row_id:
-                            self._open_trade_ids[symbol] = (row_id, float(signal.get('entry_price', 0)), entry_time)
+                            async with self._trade_ids_lock:
+                                self._open_trade_ids[symbol] = (row_id, float(signal.get('entry_price', 0)), entry_time)
 
                 except Exception as e:
                     msg = f"Error executing trade for {symbol}: {e}"
@@ -614,25 +617,23 @@ class TradingBot:
         from alpaca.trading.requests import TrailingStopOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
         while True:
-            await asyncio.sleep(60) # check every minute
+            await asyncio.sleep(60)
             try:
-                positions = self.trading_client.get_all_positions()
+                positions = await asyncio.to_thread(self.trading_client.get_all_positions)
                 for pos in positions:
                     unrealized_pct = float(pos.unrealized_plpc)
                     if unrealized_pct >= Config.TRAILING_STOP_ACTIVATION_PCT:
-                        # Find open stop loss order for this symbol and replace it
                         req = GetOrdersRequest(
                             status=QueryOrderStatus.OPEN,
                             symbols=[pos.symbol]
                         )
-                        orders = self.trading_client.get_orders(req)
+                        orders = await asyncio.to_thread(self.trading_client.get_orders, req)
                         for order in orders:
-                            if order.order_type.value == "stop": # static stop loss found
+                            if order.order_type.value == "stop":
                                 msg = f"Activating Trailing Stop for {pos.symbol} at {unrealized_pct*100:.2f}% profit!"
                                 print(msg)
                                 asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
-                                
-                                self.trading_client.cancel_order_by_id(order.id)
+                                await asyncio.to_thread(self.trading_client.cancel_order_by_id, order.id)
                                 new_sl = TrailingStopOrderRequest(
                                     symbol=pos.symbol,
                                     qty=abs(float(pos.qty)),
@@ -640,9 +641,9 @@ class TradingBot:
                                     time_in_force=TimeInForce.GTC,
                                     trail_percent=Config.TRAILING_STOP_TRAIL_PCT * 100
                                 )
-                                self.trading_client.submit_order(new_sl)
+                                await asyncio.to_thread(self.trading_client.submit_order, new_sl)
             except Exception as e:
-                pass
+                print(f"[TrailingStop] Error: {e}")
 
     # ── Task 1 — exit monitor: updates signal_outcomes when positions close ───
 
@@ -650,25 +651,31 @@ class TradingBot:
         print("[DB] Exit monitor loop started (10-min polling)")
         while True:
             await asyncio.sleep(600)
-            if not self._open_trade_ids:
+            async with self._trade_ids_lock:
+                open_ids_snapshot = dict(self._open_trade_ids)
+            if not open_ids_snapshot:
                 continue
             try:
                 req = GetOrdersRequest(
                     status=QueryOrderStatus.CLOSED,
-                    limit=50,
-                    after=datetime.now(pytz.utc) - timedelta(hours=24),
+                    limit=200,
+                    after=datetime.now(pytz.utc) - timedelta(days=7),
                 )
                 orders = await asyncio.to_thread(self.trading_client.get_orders, req)
                 for order in orders:
                     sym = order.symbol
-                    if sym not in self._open_trade_ids:
+                    if sym not in open_ids_snapshot:
                         continue
                     if order.status.value != 'filled':
                         continue
                     if not hasattr(order, 'side') or order.side.value != 'sell':
                         continue
 
-                    row_id, entry_price, entry_time = self._open_trade_ids.pop(sym, (None, 0.0, None))
+                    async with self._trade_ids_lock:
+                        if sym not in self._open_trade_ids:
+                            continue  # Already processed by a concurrent iteration
+                        row_id, entry_price, entry_time = self._open_trade_ids.pop(sym)
+
                     if row_id is None:
                         continue
 
@@ -742,7 +749,7 @@ class TradingBot:
             await asyncio.sleep(sleep_seconds)
             
             await self._check_account_status()
-            account = self.trading_client.get_account()
+            account = await asyncio.to_thread(self.trading_client.get_account)
             if account:
                 uptime_seconds = (datetime.now(pytz.utc) - _bot_start_time).total_seconds()
                 uptime_str = str(timedelta(seconds=int(uptime_seconds)))
@@ -762,15 +769,15 @@ class TradingBot:
             sleep_seconds = (target - now).total_seconds()
             await asyncio.sleep(sleep_seconds)
             
-            account = self.trading_client.get_account()
+            account = await asyncio.to_thread(self.trading_client.get_account)
             if account:
                 equity = float(account.equity)
                 try:
-                    positions = self.trading_client.get_all_positions()
+                    positions = await asyncio.to_thread(self.trading_client.get_all_positions)
                     active_positions_count = len(positions)
-                except:
+                except Exception:
                     active_positions_count = 0
-                
+
                 asyncio.create_task(notifications.notify_weekly_performance(equity, active_positions_count, self.daily_pnl))
 
     async def news_loop(self):
@@ -795,7 +802,7 @@ class TradingBot:
                             continue
 
                         # Guard: symbol cooldown
-                        self._update_loss_cache()
+                        await self._update_loss_cache()
                         if ticker in self.last_loss_times:
                             if datetime.now(pytz.utc) - self.last_loss_times[ticker] < timedelta(minutes=Config.SYMBOL_COOLDOWN_MINUTES):
                                 asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "Symbol on cooldown (news)"))
@@ -803,7 +810,7 @@ class TradingBot:
 
                         # Guard: one position per symbol
                         try:
-                            self.trading_client.get_open_position(ticker)
+                            await asyncio.to_thread(self.trading_client.get_open_position, ticker)
                             asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "One position per symbol limit (news)"))
                             continue
                         except Exception:
@@ -814,12 +821,15 @@ class TradingBot:
                             from alpaca.trading.requests import MarketOrderRequest
                             from alpaca.trading.enums import OrderSide, TimeInForce
 
-                            account = self.trading_client.get_account()
+                            account = await asyncio.to_thread(self.trading_client.get_account)
                             equity = float(account.equity)
                             scaled_risk = Config.SWING_EQUITY_RISK_PERCENT * self.risk_multiplier
                             risk_dollars = equity * (scaled_risk / 100.0)
 
-                            latest = self.stock_data_client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=ticker))
+                            latest = await asyncio.to_thread(
+                                self.stock_data_client.get_stock_latest_trade,
+                                StockLatestTradeRequest(symbol_or_symbols=ticker)
+                            )
                             entry_price = float(latest[ticker].price)
                             stop_distance = entry_price * (Config.STOP_LOSS_PERCENT / 100.0)
                             qty = max(1, int(risk_dollars / stop_distance))
@@ -828,9 +838,10 @@ class TradingBot:
                             qty = min(qty, max(1, int(max_dollars / entry_price)))
 
                             side = OrderSide.BUY if action == "buy" else OrderSide.SELL
-                            self.trading_client.submit_order(MarketOrderRequest(
-                                symbol=ticker, qty=qty, side=side, time_in_force=TimeInForce.DAY
-                            ))
+                            await asyncio.to_thread(
+                                self.trading_client.submit_order,
+                                MarketOrderRequest(symbol=ticker, qty=qty, side=side, time_in_force=TimeInForce.DAY)
+                            )
 
                             asyncio.create_task(notifications.notify_news_trade(
                                 ticker, sig["headline"], action, entry_price, qty
@@ -851,7 +862,10 @@ class TradingBot:
                 await asyncio.sleep(sleep_seconds)
 
     async def truth_social_loop(self):
-        """Continuously polls Trump's Truth Social RSS feed and routes signals to Slack / trade execution."""
+        """Polls Trump's Truth Social feed. Disabled until Quiver Quantitative integration is wired up."""
+        if not Config.TRUTH_SOCIAL_ENABLED:
+            print("🇺🇸 Truth Social loop disabled (TRUTH_SOCIAL_ENABLED=False) — exiting loop.")
+            return
         print("🇺🇸 Starting Truth Social Sentiment Loop (60s polling)...")
         strategy = TruthSocialStrategy()
         while True:
@@ -872,7 +886,7 @@ class TradingBot:
                             continue
 
                         # Guard: symbol cooldown
-                        self._update_loss_cache()
+                        await self._update_loss_cache()
                         if ticker in self.last_loss_times:
                             if datetime.now(pytz.utc) - self.last_loss_times[ticker] < timedelta(minutes=Config.SYMBOL_COOLDOWN_MINUTES):
                                 asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "Symbol on cooldown (TS)"))
@@ -880,7 +894,7 @@ class TradingBot:
 
                         # Guard: one position per symbol
                         try:
-                            self.trading_client.get_open_position(ticker)
+                            await asyncio.to_thread(self.trading_client.get_open_position, ticker)
                             asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "One position per symbol limit (TS)"))
                             continue
                         except Exception:
@@ -891,7 +905,7 @@ class TradingBot:
                             from alpaca.trading.requests import MarketOrderRequest
                             from alpaca.trading.enums import OrderSide, TimeInForce
 
-                            account = self.trading_client.get_account()
+                            account = await asyncio.to_thread(self.trading_client.get_account)
                             equity = float(account.equity)
                             scaled_risk = (
                                 Config.SWING_EQUITY_RISK_PERCENT
@@ -902,7 +916,10 @@ class TradingBot:
 
                             entry_price = sig.get("current_price", 0.0)
                             if entry_price <= 0:
-                                latest = self.stock_data_client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=ticker))
+                                latest = await asyncio.to_thread(
+                                    self.stock_data_client.get_stock_latest_trade,
+                                    StockLatestTradeRequest(symbol_or_symbols=ticker)
+                                )
                                 entry_price = float(latest[ticker].price)
 
                             stop_distance = entry_price * (Config.TRUTH_SOCIAL_STOP_LOSS / 100.0)
@@ -912,9 +929,10 @@ class TradingBot:
                             qty = min(qty, max(1, int(max_dollars / entry_price)))
 
                             side = OrderSide.BUY if action == "buy" else OrderSide.SELL
-                            self.trading_client.submit_order(MarketOrderRequest(
-                                symbol=ticker, qty=qty, side=side, time_in_force=TimeInForce.DAY
-                            ))
+                            await asyncio.to_thread(
+                                self.trading_client.submit_order,
+                                MarketOrderRequest(symbol=ticker, qty=qty, side=side, time_in_force=TimeInForce.DAY)
+                            )
 
                             asyncio.create_task(notifications.notify_truth_social_trade(
                                 ticker, sig["post_text"], action, entry_price, qty
@@ -954,7 +972,7 @@ class TradingBot:
                             continue
 
                         # Guard: symbol cooldown
-                        self._update_loss_cache()
+                        await self._update_loss_cache()
                         if ticker in self.last_loss_times:
                             if datetime.now(pytz.utc) - self.last_loss_times[ticker] < timedelta(minutes=Config.SYMBOL_COOLDOWN_MINUTES):
                                 asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "Symbol on cooldown (EDGAR)"))
@@ -962,7 +980,7 @@ class TradingBot:
 
                         # Guard: one position per symbol
                         try:
-                            self.trading_client.get_open_position(ticker)
+                            await asyncio.to_thread(self.trading_client.get_open_position, ticker)
                             asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "One position per symbol limit (EDGAR)"))
                             continue
                         except Exception:
@@ -975,12 +993,13 @@ class TradingBot:
                             from alpaca.trading.requests import MarketOrderRequest
                             from alpaca.trading.enums import OrderSide, TimeInForce
 
-                            account = self.trading_client.get_account()
+                            account = await asyncio.to_thread(self.trading_client.get_account)
                             equity = float(account.equity)
                             scaled_risk = Config.SWING_EQUITY_RISK_PERCENT * self.risk_multiplier
                             risk_dollars = equity * (scaled_risk / 100.0)
 
-                            latest = self.stock_data_client.get_stock_latest_trade(
+                            latest = await asyncio.to_thread(
+                                self.stock_data_client.get_stock_latest_trade,
                                 StockLatestTradeRequest(symbol_or_symbols=ticker)
                             )
                             entry_price = float(latest[ticker].price)
@@ -990,10 +1009,10 @@ class TradingBot:
                             max_dollars = float(account.buying_power) * (Config.MAX_BUYING_POWER_UTILIZATION_PERCENT / 100.0)
                             qty = min(qty, max(1, int(max_dollars / entry_price)))
 
-                            self.trading_client.submit_order(MarketOrderRequest(
-                                symbol=ticker, qty=qty,
-                                side=OrderSide.BUY, time_in_force=TimeInForce.DAY
-                            ))
+                            await asyncio.to_thread(
+                                self.trading_client.submit_order,
+                                MarketOrderRequest(symbol=ticker, qty=qty, side=OrderSide.BUY, time_in_force=TimeInForce.DAY)
+                            )
                             asyncio.create_task(notifications.notify_news_trade(
                                 ticker, sig["headline"], action, entry_price, qty
                             ))
@@ -1031,7 +1050,7 @@ class TradingBot:
         await self._validate_swing_symbols()
 
         try:
-            account = self.trading_client.get_account()
+            account = await asyncio.to_thread(self.trading_client.get_account)
             equity = float(account.equity)
             pnl = self.daily_pnl
             pnl_sign = "+" if pnl >= 0 else ""

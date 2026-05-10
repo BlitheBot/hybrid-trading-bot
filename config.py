@@ -47,6 +47,7 @@ class Config:
     # Sentiment & News Parameters
     NEWS_SIGNAL_ALERT_THRESHOLD = 7
     NEWS_SIGNAL_AUTO_TRADE_THRESHOLD = 13
+    TRUTH_SOCIAL_ENABLED = False  # Disabled: Truth Social blocks automated access; re-enable with Quiver API
     TRUTH_SOCIAL_ALERT_THRESHOLD = 7
     TRUTH_SOCIAL_AUTO_TRADE_THRESHOLD = 13
     

@@ -113,7 +113,7 @@ Respond with ONLY a valid JSON object using exactly this schema:
 }}"""
         try:
             message = self._claude.messages.create(
-                model="claude-opus-4-5",
+                model="claude-sonnet-4-6",
                 max_tokens=256,
                 messages=[{"role": "user", "content": prompt}],
             )

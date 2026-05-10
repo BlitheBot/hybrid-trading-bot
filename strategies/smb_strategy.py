@@ -35,7 +35,8 @@ class SMBStrategy(BaseStrategy):
         df["VWAP"] = ta.vwap(high=df["high"], low=df["low"], close=df["close"], volume=df["volume"])
         df["ATR"] = ta.atr(high=df["high"], low=df["low"], close=df["close"], length=14)
         
-        if df["EMA_9"].isnull().any() or df["VWAP"].isnull().any() or df["ATR"].isnull().all():
+        # Only check the last 2 rows — early rows naturally have NaN from rolling calculations
+        if df[["EMA_9", "VWAP", "ATR"]].iloc[-2:].isnull().any().any():
             return None
             
         symbol = str(df["symbol"].iloc[-1]) if "symbol" in df.columns else "UNKNOWN"
