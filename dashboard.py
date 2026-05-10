@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import pytz
 import requests as _requests
 import streamlit as st
+from sqlalchemy import create_engine, text
 
 # Remove conflicting environment tokens before importing Alpaca
 os.environ.pop("ALPACA_OAUTH_TOKEN", None)
@@ -92,17 +93,17 @@ if not trading_client:
     st.error("🔑 ALPACA_API_KEY / ALPACA_SECRET_KEY missing from environment.")
     st.stop()
 
-# ── DB helper (new connection per query — avoids stale cached connections) ─────
+# ── DB engine (SQLAlchemy — cached for lifetime of the Streamlit process) ──────
 
-def _db_conn():
+@st.cache_resource
+def _get_engine():
     url = Config.DATABASE_URL
     if not url:
         return None
     try:
-        import psycopg2
-        return psycopg2.connect(url)
+        return create_engine(url)
     except Exception as e:
-        st.warning(f"[DB] Connection failed: {e}")
+        st.warning(f"[DB] Engine creation failed: {e}")
         return None
 
 
@@ -147,11 +148,11 @@ def fetch_positions():
 
 @st.cache_data(ttl=60)
 def fetch_signal_outcomes(start_dt: datetime, end_dt: datetime, symbols: tuple):
-    conn = _db_conn()
-    if conn is None:
+    engine = _get_engine()
+    if engine is None:
         return None
     try:
-        query = """
+        query_str = """
             SELECT id, symbol, signal_type,
                    entry_time AT TIME ZONE 'America/New_York' AS entry_time,
                    exit_time  AT TIME ZONE 'America/New_York' AS exit_time,
@@ -159,29 +160,30 @@ def fetch_signal_outcomes(start_dt: datetime, end_dt: datetime, symbols: tuple):
                    ema_short, ema_long, rsi_at_entry, macd_at_entry,
                    market_regime, exit_reason
             FROM signal_outcomes
-            WHERE entry_time >= %s AND entry_time <= %s
+            WHERE entry_time >= :start_dt AND entry_time <= :end_dt
         """
-        params: list = [start_dt, end_dt]
+        params: dict = {"start_dt": start_dt, "end_dt": end_dt}
         if symbols:
-            query += " AND symbol = ANY(%s)"
-            params.append(list(symbols))
-        query += " ORDER BY entry_time DESC"
-        return pd.read_sql(query, conn, params=params)
+            placeholders = ", ".join(f":sym_{i}" for i in range(len(symbols)))
+            query_str += f" AND symbol IN ({placeholders})"
+            for i, sym in enumerate(symbols):
+                params[f"sym_{i}"] = sym
+        query_str += " ORDER BY entry_time DESC"
+        with engine.connect() as conn:
+            return pd.read_sql(text(query_str), conn, params=params)
     except Exception as e:
         st.error(f"Trade log query failed: {e}")
         return None
-    finally:
-        conn.close()
 
 
 @st.cache_data(ttl=300)
 def fetch_strategy_results(validated_only: bool):
-    conn = _db_conn()
-    if conn is None:
+    engine = _get_engine()
+    if engine is None:
         return None
     try:
         where = "WHERE status = 'validated'" if validated_only else ""
-        query = f"""
+        query_str = f"""
             SELECT symbol, ema_short, ema_long, rsi_period,
                    rsi_entry_low, rsi_entry_high,
                    ROUND(train_sharpe::numeric, 3)  AS train_sharpe,
@@ -194,21 +196,20 @@ def fetch_strategy_results(validated_only: bool):
             {where}
             ORDER BY test_sharpe DESC NULLS LAST
         """
-        return pd.read_sql(query, conn)
+        with engine.connect() as conn:
+            return pd.read_sql(text(query_str), conn)
     except Exception as e:
         st.error(f"Discovery query failed: {e}")
         return None
-    finally:
-        conn.close()
 
 
 @st.cache_data(ttl=60)
 def fetch_daily_pnl():
-    conn = _db_conn()
-    if conn is None:
+    engine = _get_engine()
+    if engine is None:
         return None
     try:
-        query = """
+        query_str = """
             SELECT DATE(exit_time AT TIME ZONE 'America/New_York') AS trade_date,
                    COUNT(*)        AS trades,
                    SUM(pnl_pct)    AS daily_pnl_sum
@@ -217,21 +218,20 @@ def fetch_daily_pnl():
             GROUP BY 1
             ORDER BY 1
         """
-        return pd.read_sql(query, conn)
+        with engine.connect() as conn:
+            return pd.read_sql(text(query_str), conn)
     except Exception as e:
         st.error(f"Daily P&L query failed: {e}")
         return None
-    finally:
-        conn.close()
 
 
 @st.cache_data(ttl=60)
 def fetch_win_rate():
-    conn = _db_conn()
-    if conn is None:
+    engine = _get_engine()
+    if engine is None:
         return None
     try:
-        query = """
+        query_str = """
             SELECT symbol,
                    COUNT(*)  AS total_trades,
                    SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) AS wins,
@@ -245,12 +245,11 @@ def fetch_win_rate():
             GROUP BY symbol
             ORDER BY total_trades DESC
         """
-        return pd.read_sql(query, conn)
+        with engine.connect() as conn:
+            return pd.read_sql(text(query_str), conn)
     except Exception as e:
         st.error(f"Win rate query failed: {e}")
         return None
-    finally:
-        conn.close()
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
 
@@ -342,7 +341,7 @@ with tab_positions:
 
         styled = (
             df_display.style
-            .applymap(_pnl_color, subset=["Unrealized P&L %", "Unrealized P&L $"])
+            .map(_pnl_color, subset=["Unrealized P&L %", "Unrealized P&L $"])
             .format({
                 "Entry Price":      "${:.2f}",
                 "Current Price":    "${:.2f}",
@@ -351,7 +350,7 @@ with tab_positions:
                 "Unrealized P&L %": "{:+.2f}%",
             }, na_rep="")
         )
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        st.dataframe(styled, width="stretch", hide_index=True)
 
 # ── Tab 3: Trade Log ───────────────────────────────────────────────────────────
 
@@ -417,14 +416,14 @@ with tab_tradelog:
             st.markdown(f"**{len(df)} trades** matched")
             styled_tl = (
                 df_show.style
-                .applymap(_pnl_color, subset=["pnl_pct"])
+                .map(_pnl_color, subset=["pnl_pct"])
                 .format({
                     "entry_price": "${:.2f}",
                     "exit_price":  "${:.2f}",
                     "pnl_pct":     "{:+.2f}%",
                 }, na_rep="—")
             )
-            st.dataframe(styled_tl, use_container_width=True, hide_index=True)
+            st.dataframe(styled_tl, width="stretch", hide_index=True)
 
             csv_bytes = df.to_csv(index=False).encode("utf-8")
             st.download_button(
@@ -474,15 +473,15 @@ with tab_discovery:
                     "avg_test_sharpe":  "{:.3f}",
                     "validated %":      "{:.1f}%",
                 }),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
             st.subheader("All Combos — Ranked by Test Sharpe")
             styled_disc = (
                 df_disc.style
-                .applymap(_status_color, subset=["status"])
-                .applymap(_pnl_color,    subset=["test_sharpe", "train_sharpe"])
+                .map(_status_color, subset=["status"])
+                .map(_pnl_color,    subset=["test_sharpe", "train_sharpe"])
                 .format({
                     "train_sharpe": "{:.3f}",
                     "test_sharpe":  "{:.3f}",
@@ -490,7 +489,7 @@ with tab_discovery:
                     "p_value":      "{:.4f}",
                 }, na_rep="—")
             )
-            st.dataframe(styled_disc, use_container_width=True, hide_index=True)
+            st.dataframe(styled_disc, width="stretch", hide_index=True)
 
 # ── Tab 5: Analytics ───────────────────────────────────────────────────────────
 
@@ -536,7 +535,7 @@ with tab_analytics:
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
             )
-            st.plotly_chart(fig_pnl, use_container_width=True)
+            st.plotly_chart(fig_pnl, width="stretch")
             st.caption(
                 f"Sum of pnl_pct across {int(df_pnl['trades'].sum())} closed trades "
                 f"({len(df_pnl)} trading days). "
@@ -585,17 +584,17 @@ with tab_analytics:
                 paper_bgcolor="rgba(0,0,0,0)",
                 showlegend=False,
             )
-            st.plotly_chart(fig_wr, use_container_width=True)
+            st.plotly_chart(fig_wr, width="stretch")
 
             # Detail table beneath the chart
             styled_wr = (
                 df_wr.style
-                .applymap(_pnl_color, subset=["avg_pnl_pct"])
+                .map(_pnl_color, subset=["avg_pnl_pct"])
                 .format({
                     "win_rate_pct": "{:.1f}%",
                     "avg_pnl_pct":  "{:+.2f}%",
                 })
             )
-            st.dataframe(styled_wr, use_container_width=True, hide_index=True)
+            st.dataframe(styled_wr, width="stretch", hide_index=True)
         else:
             st.info("No closed trades yet — win rate will populate once positions close.")

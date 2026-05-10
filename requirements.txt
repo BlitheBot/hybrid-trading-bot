@@ -13,4 +13,5 @@ flask
 anthropic
 python-dotenv
 psycopg2-binary
+sqlalchemy
 pyarrow
