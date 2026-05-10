@@ -17,21 +17,31 @@ _FEED_URL = (
 _NS_ATOM  = "http://www.w3.org/2005/Atom"
 _NS_EDGAR = "https://www.sec.gov/"
 
-# SEC requires descriptive User-Agent so they can contact you if needed:
-# https://www.sec.gov/os/accessing-edgar-data
-_HEADERS  = {"User-Agent": "HybridTradingBot/1.0 gamerdiamondknight@gmail.com"}
+# SEC requires descriptive User-Agent: https://www.sec.gov/os/accessing-edgar-data
+_HEADERS  = {"User-Agent": "HybridTradingBot/1.0 contact@hybridtradingbot.com"}
 
 _SP500_SET = set(SP500_TICKERS)
 
 
-def _http_get(url: str, timeout: int = 12) -> bytes | None:
+def _http_get(url: str, timeout: int = 12, retries: int = 3) -> bytes | None:
     req = urllib.request.Request(url, headers=_HEADERS)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
-    except Exception as e:
-        print(f"[EDGAR] GET failed ({url[:80]}): {e}")
-        return None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                wait = 30 * (2 ** attempt)  # 30s → 60s → 120s
+                print(f"[EDGAR] Rate limited (429). Waiting {wait}s before retry {attempt+1}/{retries}...")
+                time.sleep(wait)
+            else:
+                print(f"[EDGAR] HTTP {e.code} for {url[:80]}: {e}")
+                return None
+        except Exception as e:
+            print(f"[EDGAR] GET failed ({url[:80]}): {e}")
+            return None
+    print(f"[EDGAR] All {retries} retries exhausted for {url[:80]}")
+    return None
 
 
 def _cik_from_accession(accession: str) -> str:
@@ -99,7 +109,7 @@ def _find_form4_xml_url(cik_candidates: list[str], accession: str) -> str | None
             f"https://www.sec.gov/Archives/edgar/data/{cik}/{accno_nodash}/index.json"
         )
         data = _http_get(index_url)
-        time.sleep(0.12)
+        time.sleep(Config.SEC_EDGAR_RATE_LIMIT_SLEEP)
         if not data:
             continue
         try:
@@ -219,7 +229,7 @@ class SECEdgarStrategy(BaseStrategy):
 
     def _on_cooldown(self, ticker: str) -> bool:
         ts = self._ticker_cooldowns.get(ticker)
-        return ts is not None and datetime.now(pytz.utc) - ts < timedelta(hours=4)
+        return ts is not None and datetime.now(pytz.utc) - ts < timedelta(hours=Config.SEC_EDGAR_COOLDOWN_HOURS)
 
     def _mark_cooldown(self, ticker: str):
         self._ticker_cooldowns[ticker] = datetime.now(pytz.utc)
@@ -322,7 +332,7 @@ class SECEdgarStrategy(BaseStrategy):
             if not xml_url:
                 continue
 
-            time.sleep(0.12)
+            time.sleep(Config.SEC_EDGAR_RATE_LIMIT_SLEEP)
             xml_data = _http_get(xml_url)
             if not xml_data:
                 continue

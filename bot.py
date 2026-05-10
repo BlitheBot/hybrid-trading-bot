@@ -23,6 +23,8 @@ from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.data.live import CryptoDataStream
 
+from sqlalchemy import create_engine, text as sql_text
+
 from config import Config
 from strategies.base_strategy import BaseStrategy
 from strategies.smb_strategy import SMBStrategy
@@ -32,9 +34,18 @@ from strategies.truth_social_strategy import TruthSocialStrategy
 from strategies.sec_edgar_strategy import SECEdgarStrategy
 from utils import get_historical_bars, get_finnhub_price
 
-# ── Flask Health Endpoint (Bug 5) ───────────────────────────────────
+# ── Flask Health Endpoint ────────────────────────────────────────────
 _health_app = Flask(__name__)
 _bot_start_time = datetime.now(pytz.utc)
+
+# Updated by bot loops so the /health endpoint reflects live state
+_health_state: dict = {
+    "db_connected": False,
+    "alpaca_connected": False,
+    "last_news_scan_utc": None,
+    "last_edgar_scan_utc": None,
+    "websocket_connected": False,
+}
 
 @_health_app.route("/health", methods=["GET"])
 def health_check():
@@ -42,7 +53,12 @@ def health_check():
     return jsonify({
         "status": "running",
         "uptime_seconds": round(uptime_seconds, 2),
-        "started_at": _bot_start_time.isoformat()
+        "started_at": _bot_start_time.isoformat(),
+        "db_connected": _health_state["db_connected"],
+        "alpaca_connected": _health_state["alpaca_connected"],
+        "last_news_scan": _health_state["last_news_scan_utc"],
+        "last_edgar_scan": _health_state["last_edgar_scan_utc"],
+        "websocket_connected": _health_state["websocket_connected"],
     }), 200
 
 def start_health_server(port=8502):
@@ -90,6 +106,7 @@ class TradingBot:
         self.swing_symbol_strategies: dict[str, SwingStrategy] = {}
         self._open_trade_ids: dict = {}       # symbol → (row_id, entry_price, entry_time)
         self._trade_ids_lock = asyncio.Lock() # guards all _open_trade_ids mutations
+        self._db_engine = self._init_db_engine()
         self._regime_cache = None             # (regime_str, timestamp)
         self._claude = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
         self.daily_pnl = 0.0
@@ -145,9 +162,11 @@ class TradingBot:
                         self.risk_multiplier = 0.75
                 
                 self.daily_pnl = current_daily_pnl
+                _health_state["alpaca_connected"] = True
                 return True
             return False
         except Exception as e:
+            _health_state["alpaca_connected"] = False
             msg = f"Error checking account status: {e}"
             print(msg)
             asyncio.create_task(notifications.notify_alert(msg))
@@ -167,28 +186,25 @@ class TradingBot:
         except Exception as e:
             print(f"Failed to update loss cache: {e}")
 
-    # ── Database helpers (Task 1) ─────────────────────────────────────────────
+    # ── Database helpers (SQLAlchemy) ─────────────────────────────────────────
 
-    def _get_db_conn(self):
-        try:
-            import psycopg2
-            url = Config.DATABASE_URL
-            if not url:
-                return None
-            return psycopg2.connect(url)
-        except ImportError:
+    def _init_db_engine(self):
+        url = Config.DATABASE_URL
+        if not url:
             return None
+        try:
+            engine = create_engine(url, pool_pre_ping=True)
+            return engine
         except Exception as e:
-            print(f"[DB] Connection failed: {e}")
+            print(f"[DB] Engine creation failed: {e}")
             return None
 
     def _ensure_signal_outcomes_table(self):
-        conn = self._get_db_conn()
-        if not conn:
+        if not self._db_engine:
             return
         try:
-            with conn.cursor() as cur:
-                cur.execute("""
+            with self._db_engine.begin() as conn:
+                conn.execute(sql_text("""
                     CREATE TABLE IF NOT EXISTS signal_outcomes (
                         id            SERIAL PRIMARY KEY,
                         symbol        VARCHAR(10),
@@ -207,68 +223,66 @@ class TradingBot:
                         exit_reason   VARCHAR(30),
                         discovered_at TIMESTAMP DEFAULT NOW()
                     )
-                """)
-            conn.commit()
+                """))
+            _health_state["db_connected"] = True
             print("[DB] signal_outcomes table verified")
         except Exception as e:
+            _health_state["db_connected"] = False
             print(f"[DB] Table setup failed: {e}")
-        finally:
-            conn.close()
 
     def _log_trade_entry(self, symbol: str, signal_type: str, entry_price: float,
                           ema_short: int, ema_long: int, rsi_at_entry: float,
                           macd_at_entry: float, regime: str, entry_time) -> int | None:
-        conn = self._get_db_conn()
-        if not conn:
+        if not self._db_engine:
             return None
         try:
-            with conn.cursor() as cur:
-                cur.execute("""
+            with self._db_engine.begin() as conn:
+                result = conn.execute(sql_text("""
                     INSERT INTO signal_outcomes
                         (symbol, signal_type, entry_time, entry_price, ema_short, ema_long,
                          rsi_at_entry, macd_at_entry, market_regime)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (:symbol, :signal_type, :entry_time, :entry_price, :ema_short, :ema_long,
+                            :rsi_at_entry, :macd_at_entry, :market_regime)
                     RETURNING id
-                """, (
-                    symbol, signal_type, entry_time,
-                    float(entry_price), int(ema_short), int(ema_long),
-                    float(rsi_at_entry), float(macd_at_entry), regime,
-                ))
-                row_id = cur.fetchone()[0]
-            conn.commit()
+                """), {
+                    "symbol": symbol, "signal_type": signal_type, "entry_time": entry_time,
+                    "entry_price": float(entry_price), "ema_short": int(ema_short),
+                    "ema_long": int(ema_long), "rsi_at_entry": float(rsi_at_entry),
+                    "macd_at_entry": float(macd_at_entry), "market_regime": regime,
+                })
+                row_id = result.fetchone()[0]
             print(f"[DB] Logged {signal_type} entry for {symbol} (row={row_id})")
             return row_id
         except Exception as e:
             print(f"[DB] Entry log failed for {symbol}: {e}")
             return None
-        finally:
-            conn.close()
 
     def _update_trade_exit(self, row_id: int, exit_price: float, exit_reason: str,
                             exit_time, hold_bars: int, pnl_pct: float):
-        conn = self._get_db_conn()
-        if not conn:
+        if not self._db_engine:
             return
         try:
-            with conn.cursor() as cur:
-                cur.execute("""
+            with self._db_engine.begin() as conn:
+                conn.execute(sql_text("""
                     UPDATE signal_outcomes
-                    SET exit_time=%s, exit_price=%s, pnl_pct=%s, hold_bars=%s, exit_reason=%s
-                    WHERE id=%s
-                """, (exit_time, float(exit_price), float(pnl_pct), int(hold_bars), exit_reason, row_id))
-            conn.commit()
+                    SET exit_time=:exit_time, exit_price=:exit_price, pnl_pct=:pnl_pct,
+                        hold_bars=:hold_bars, exit_reason=:exit_reason
+                    WHERE id=:id
+                """), {
+                    "exit_time": exit_time, "exit_price": float(exit_price),
+                    "pnl_pct": float(pnl_pct), "hold_bars": int(hold_bars),
+                    "exit_reason": exit_reason, "id": row_id,
+                })
             print(f"[DB] Exit logged row={row_id}: {exit_reason} @ {exit_price:.2f} ({pnl_pct:+.2f}%)")
         except Exception as e:
             print(f"[DB] Exit update failed row={row_id}: {e}")
-        finally:
-            conn.close()
 
     # ── Market regime (Task 1) ────────────────────────────────────────────────
 
     async def _get_market_regime(self) -> str:
         if self._regime_cache is not None:
             regime, ts = self._regime_cache
-            if time.time() - ts < 900:
+            if time.time() - ts < Config.MARKET_REGIME_CACHE_SECONDS:
                 return regime
         try:
             bars = await asyncio.to_thread(
@@ -592,9 +606,12 @@ class TradingBot:
                 self.crypto_stream.subscribe_trades(self._on_crypto_trade, *Config.SCALP_SYMBOLS)
                 # _connect() makes a single connection attempt and returns when it drops.
                 # _run_forever() has an internal retry loop that bypasses our backoff — avoid it.
+                _health_state["websocket_connected"] = True
                 await self.crypto_stream._connect()
+                _health_state["websocket_connected"] = False
                 print("WebSocket stream closed cleanly.")
             except Exception as e:
+                _health_state["websocket_connected"] = False
                 msg = f"WebSocket error: {e}"
                 print(msg)
                 asyncio.create_task(notifications.notify_alert(f"{msg} Retrying in {retry_delay}s..."))
@@ -617,7 +634,7 @@ class TradingBot:
         from alpaca.trading.requests import TrailingStopOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(Config.TRAILING_STOP_MONITOR_INTERVAL)
             try:
                 positions = await asyncio.to_thread(self.trading_client.get_all_positions)
                 for pos in positions:
@@ -856,6 +873,7 @@ class TradingBot:
             except Exception as e:
                 print(f"[NewsLoop] Unexpected error: {e}")
             finally:
+                _health_state["last_news_scan_utc"] = datetime.now(pytz.utc).isoformat()
                 sleep_seconds = _get_scan_sleep_seconds()
                 print(f"📰 News scan complete — {strategy._last_articles_scanned} headlines analyzed, "
                       f"{len(signals)} signals above threshold, next scan in {sleep_seconds}s")
@@ -1026,6 +1044,7 @@ class TradingBot:
             except Exception as e:
                 print(f"[EDGARLoop] Unexpected error: {e}")
             finally:
+                _health_state["last_edgar_scan_utc"] = datetime.now(pytz.utc).isoformat()
                 print(f"📋 EDGAR scan complete — {len(signals)} insider signals above threshold, next scan in 30 min")
                 await asyncio.sleep(1800)
 

@@ -87,7 +87,7 @@ class NewsStrategy(BaseStrategy):
     def _is_on_cooldown(self, ticker: str) -> bool:
         if ticker not in self._last_seen:
             return False
-        return datetime.now(pytz.utc) - self._last_seen[ticker] < timedelta(hours=2)
+        return datetime.now(pytz.utc) - self._last_seen[ticker] < timedelta(hours=Config.NEWS_DEDUP_HOURS)
 
     def _mark_seen(self, ticker: str):
         self._last_seen[ticker] = datetime.now(pytz.utc)
@@ -144,22 +144,31 @@ Respond with ONLY a valid JSON object using exactly this schema:
         """
         signals = []
         try:
-            batch_size = 50
+            batch_size = Config.NEWS_BATCH_SIZE
             all_articles = []
             for i in range(0, len(SP500_TICKERS), batch_size):
                 batch = SP500_TICKERS[i : i + batch_size]
                 req = NewsRequest(
                     symbols=",".join(batch),
-                    start=datetime.now(pytz.utc) - timedelta(hours=2),
+                    start=datetime.now(pytz.utc) - timedelta(hours=Config.NEWS_DEDUP_HOURS),
                     sort="desc",
                     limit=10,
                 )
-                try:
-                    resp = await asyncio.to_thread(self.news_client.get_news, req)
-                    if resp and hasattr(resp, "news"):
-                        all_articles.extend(resp.news)
-                except Exception as e:
-                    print(f"[NewsStrategy] Batch fetch error (batch {i//batch_size}): {e}")
+                for attempt in range(3):
+                    try:
+                        resp = await asyncio.to_thread(self.news_client.get_news, req)
+                        if resp and hasattr(resp, "news"):
+                            all_articles.extend(resp.news)
+                        break  # success
+                    except Exception as e:
+                        err = str(e).lower()
+                        if "429" in err or "rate limit" in err or "too many" in err:
+                            wait = 10 * (attempt + 1)
+                            print(f"[NewsStrategy] Rate limited on batch {i//batch_size}, waiting {wait}s (attempt {attempt+1}/3)...")
+                            await asyncio.sleep(wait)
+                        else:
+                            print(f"[NewsStrategy] Batch fetch error (batch {i//batch_size}): {e}")
+                            break
 
             self._last_articles_scanned = len(all_articles)
 

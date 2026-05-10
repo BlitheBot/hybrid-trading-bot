@@ -44,6 +44,14 @@ class Config:
     # Anthropic API credentials
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+    # Polling intervals and rate limits
+    NEWS_DEDUP_HOURS = 2                   # dedup / cooldown window per ticker
+    NEWS_BATCH_SIZE = 50                   # symbols per Alpaca News API request
+    SEC_EDGAR_COOLDOWN_HOURS = 4           # per-ticker cooldown after EDGAR signal
+    SEC_EDGAR_RATE_LIMIT_SLEEP = 0.15      # seconds between EDGAR HTTP requests
+    MARKET_REGIME_CACHE_SECONDS = 900      # 15-min SPY/EMA-200 regime cache TTL
+    TRAILING_STOP_MONITOR_INTERVAL = 60    # seconds between trailing-stop checks
+
     # Sentiment & News Parameters
     NEWS_SIGNAL_ALERT_THRESHOLD = 7
     NEWS_SIGNAL_AUTO_TRADE_THRESHOLD = 13
