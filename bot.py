@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import os
 import sys
 import time
@@ -7,7 +9,7 @@ from collections import deque
 from datetime import datetime, timedelta
 import pytz
 import pandas as pd
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import notifications
 from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
@@ -64,7 +66,11 @@ _health_state: dict = {
     "open_positions": 0,
     "daily_pnl_pct": 0.0,
     "signals_fired_total": 0,
+    "market_regime": "unknown",
 }
+
+# Set by /pause slash command; cleared by /resume. Checked by all trade-execution paths.
+_bot_paused: bool = False
 
 @_health_app.route("/health", methods=["GET"])
 def health_check():
@@ -116,6 +122,83 @@ def prometheus_metrics():
         "\n".join(lines),
         mimetype="text/plain; version=0.0.4; charset=utf-8",
     )
+
+
+def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool:
+    """Returns True if the request is legitimately from Slack, or if no signing secret is set."""
+    secret = Config.SLACK_SIGNING_SECRET
+    if not secret:
+        return True  # development mode — skip verification
+    try:
+        if abs(time.time() - float(timestamp)) > 300:
+            return False  # reject replays older than 5 minutes
+    except (ValueError, TypeError):
+        return False
+    basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
+    expected = "v0=" + hmac.new(
+        secret.encode("utf-8"),
+        basestring.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+@_health_app.route("/slack/commands", methods=["POST"])
+def slack_commands():
+    body = request.get_data()
+    ts   = request.headers.get("X-Slack-Request-Timestamp", "")
+    sig  = request.headers.get("X-Slack-Signature", "")
+    if not _verify_slack_signature(body, ts, sig):
+        return jsonify({"text": "Invalid request signature."}), 403
+
+    command = request.form.get("command", "")
+    user    = request.form.get("user_name", "unknown")
+
+    if command == "/status":
+        pnl_sign = "+" if _health_state["daily_pnl_pct"] >= 0 else ""
+        vix      = MACRO_SNAPSHOT.get("vix") or 0.0
+        regime   = _health_state.get("market_regime", "unknown")
+        paused   = "⏸ *PAUSED*" if _bot_paused else "▶ Running"
+        text = (
+            f"*Bot Status*\n"
+            f"• State: {paused}\n"
+            f"• Equity: ${_health_state['equity_usd']:,.2f}\n"
+            f"• Open Positions: {_health_state['open_positions']}\n"
+            f"• Daily P&L: {pnl_sign}{_health_state['daily_pnl_pct']:.2f}%\n"
+            f"• VIX: {float(vix):.1f}\n"
+            f"• Market Regime: {regime.capitalize()}"
+        )
+        return jsonify({"text": text})
+
+    if command == "/pause":
+        global _bot_paused
+        _bot_paused = True
+        print(f"[SlashCmd] Bot PAUSED by @{user}")
+        return jsonify({
+            "response_type": "in_channel",
+            "text": f"⏸ *Bot paused* by @{user} — no new trades will be placed until `/resume`.",
+        })
+
+    if command == "/resume":
+        global _bot_paused
+        _bot_paused = False
+        print(f"[SlashCmd] Bot RESUMED by @{user}")
+        return jsonify({
+            "response_type": "in_channel",
+            "text": f"▶ *Bot resumed* by @{user} — normal trading has resumed.",
+        })
+
+    if command == "/help":
+        text = (
+            "*Available Slash Commands*\n"
+            "• `/status` — equity, positions, daily P&L, VIX, market regime\n"
+            "• `/pause` — halt all new trade execution immediately\n"
+            "• `/resume` — resume trading after a pause\n"
+            "• `/help` — show this message"
+        )
+        return jsonify({"text": text})
+
+    return jsonify({"text": f"Unknown command `{command}`. Try `/help`."}), 200
 
 
 def start_health_server(port=8502):
@@ -379,6 +462,7 @@ class TradingBot:
             print(f"[MarketRegime] Failed: {e}")
             regime = 'neutral'
         self._regime_cache = (regime, time.time())
+        _health_state["market_regime"] = regime
         return regime
 
     def _get_market_regime_adx(self, spy_bars) -> str:
@@ -589,7 +673,7 @@ class TradingBot:
 
     async def _process_symbol(self, symbol, strategies, is_crypto, risk_percent, stop_loss_percent,
                               current_price=None, pre_execute_hook=None):
-        if self.trading_halted_for_day:
+        if self.trading_halted_for_day or _bot_paused:
             return
 
         await self._update_loss_cache()
@@ -1441,7 +1525,7 @@ class TradingBot:
         strategy = NewsStrategy()
         while True:
             try:
-                if not self.trading_halted_for_day:
+                if not self.trading_halted_for_day and not _bot_paused:
                     signals = await strategy.scan_once()
                     for sig in signals:
                         ticker  = sig["ticker"]
@@ -1542,7 +1626,7 @@ class TradingBot:
         strategy = TruthSocialStrategy()
         while True:
             try:
-                if not self.trading_halted_for_day:
+                if not self.trading_halted_for_day and not _bot_paused:
                     signals = await strategy.scan_once(trading_client=self.trading_client)
                     for sig in signals:
                         ticker  = sig["ticker"]
@@ -1628,7 +1712,7 @@ class TradingBot:
         while True:
             signals: list[dict] = []
             try:
-                if not self.trading_halted_for_day:
+                if not self.trading_halted_for_day and not _bot_paused:
                     signals = await strategy.scan_once()
                     for sig in signals:
                         ticker   = sig["ticker"]
@@ -1788,7 +1872,7 @@ class TradingBot:
         while True:
             signals: list[dict] = []
             try:
-                if not self.trading_halted_for_day:
+                if not self.trading_halted_for_day and not _bot_paused:
                     signals = await strategy.scan_once()
                     for sig in signals:
                         ticker   = sig["ticker"]
@@ -1971,7 +2055,7 @@ class TradingBot:
         strategy = RedditStrategy()
         while True:
             try:
-                if not self.trading_halted_for_day:
+                if not self.trading_halted_for_day and not _bot_paused:
                     signals = await strategy.scan_once()
                     for sig in signals:
                         asyncio.create_task(notifications.notify_reddit_signal(
