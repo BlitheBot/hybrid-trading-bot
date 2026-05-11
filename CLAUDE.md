@@ -82,7 +82,7 @@ A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops
 | 8 | `trailing_stop_monitor_loop` | Every `TRAILING_STOP_MONITOR_INTERVAL` (60s) | Upgrades static stop-loss orders to trailing stops once unrealized gain ≥ `TRAILING_STOP_ACTIVATION_PCT` (3%) |
 | 9 | `_exit_monitor_loop` | Every 10 min | Queries Alpaca for closed sell orders (7-day lookback, limit 200); updates `signal_outcomes` with exit price, P&L%, and exit reason (stop/target/manual). Protected by `_trade_ids_lock` |
 | 10 | `market_open_notification_loop` | Daily 9:30 AM EST (Mon–Fri) | Sends morning briefing to #trading-alerts: equity, market regime, swing watchlist, reminder that swing evaluation fires at 10:30 AM EST |
-| 11 | `congressional_trading_loop` | Every 60 min | Polls Quiver Quantitative for congressional trades; buy signals scored by amount + committee + recency (max strength ~11.2, effectively alert-only); sell signals always sent as informational with ⚠️ emoji; disables itself permanently on 401/403 |
+| 11 | `congressional_trading_loop` | — | **Disabled** (`CONGRESSIONAL_ENABLED=False`); free data sources unavailable; re-enable by setting `QUIVER_API_KEY` in Railway and flipping flag |
 
 ---
 
@@ -391,7 +391,7 @@ _exit_monitor_loop() [every 10 min, concurrent]
 
 8. **`backtester.py`** — early prototype. Do not modify without understanding it first.
 
-9. **Congressional committee list is static** — `_COMMITTEE_MEMBERS` in `strategies/congressional_trading_strategy.py` reflects the 119th Congress (2025–2026). Members rotate off committees; the list will drift. Update at the start of each new Congress (every 2 years) or when known roster changes occur. The 1.3× committee multiplier will silently not apply to new members until updated.
+9. **Congressional trading loop is disabled** — `CONGRESSIONAL_ENABLED=False` because the House Stock Watcher S3 bucket (`house-stock-watcher-data.s3-us-east-2.amazonaws.com`) went private in 2024 and no other free unauthenticated JSON source exists. The full strategy code is in place. To re-enable: add `QUIVER_API_KEY` to Railway env vars (Quiver Quantitative, $30/mo at quiverquant.com), set `CONGRESSIONAL_ENABLED=True` in `config.py`, and restore the `Authorization: Token` header in `_fetch_trades()`. The `_COMMITTEE_MEMBERS` set reflects the 119th Congress and will need updating every two years.
 
 ---
 

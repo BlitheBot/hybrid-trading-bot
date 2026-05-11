@@ -1065,7 +1065,7 @@ class TradingBot:
     async def congressional_trading_loop(self):
         """Polls Quiver Quantitative for congressional trades every 60 minutes."""
         if not Config.CONGRESSIONAL_ENABLED:
-            print("🏛️ Congressional trading loop disabled (CONGRESSIONAL_ENABLED=False) — exiting.")
+            print("[Congress] Disabled — free data sources are unavailable. Enable when Quiver Quantitative API key ($30/mo) is added to Railway as QUIVER_API_KEY.")
             return
         print("🏛️ Starting Congressional Trading Loop (60-min polling)...")
         strategy = CongressionalTradingStrategy()
