@@ -47,6 +47,7 @@ A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops
 | `strategies/news_strategy.py` | `news_loop` | Benzinga news via Alpaca News API; Claude NLP scoring with keyword fallback; dynamic sleep; 429 retry (10s/20s/30s) per batch |
 | `strategies/truth_social_strategy.py` | `truth_social_loop` | Disabled — `TRUTH_SOCIAL_ENABLED=False`; scan_once() returns [] immediately. Re-enable when Quiver Quantitative API is integrated |
 | `strategies/sec_edgar_strategy.py` | `sec_edgar_loop` | SEC EDGAR Form 4 insider trades; ElementTree XML parsing; strength-tiered scoring; exponential 429 backoff (30s/60s/120s) |
+| `strategies/congressional_trading_strategy.py` | `congressional_trading_loop` | Quiver Quantitative congressional trades; scores buys by amount ($50k/$250k tiers) + committee membership (1.3×) + recency ≤7 days (1.2×); informational sell signals at half strength; 4-hour per-ticker cooldown; self-disables on 401/403 |
 
 ### Strategies (Legacy — in repo, not wired into bot)
 
@@ -67,7 +68,7 @@ A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops
 
 ---
 
-## 10 Concurrent Loops (`asyncio.gather` in `start_dual_engine`)
+## 11 Concurrent Loops (`asyncio.gather` in `start_dual_engine`)
 
 | # | Method | Interval | What It Does |
 |---|---|---|---|
@@ -81,6 +82,7 @@ A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops
 | 8 | `trailing_stop_monitor_loop` | Every `TRAILING_STOP_MONITOR_INTERVAL` (60s) | Upgrades static stop-loss orders to trailing stops once unrealized gain ≥ `TRAILING_STOP_ACTIVATION_PCT` (3%) |
 | 9 | `_exit_monitor_loop` | Every 10 min | Queries Alpaca for closed sell orders (7-day lookback, limit 200); updates `signal_outcomes` with exit price, P&L%, and exit reason (stop/target/manual). Protected by `_trade_ids_lock` |
 | 10 | `market_open_notification_loop` | Daily 9:30 AM EST (Mon–Fri) | Sends morning briefing to #trading-alerts: equity, market regime, swing watchlist, reminder that swing evaluation fires at 10:30 AM EST |
+| 11 | `congressional_trading_loop` | Every 60 min | Polls Quiver Quantitative for congressional trades; buy signals scored by amount + committee + recency (max strength ~11.2, effectively alert-only); sell signals always sent as informational with ⚠️ emoji; disables itself permanently on 401/403 |
 
 ---
 
@@ -222,6 +224,12 @@ SEC_EDGAR_AUTO_TRADE_THRESHOLD = 13   # only $1M+ insider buys reach this (stren
 SEC_EDGAR_MIN_BUY_VALUE = 100_000     # ignore buys below $100k
 SEC_EDGAR_MIN_SELL_VALUE = 500_000    # ignore sells below $500k
 
+# Congressional Trading (Quiver Quantitative)
+QUIVER_API_KEY              # from env — free tier key from quiverquant.com; loop self-disables on 401/403
+CONGRESSIONAL_ENABLED = True
+CONGRESSIONAL_ALERT_THRESHOLD = 6      # all S&P 500 buys above min amount sent to Slack
+CONGRESSIONAL_AUTO_TRADE_THRESHOLD = 13  # max achievable strength ~11.2 → effectively alert-only
+
 # Anthropic / Claude
 ANTHROPIC_API_KEY   # from env — used for bull/bear debate and news NLP
 
@@ -256,6 +264,7 @@ Set these in Railway → Project → Variables:
 | `SLACK_PERFORMANCE_WEBHOOK` | Yes | Incoming webhook URL for #trading-performance |
 | `SLACK_HEALTH_WEBHOOK` | Yes | Incoming webhook URL for #trading-health |
 | `DATABASE_URL` | Optional | PostgreSQL URL (e.g. `postgresql://user:pass@host/db`); without it, all DB calls silently no-op and `signal_outcomes` logging is disabled |
+| `QUIVER_API_KEY` | Optional | Quiver Quantitative free-tier API key; without it, congressional loop logs one 401 warning and exits permanently |
 
 ---
 
@@ -381,6 +390,8 @@ _exit_monitor_loop() [every 10 min, concurrent]
 7. **Exit monitor symbol-only matching** — `_exit_monitor_loop` matches closed sell orders to `_open_trade_ids` by symbol. If two sell orders for the same symbol fill in one 10-min window (shouldn't happen in practice), only the first match is logged.
 
 8. **`backtester.py`** — early prototype. Do not modify without understanding it first.
+
+9. **Congressional committee list is static** — `_COMMITTEE_MEMBERS` in `strategies/congressional_trading_strategy.py` reflects the 119th Congress (2025–2026). Members rotate off committees; the list will drift. Update at the start of each new Congress (every 2 years) or when known roster changes occur. The 1.3× committee multiplier will silently not apply to new members until updated.
 
 ---
 

@@ -247,6 +247,47 @@ async def notify_truth_social_signal(post_text, tickers, sentiment, score, actio
     }
     await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
 
+async def notify_congressional_signal(ticker, headline, representative, party, chamber,
+                                       amount_range, transaction_type, strength, action,
+                                       informational=False):
+    """Sends a congressional trade signal to #trading-decisions.
+    Buys use 🏛️ emoji. Informational sells use ⚠️ with explicit label.
+    """
+    if informational:
+        emoji = "⚠️"
+        header_text = f"Congressional SELL — Informational: {ticker}"
+        action_label = "INFORMATIONAL SELL"
+    else:
+        emoji = "🏛️"
+        header_text = f"Congressional BUY: {ticker}"
+        action_label = action.upper()
+
+    payload = {
+        "text": f"{emoji} *CONGRESSIONAL TRADE: {action_label} {ticker}* (Strength: {strength:.1f})",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"{emoji} {header_text}"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Ticker:*\n{ticker}"},
+                    {"type": "mrkdwn", "text": f"*Representative:*\n{representative}"},
+                    {"type": "mrkdwn", "text": f"*Party / Chamber:*\n{party} / {chamber}"},
+                    {"type": "mrkdwn", "text": f"*Transaction:*\n{transaction_type}"},
+                    {"type": "mrkdwn", "text": f"*Amount:*\n{amount_range}"},
+                    {"type": "mrkdwn", "text": f"*Strength:*\n{strength:.1f}"},
+                ]
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Detail:*\n```{headline}```"}
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
+
 async def notify_market_open(equity: float, watchlist: str, regime: str):
     """Sends a morning briefing to #trading-alerts at 9:30 AM EST market open."""
     regime_emoji = "🐂" if regime == "bull" else ("🐻" if regime == "bear" else "⚖️")

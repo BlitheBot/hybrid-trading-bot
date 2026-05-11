@@ -44,6 +44,9 @@ class Config:
     # Anthropic API credentials
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+    # Quiver Quantitative API (congressional trading)
+    QUIVER_API_KEY = os.getenv("QUIVER_API_KEY")
+
     # Polling intervals and rate limits
     NEWS_DEDUP_HOURS = 2                   # dedup / cooldown window per ticker
     NEWS_BATCH_SIZE = 50                   # symbols per Alpaca News API request
@@ -56,6 +59,9 @@ class Config:
     NEWS_SIGNAL_ALERT_THRESHOLD = 7
     NEWS_SIGNAL_AUTO_TRADE_THRESHOLD = 13
     TRUTH_SOCIAL_ENABLED = False  # Disabled: Truth Social blocks automated access; re-enable with Quiver API
+    CONGRESSIONAL_ENABLED = True
+    CONGRESSIONAL_ALERT_THRESHOLD = 6     # any S&P 500 buy above min amount → Slack alert
+    CONGRESSIONAL_AUTO_TRADE_THRESHOLD = 13  # effectively unreachable (max ~11.2) — alert-only
     TRUTH_SOCIAL_ALERT_THRESHOLD = 7
     TRUTH_SOCIAL_AUTO_TRADE_THRESHOLD = 13
     

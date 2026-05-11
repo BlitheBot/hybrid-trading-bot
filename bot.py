@@ -32,6 +32,7 @@ from strategies.swing_strategy import SwingStrategy
 from strategies.news_strategy import NewsStrategy, _get_scan_sleep_seconds
 from strategies.truth_social_strategy import TruthSocialStrategy
 from strategies.sec_edgar_strategy import SECEdgarStrategy
+from strategies.congressional_trading_strategy import CongressionalTradingStrategy
 from utils import get_historical_bars, get_finnhub_price
 
 # ── Flask Health Endpoint ────────────────────────────────────────────
@@ -1061,6 +1062,96 @@ class TradingBot:
                 print(msg)
                 asyncio.create_task(notifications.notify_alert(msg))
 
+    async def congressional_trading_loop(self):
+        """Polls Quiver Quantitative for congressional trades every 60 minutes."""
+        if not Config.CONGRESSIONAL_ENABLED:
+            print("🏛️ Congressional trading loop disabled (CONGRESSIONAL_ENABLED=False) — exiting.")
+            return
+        print("🏛️ Starting Congressional Trading Loop (60-min polling)...")
+        strategy = CongressionalTradingStrategy()
+        while True:
+            signals: list[dict] = []
+            try:
+                if not self.trading_halted_for_day:
+                    signals = await strategy.scan_once()
+                    for sig in signals:
+                        ticker   = sig["ticker"]
+                        strength = sig["strength"]
+                        action   = sig["action"]
+
+                        asyncio.create_task(notifications.notify_congressional_signal(
+                            ticker, sig["headline"], sig["representative"],
+                            sig["party"], sig["chamber"], sig["amount_range"],
+                            sig["transaction"], strength, action,
+                            informational=sig["informational"],
+                        ))
+
+                        if not sig["auto_trade"]:
+                            continue
+
+                        # Guard: symbol cooldown
+                        await self._update_loss_cache()
+                        if ticker in self.last_loss_times:
+                            if datetime.now(pytz.utc) - self.last_loss_times[ticker] < timedelta(minutes=Config.SYMBOL_COOLDOWN_MINUTES):
+                                asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "Symbol on cooldown (Congress)"))
+                                continue
+
+                        # Guard: one position per symbol
+                        try:
+                            await asyncio.to_thread(self.trading_client.get_open_position, ticker)
+                            asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "One position per symbol limit (Congress)"))
+                            continue
+                        except Exception:
+                            pass
+
+                        # Execute using swing risk parameters (buys only; sells are informational)
+                        if action != "buy":
+                            continue
+                        try:
+                            from alpaca.trading.requests import MarketOrderRequest
+                            from alpaca.trading.enums import OrderSide, TimeInForce
+
+                            account = await asyncio.to_thread(self.trading_client.get_account)
+                            equity = float(account.equity)
+                            scaled_risk = Config.SWING_EQUITY_RISK_PERCENT * self.risk_multiplier
+                            risk_dollars = equity * (scaled_risk / 100.0)
+
+                            latest = await asyncio.to_thread(
+                                self.stock_data_client.get_stock_latest_trade,
+                                StockLatestTradeRequest(symbol_or_symbols=ticker)
+                            )
+                            entry_price = float(latest[ticker].price)
+                            stop_distance = entry_price * (Config.STOP_LOSS_PERCENT / 100.0)
+                            qty = max(1, int(risk_dollars / stop_distance))
+
+                            max_dollars = float(account.buying_power) * (Config.MAX_BUYING_POWER_UTILIZATION_PERCENT / 100.0)
+                            qty = min(qty, max(1, int(max_dollars / entry_price)))
+
+                            await asyncio.to_thread(
+                                self.trading_client.submit_order,
+                                MarketOrderRequest(symbol=ticker, qty=qty, side=OrderSide.BUY, time_in_force=TimeInForce.DAY)
+                            )
+                            asyncio.create_task(notifications.notify_news_trade(
+                                ticker, sig["headline"], action, entry_price, qty
+                            ))
+                            self.active_signals[f"{ticker}-congress-buy"] = datetime.now(pytz.utc)
+
+                        except Exception as e:
+                            msg = f"[CongressLoop] Trade execution error for {ticker}: {e}"
+                            print(msg)
+                            asyncio.create_task(notifications.notify_alert(msg))
+
+            except Exception as e:
+                print(f"[CongressLoop] Unexpected error: {e}")
+            finally:
+                if strategy._disabled:
+                    print("[CongressLoop] Disabled after auth failure — exiting loop permanently.")
+                    return
+                buy_count  = sum(1 for s in signals if not s.get("informational"))
+                sell_count = sum(1 for s in signals if s.get("informational"))
+                print(f"🏛️ Congressional scan complete — {buy_count} buy signals, {sell_count} informational sell signals, next scan in 60 min")
+                await asyncio.sleep(3600)
+
     async def market_open_notification_loop(self):
         """Sends a morning briefing to #trading-alerts at 9:30 AM EST, weekdays only."""
         print("🔔 Starting Market Open Notification Loop (9:30 AM EST, Mon-Fri)...")
@@ -1141,6 +1232,7 @@ class TradingBot:
             self.news_loop(),
             self.truth_social_loop(),
             self.sec_edgar_loop(),
+            self.congressional_trading_loop(),
             self.health_report_loop(),
             self.performance_report_loop(),
             self.trailing_stop_monitor_loop(),
