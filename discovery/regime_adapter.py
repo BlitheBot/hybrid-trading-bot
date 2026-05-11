@@ -31,9 +31,13 @@ def get_best_strategy(
     symbol: str,
     spy_bars: pd.DataFrame | None = None,
     regime: str | None = None,
+    preferred_strategy_type: str | None = None,
 ) -> dict[str, Any] | None:
     """
     Returns the best approved discovery strategy for the given symbol and regime.
+
+    When preferred_strategy_type is provided, tries that type first; falls back
+    to the best overall strategy if no approved result exists for the preferred type.
 
     Return dict keys:
         strategy_type   str   e.g. "ema_trend"
@@ -53,17 +57,26 @@ def get_best_strategy(
     if sharpe_col not in _VALID_REGIME_COLS:
         sharpe_col = "test_sharpe"
 
+    _select = f"""
+        SELECT strategy_type, parameters::text, test_sharpe,
+               best_regime, bull_sharpe, bear_sharpe, high_vol_sharpe
+        FROM discovery_results
+        WHERE symbol = :sym AND status = 'approved'
+    """
+
     try:
         engine = create_engine(db_url, pool_pre_ping=True)
         with engine.connect() as conn:
-            row = conn.execute(sql_text(f"""
-                SELECT strategy_type, parameters::text, test_sharpe,
-                       best_regime, bull_sharpe, bear_sharpe, high_vol_sharpe
-                FROM discovery_results
-                WHERE symbol = :sym AND status = 'approved'
-                ORDER BY {sharpe_col} DESC NULLS LAST
-                LIMIT 1
-            """), {"sym": symbol}).mappings().fetchone()
+            row = None
+            if preferred_strategy_type:
+                row = conn.execute(sql_text(
+                    _select + " AND strategy_type = :ptype"
+                    + f" ORDER BY {sharpe_col} DESC NULLS LAST LIMIT 1"
+                ), {"sym": symbol, "ptype": preferred_strategy_type}).mappings().fetchone()
+            if row is None:
+                row = conn.execute(sql_text(
+                    _select + f" ORDER BY {sharpe_col} DESC NULLS LAST LIMIT 1"
+                ), {"sym": symbol}).mappings().fetchone()
         engine.dispose()
 
         if row is None:
@@ -88,15 +101,17 @@ def get_best_strategy(
 def apply_to_swing_strategy(
     symbol: str,
     spy_bars: pd.DataFrame | None = None,
+    preferred_strategy_type: str | None = None,
 ) -> tuple[str, dict] | None:
     """
     Convenience wrapper for swing_loop.
     Returns (strategy_type, parameters) or None.
-    Only ema_trend maps directly to SwingStrategy params — other types return None
-    so the caller falls back to the hardcoded strategy.
-    Phase 3 will add full multi-strategy live execution for all types.
+
+    Supports ema_trend (SwingStrategy) and bb_mean_reversion
+    (BollingerMeanReversionStrategy). The caller is responsible for
+    instantiating the correct live class based on strategy_type.
     """
-    result = get_best_strategy(symbol, spy_bars)
+    result = get_best_strategy(symbol, spy_bars, preferred_strategy_type=preferred_strategy_type)
     if result is None:
         return None
     return result["strategy_type"], result["parameters"]

@@ -409,6 +409,40 @@ async def notify_discovery_report(report_text: str):
     await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
 
 
+async def notify_reddit_signal(ticker: str, score: float, mention_count: int,
+                               subreddits: list[str], sample_titles: list[str]):
+    """Sends a Reddit momentum signal to #trading-decisions (alert-only, 🤖 emoji)."""
+    subs_str = " + ".join(f"r/{s}" for s in subreddits)
+    titles_block = "\n".join(f"• {t[:120]}" for t in sample_titles[:3])
+    payload = {
+        "text": f"🤖 *REDDIT SIGNAL: {ticker}* (Score: {score:.1f}, {mention_count} mentions)",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"🤖 Reddit Momentum: {ticker}"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Ticker:*\n{ticker}"},
+                    {"type": "mrkdwn", "text": f"*Score:*\n{score:.1f}"},
+                    {"type": "mrkdwn", "text": f"*Mentions:*\n{mention_count}"},
+                    {"type": "mrkdwn", "text": f"*Subreddits:*\n{subs_str}"},
+                ]
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Sample Posts:*\n{titles_block}"}
+            },
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": ":information_source: Alert-only — Reddit signals do not auto-trade"}]
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
+
+
 async def notify_truth_social_trade(ticker, post_text, direction, entry_price, position_size):
     """Sends a Truth Social-triggered trade execution to #trading-alerts."""
     payload = {

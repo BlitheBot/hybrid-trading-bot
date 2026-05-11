@@ -31,6 +31,7 @@ from config import Config
 from strategies.base_strategy import BaseStrategy
 from strategies.smb_strategy import SMBStrategy
 from strategies.swing_strategy import SwingStrategy
+from strategies.bollinger_mean_reversion_strategy import BollingerMeanReversionStrategy
 from strategies.news_strategy import NewsStrategy, _get_scan_sleep_seconds
 from strategies.truth_social_strategy import TruthSocialStrategy
 from strategies.sec_edgar_strategy import SECEdgarStrategy
@@ -147,6 +148,7 @@ class TradingBot:
         self.last_evaluated_price = {}
         self._recent_signals: deque = deque(maxlen=50)
         self._sector_alert_cooldown: dict[str, datetime] = {}
+        self._adx_regime_cache = None  # (regime_str, timestamp)
 
     def add_scalp_strategy(self, strategy: BaseStrategy):
         if not isinstance(strategy, BaseStrategy):
@@ -329,6 +331,38 @@ class TradingBot:
             print(f"[MarketRegime] Failed: {e}")
             regime = 'neutral'
         self._regime_cache = (regime, time.time())
+        return regime
+
+    def _get_market_regime_adx(self, spy_bars) -> str:
+        """
+        Classifies the current SPY regime using ADX(14).
+        Returns 'trending', 'choppy', or 'neutral'. Caches result for 4 hours.
+        Sync — safe to call from swing_loop without to_thread.
+        """
+        if self._adx_regime_cache is not None:
+            cached_regime, cached_ts = self._adx_regime_cache
+            if time.time() - cached_ts < 14400:
+                return cached_regime
+
+        regime = 'neutral'
+        try:
+            if spy_bars is not None and not spy_bars.empty and len(spy_bars) >= 20:
+                import pandas_ta as _ta
+                adx_df = _ta.adx(spy_bars['high'], spy_bars['low'], spy_bars['close'], length=14)
+                if adx_df is not None and not adx_df.empty:
+                    adx_cols = [c for c in adx_df.columns if c.startswith('ADX_')]
+                    if adx_cols:
+                        adx_val = adx_df[adx_cols[0]].iloc[-1]
+                        if not pd.isna(adx_val):
+                            if adx_val > 25:
+                                regime = 'trending'
+                            elif adx_val < 20:
+                                regime = 'choppy'
+                            print(f"[ADX] SPY ADX={adx_val:.1f} → regime={regime}")
+        except Exception as e:
+            print(f"[ADX] Regime detection failed: {e}")
+
+        self._adx_regime_cache = (regime, time.time())
         return regime
 
     # ── Fundamentals check (Task 3) ───────────────────────────────────────────
@@ -1141,6 +1175,15 @@ class TradingBot:
 
             swing_regime = await self._get_market_regime()
 
+            # ADX regime → preferred discovery strategy type
+            adx_regime = self._get_market_regime_adx(spy_bars)
+            preferred_strategy_type = {
+                "trending": "ema_trend",
+                "choppy":   "bb_mean_reversion",
+            }.get(adx_regime)
+            if preferred_strategy_type:
+                print(f"[ADX] Market is {adx_regime} — preferring {preferred_strategy_type} strategies")
+
             # Time-of-day safety multiplier: swing loop fires at 10:30am but guard
             # against any edge case where it runs outside 10:00–11:00am EST.
             _eval_now = datetime.now(pytz.timezone('America/New_York'))
@@ -1160,13 +1203,17 @@ class TradingBot:
                     print(f"[Swing] {symbol}: no strategy configured, skipping")
                     continue
 
-                # Check for an approved discovery strategy; upgrade if ema_trend found.
+                # Check for an approved discovery strategy; upgrade when recognized type found.
+                # Preferred type from ADX regime is tried first; falls back to best overall.
                 # Hardcoded strategies always use 100% size — no change to existing behavior.
-                discovery  = apply_to_swing_strategy(symbol, spy_bars)
+                discovery   = apply_to_swing_strategy(symbol, spy_bars,
+                                                       preferred_strategy_type=preferred_strategy_type)
                 risk_to_use = Config.SWING_EQUITY_RISK_PERCENT
 
                 if discovery is not None:
                     s_type, s_params = discovery
+                    upgraded = None
+
                     if s_type == "ema_trend":
                         rsi_gate = s_params.get("rsi_gate", [40, 60])
                         upgraded = SwingStrategy(
@@ -1177,7 +1224,18 @@ class TradingBot:
                             rsi_entry_low=rsi_gate[0],
                             rsi_entry_high=rsi_gate[1],
                         )
-                        # Attribute used by _process_symbol to tag signal_outcomes rows
+
+                    elif s_type == "bb_mean_reversion":
+                        upgraded = BollingerMeanReversionStrategy(
+                            f"{symbol} Discovery[{s_type}]",
+                            bb_period=s_params.get("bb_period", 20),
+                            bb_std=float(s_params.get("bb_std", 2.0)),
+                            rsi_period=s_params.get("rsi_period", 14),
+                            rsi_entry=s_params.get("rsi_entry", 30),
+                            rsi_exit=s_params.get("rsi_exit", 65),
+                        )
+
+                    if upgraded is not None:
                         upgraded.discovery_strategy_type = s_type
                         strategy = upgraded
 
@@ -1801,6 +1859,30 @@ class TradingBot:
                     f":x: Discovery loop error: {e}", level="ERROR"
                 ))
 
+    async def reddit_loop(self):
+        """Loop 14 — polls r/wallstreetbets + r/stocks every 30 min for retail momentum signals."""
+        if not Config.REDDIT_ENABLED:
+            print("[Reddit] Disabled (REDDIT_ENABLED=False) — exiting loop.")
+            return
+        print("🤖 Starting Reddit Momentum Loop (30-min polling, alert-only)...")
+        from strategies.reddit_strategy import RedditStrategy
+        strategy = RedditStrategy()
+        while True:
+            try:
+                if not self.trading_halted_for_day:
+                    signals = await strategy.scan_once()
+                    for sig in signals:
+                        asyncio.create_task(notifications.notify_reddit_signal(
+                            sig["ticker"],
+                            sig["score"],
+                            sig["mention_count"],
+                            sig["subreddits"],
+                            sig["sample_titles"],
+                        ))
+            except Exception as e:
+                print(f"[RedditLoop] Unexpected error: {e}")
+            await asyncio.sleep(Config.REDDIT_POLL_INTERVAL)
+
     async def start_dual_engine(self):
         print("🚀 Hybrid Trading Bot starting...")
 
@@ -1860,6 +1942,7 @@ class TradingBot:
             self._exit_monitor_loop(),
             self.market_open_notification_loop(),
             self.discovery_loop(),
+            self.reddit_loop(),
         )
 
 if __name__ == "__main__":
