@@ -60,6 +60,10 @@ _health_state: dict = {
     "last_news_scan_utc": None,
     "last_edgar_scan_utc": None,
     "websocket_connected": False,
+    "equity_usd": 0.0,
+    "open_positions": 0,
+    "daily_pnl_pct": 0.0,
+    "signals_fired_total": 0,
 }
 
 @_health_app.route("/health", methods=["GET"])
@@ -75,6 +79,44 @@ def health_check():
         "last_edgar_scan": _health_state["last_edgar_scan_utc"],
         "websocket_connected": _health_state["websocket_connected"],
     }), 200
+
+@_health_app.route("/metrics", methods=["GET"])
+def prometheus_metrics():
+    from flask import Response, abort
+    if not Config.PROMETHEUS_ENABLED:
+        abort(404)
+    uptime = round((datetime.now(pytz.utc) - _bot_start_time).total_seconds(), 2)
+    vix    = MACRO_SNAPSHOT.get("vix") or 0.0
+    ws     = 1 if _health_state["websocket_connected"] else 0
+    lines = [
+        "# HELP bot_uptime_seconds Seconds since bot startup",
+        "# TYPE bot_uptime_seconds gauge",
+        f"bot_uptime_seconds {uptime}",
+        "# HELP bot_equity_usd Current account equity in USD",
+        "# TYPE bot_equity_usd gauge",
+        f"bot_equity_usd {_health_state['equity_usd']:.2f}",
+        "# HELP bot_open_positions Number of open positions",
+        "# TYPE bot_open_positions gauge",
+        f"bot_open_positions {_health_state['open_positions']}",
+        "# HELP bot_daily_pnl_pct Daily P&L as percentage of start-of-day equity",
+        "# TYPE bot_daily_pnl_pct gauge",
+        f"bot_daily_pnl_pct {_health_state['daily_pnl_pct']:.4f}",
+        "# HELP bot_vix_level VIX level from FRED",
+        "# TYPE bot_vix_level gauge",
+        f"bot_vix_level {float(vix):.2f}",
+        "# HELP bot_websocket_connected 1 if crypto WebSocket is connected",
+        "# TYPE bot_websocket_connected gauge",
+        f"bot_websocket_connected {ws}",
+        "# HELP bot_signals_fired_total Confirmed buy executions since startup",
+        "# TYPE bot_signals_fired_total counter",
+        f"bot_signals_fired_total {_health_state['signals_fired_total']}",
+        "",
+    ]
+    return Response(
+        "\n".join(lines),
+        mimetype="text/plain; version=0.0.4; charset=utf-8",
+    )
+
 
 def start_health_server(port=8502):
     """Run the Flask health server in a daemon thread so it never blocks the bot."""
@@ -149,6 +191,7 @@ class TradingBot:
         self._recent_signals: deque = deque(maxlen=50)
         self._sector_alert_cooldown: dict[str, datetime] = {}
         self._adx_regime_cache = None  # (regime_str, timestamp)
+        self._signal_stack: dict[str, list] = {}  # ticker → [{source, strength, timestamp}]
 
     def add_scalp_strategy(self, strategy: BaseStrategy):
         if not isinstance(strategy, BaseStrategy):
@@ -195,6 +238,11 @@ class TradingBot:
                 
                 self.daily_pnl = current_daily_pnl
                 _health_state["alpaca_connected"] = True
+                _health_state["equity_usd"] = float(account.equity)
+                if self.start_of_day_equity > 0:
+                    _health_state["daily_pnl_pct"] = round(
+                        (self.daily_pnl / self.start_of_day_equity) * 100, 4
+                    )
                 return True
             return False
         except Exception as e:
@@ -682,6 +730,10 @@ class TradingBot:
                         Config.MAX_BUYING_POWER_UTILIZATION_PERCENT
                     )
 
+                    # Prometheus counter: confirmed buy execution
+                    if signal['signal'] == 'buy':
+                        _health_state["signals_fired_total"] += 1
+
                     # Task 1 — log entry to signal_outcomes after successful execute_trade
                     if signal['signal'] == 'buy':
                         disc_type = getattr(strategy, 'discovery_strategy_type', None)
@@ -805,6 +857,7 @@ class TradingBot:
             await asyncio.sleep(Config.TRAILING_STOP_MONITOR_INTERVAL)
             try:
                 positions = await asyncio.to_thread(self.trading_client.get_all_positions)
+                _health_state["open_positions"] = len(positions)
                 for pos in positions:
                     unrealized_pct = float(pos.unrealized_plpc)
                     if unrealized_pct >= Config.TRAILING_STOP_ACTIVATION_PCT:
@@ -1037,6 +1090,45 @@ class TradingBot:
             f"({syms_str}). Possible sector rotation.",
             level="INFO",
         )
+
+    async def _push_signal_stack(
+        self, ticker: str, source: str, strength: float
+    ) -> tuple[bool, float]:
+        """
+        Registers an auto-trade signal for ticker from source.
+        Returns (is_stacked, size_multiplier).
+
+        Fires a #trading-alerts stack notification when ≥2 distinct sources have
+        filed auto-trade signals on the same ticker within 30 minutes.
+        size_multiplier is 1.3 when stacked, else 1.0.
+        """
+        now    = datetime.now(pytz.utc)
+        cutoff = now - timedelta(minutes=30)
+
+        existing = self._signal_stack.get(ticker, [])
+        fresh    = [e for e in existing if e["timestamp"] >= cutoff]
+
+        # Don't double-count the same source (e.g., two news headlines for COST)
+        if not any(e["source"] == source for e in fresh):
+            fresh.append({"source": source, "strength": strength, "timestamp": now})
+        self._signal_stack[ticker] = fresh
+
+        distinct_sources = {e["source"] for e in fresh}
+        if len(distinct_sources) < 2:
+            return False, 1.0
+
+        # ≥2 distinct auto-trade sources — fire stacked conviction alert
+        combined = round(sum(e["strength"] for e in fresh), 1)
+        parts    = " + ".join(
+            f"{e['source'].upper()} (strength {e['strength']:.1f})" for e in fresh
+        )
+        msg = (
+            f"🎯 Signal stack: {ticker} — {parts} = combined conviction {combined}. "
+            f"High confidence entry."
+        )
+        print(f"[SignalStack] {msg}")
+        asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
+        return True, 1.3
 
     def _upload_image_to_public(self, file_path: str) -> str | None:
         """POSTs an image file to 0x0.st and returns the public URL, or None on failure."""
@@ -1375,6 +1467,11 @@ class TradingBot:
                                 ))
                                 continue
 
+                        # Guard: signal stacking — register & check for cross-source boost
+                        _news_stacked, stack_mult = await self._push_signal_stack(
+                            ticker, "news", strength
+                        )
+
                         # Guard: symbol cooldown
                         await self._update_loss_cache()
                         if ticker in self.last_loss_times:
@@ -1390,14 +1487,14 @@ class TradingBot:
                         except Exception:
                             pass  # No open position — proceed
 
-                        # Execute using swing risk parameters
+                        # Execute using swing risk parameters (stack_mult = 1.3 when stacked)
                         try:
                             from alpaca.trading.requests import MarketOrderRequest
                             from alpaca.trading.enums import OrderSide, TimeInForce
 
                             account = await asyncio.to_thread(self.trading_client.get_account)
                             equity = float(account.equity)
-                            scaled_risk = Config.SWING_EQUITY_RISK_PERCENT * self.risk_multiplier
+                            scaled_risk = Config.SWING_EQUITY_RISK_PERCENT * self.risk_multiplier * stack_mult
                             risk_dollars = equity * (scaled_risk / 100.0)
 
                             latest = await asyncio.to_thread(
@@ -1557,6 +1654,11 @@ class TradingBot:
                                 ))
                                 continue
 
+                        # Guard: signal stacking — register & check for cross-source boost
+                        _edgar_stacked, stack_mult = await self._push_signal_stack(
+                            ticker, "edgar", strength
+                        )
+
                         # Guard: symbol cooldown
                         await self._update_loss_cache()
                         if ticker in self.last_loss_times:
@@ -1572,7 +1674,7 @@ class TradingBot:
                         except Exception:
                             pass
 
-                        # Execute using swing risk parameters (buys only)
+                        # Execute using swing risk parameters (buys only; stack_mult = 1.3 when stacked)
                         if action != "buy":
                             continue
                         try:
@@ -1581,7 +1683,7 @@ class TradingBot:
 
                             account = await asyncio.to_thread(self.trading_client.get_account)
                             equity = float(account.equity)
-                            scaled_risk = Config.SWING_EQUITY_RISK_PERCENT * self.risk_multiplier
+                            scaled_risk = Config.SWING_EQUITY_RISK_PERCENT * self.risk_multiplier * stack_mult
                             risk_dollars = equity * (scaled_risk / 100.0)
 
                             latest = await asyncio.to_thread(

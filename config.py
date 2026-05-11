@@ -74,6 +74,9 @@ class Config:
     REDDIT_MIN_MENTIONS = 3            # minimum post mentions across subreddits
     REDDIT_POLL_INTERVAL = 1800        # seconds between polls (30 min)
     REDDIT_AUTO_TRADE_THRESHOLD = 999  # alert-only stub; lower to enable auto-trade
+
+    # Prometheus metrics endpoint
+    PROMETHEUS_ENABLED = True          # expose /metrics on port 8502 for Grafana scraping
     CONGRESSIONAL_ALERT_THRESHOLD = 6     # any S&P 500 buy above min amount → Slack alert
     CONGRESSIONAL_AUTO_TRADE_THRESHOLD = 13  # effectively unreachable (max ~11.2) — alert-only
     TRUTH_SOCIAL_ALERT_THRESHOLD = 7
