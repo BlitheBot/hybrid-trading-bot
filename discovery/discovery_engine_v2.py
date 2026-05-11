@@ -680,6 +680,104 @@ class DiscoveryEngineV2:
             except Exception as e:
                 print(f"[v2] {sym} bar fetch error: {e}")
 
+    def _upload_image(self, file_path: Path) -> str | None:
+        """POSTs a PNG to 0x0.st and returns the public URL, or None on failure."""
+        try:
+            with open(file_path, "rb") as f:
+                resp = requests.post("https://0x0.st", files={"file": f}, timeout=30)
+            resp.raise_for_status()
+            url = resp.text.strip()
+            return url if url.startswith("http") else None
+        except Exception as e:
+            print(f"[v2] Image upload failed: {e}")
+            return None
+
+    def _slack_image(self, image_url: str, title: str):
+        """Posts a Slack image block to #trading-decisions."""
+        webhook = Config.SLACK_DECISIONS_WEBHOOK
+        if not webhook:
+            return
+        payload = {
+            "blocks": [
+                {
+                    "type": "image",
+                    "image_url": image_url,
+                    "alt_text": title,
+                    "title": {"type": "plain_text", "text": title},
+                }
+            ]
+        }
+        try:
+            requests.post(webhook, json=payload, timeout=10)
+        except Exception as e:
+            print(f"[v2] Slack image post failed: {e}")
+
+    def _generate_chart(self, result: dict, equity_curve: list, charts_dir: Path) -> Path | None:
+        """
+        Generates a dark-theme equity curve + drawdown chart for a single validated strategy.
+        Returns the saved file path, or None on failure.
+        """
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            eq = np.array(equity_curve, dtype=float)
+            if len(eq) < 2 or eq[0] == 0:
+                return None
+
+            eq_norm = eq / eq[0] * 100.0
+
+            fig, (ax_eq, ax_dd) = plt.subplots(
+                2, 1, figsize=(12, 7),
+                gridspec_kw={"height_ratios": [3, 1]},
+                facecolor="#0d1117",
+            )
+
+            for ax in (ax_eq, ax_dd):
+                ax.set_facecolor("#0d1117")
+                ax.tick_params(colors="#8b949e")
+                for spine in ax.spines.values():
+                    spine.set_edgecolor("#30363d")
+
+            x = range(len(eq_norm))
+            ax_eq.plot(x, eq_norm, color="#00c851", linewidth=1.5, zorder=2)
+            ax_eq.axhline(100, color="#8b949e", linewidth=0.5, linestyle="--", alpha=0.5)
+            ax_eq.fill_between(
+                x, 100, eq_norm,
+                where=(eq_norm >= 100),
+                color="#00c851", alpha=0.12, zorder=1,
+            )
+            ax_eq.set_ylabel("Equity (indexed to 100)", color="#8b949e", fontsize=9)
+
+            running_max = np.maximum.accumulate(eq_norm)
+            drawdown = np.where(running_max > 0, (eq_norm - running_max) / running_max * 100.0, 0.0)
+            ax_dd.fill_between(x, drawdown, 0, color="#ff4444", alpha=0.5)
+            ax_dd.set_ylabel("Drawdown %", color="#8b949e", fontsize=9)
+            ax_dd.set_ylim(top=0)
+            ax_dd.tick_params(colors="#8b949e")
+
+            params_dict = json.loads(result["parameters"]) if isinstance(result["parameters"], str) else result["parameters"]
+            params_short = ", ".join(f"{k}={v}" for k, v in list(params_dict.items())[:4])
+            title = (
+                f"{result['symbol']} — {result['strategy_type'].replace('_', ' ').title()}\n"
+                f"Test Sharpe: {result.get('test_sharpe', 0):.2f}  |  "
+                f"Win Rate: {result.get('win_rate', 0)*100:.0f}%  |  "
+                f"{result.get('total_trades', 0)} trades  |  {params_short}"
+            )
+            ax_eq.set_title(title, color="#e6edf3", fontsize=10, pad=10)
+
+            plt.tight_layout(pad=1.5)
+            charts_dir.mkdir(parents=True, exist_ok=True)
+            safe_sym  = result["symbol"].replace("/", "_")
+            fname     = charts_dir / f"{safe_sym}_{result['strategy_type']}_equity.png"
+            plt.savefig(fname, dpi=100, bbox_inches="tight", facecolor="#0d1117")
+            plt.close(fig)
+            return fname
+        except Exception as e:
+            print(f"[v2] Chart generation failed for {result.get('symbol')}: {e}")
+            return None
+
     def _send_report(self, all_results: list[dict], symbols: list[str], elapsed_s: float):
         strategy_classes = load_all_strategies()
         combos_per_symbol = sum(len(sc().get_combos()) for sc in strategy_classes)
@@ -720,6 +818,36 @@ class DiscoveryEngineV2:
         lines.append(f"*Strategies awaiting approval:* {pending}")
         lines.append("Review at: hybrid-trading-bot-production.up.railway.app")
         self._slack("\n".join(lines))
+
+        # Generate and post equity curve charts for top 5 findings
+        charts_dir = DATA_DIR / "charts"
+        strategy_map = {sc().strategy_type: sc for sc in load_all_strategies()}
+        for r in top5:
+            try:
+                bars = _load_bars_from_cache(r["symbol"], DATA_DIR)
+                if bars.empty:
+                    continue
+                strategy_cls = strategy_map.get(r["strategy_type"])
+                if strategy_cls is None:
+                    continue
+                strategy  = strategy_cls()
+                params    = _params_from_json(r["parameters"], strategy.param_grid)
+                ind_df    = strategy.compute_indicators(bars, params)
+                sim       = _simulate_generic(ind_df, strategy, params)
+                eq_curve  = sim["equity_curve"]
+                chart_path = self._generate_chart(r, eq_curve, charts_dir)
+                if chart_path is None:
+                    continue
+                url = self._upload_image(chart_path)
+                if url:
+                    sym_label = r["symbol"]
+                    strat_label = r["strategy_type"].replace("_", " ").title()
+                    self._slack_image(url, f"{sym_label} — {strat_label} equity curve")
+                    print(f"[v2] Chart posted for {sym_label} {strat_label}: {url}")
+                else:
+                    print(f"[v2] Chart upload failed for {r['symbol']} — skipping image post")
+            except Exception as e:
+                print(f"[v2] Chart pipeline error for {r.get('symbol')}: {e}")
 
     def run(self):
         strategy_classes    = load_all_strategies()

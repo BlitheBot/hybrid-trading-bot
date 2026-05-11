@@ -513,7 +513,10 @@ class TradingBot:
                         del self.active_signals[signal_key]
 
                 print(f"Signal generated: {signal}")
-                asyncio.create_task(notifications.notify_trade_decision(symbol, strategy.name, signal))
+                asyncio.create_task(notifications.notify_trade_decision(
+                    symbol, strategy.name, signal,
+                    discovery_note=getattr(strategy, 'discovery_size_note', None),
+                ))
 
                 entry_time = datetime.now(pytz.utc)
                 try:
@@ -851,6 +854,115 @@ class TradingBot:
             print(f"[EV] Calculation failed: {e}")
             return {}
 
+    def _upload_image_to_public(self, file_path: str) -> str | None:
+        """POSTs an image file to 0x0.st and returns the public URL, or None on failure."""
+        try:
+            with open(file_path, "rb") as f:
+                resp = _requests.post("https://0x0.st", files={"file": f}, timeout=30)
+            resp.raise_for_status()
+            url = resp.text.strip()
+            return url if url.startswith("http") else None
+        except Exception as e:
+            print(f"[Heatmap] Upload to 0x0.st failed: {e}")
+            return None
+
+    def _generate_correlation_heatmap_sync(self) -> str | None:
+        """
+        Queries signal_outcomes for daily avg pnl_pct per signal_type,
+        builds a correlation matrix, generates a seaborn heatmap in dark theme,
+        saves to discovery/data/charts/ and returns the file path.
+        Requires ≥2 signal types each with ≥10 closed trades.
+        """
+        if not self._db_engine:
+            return None
+        try:
+            import seaborn as sns
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            from pathlib import Path
+
+            with self._db_engine.connect() as conn:
+                rows = conn.execute(sql_text("""
+                    SELECT DATE(entry_time) AS trade_date,
+                           signal_type,
+                           AVG(pnl_pct) AS avg_pnl
+                    FROM signal_outcomes
+                    WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                    GROUP BY DATE(entry_time), signal_type
+                """)).fetchall()
+
+            if not rows:
+                print("[Heatmap] No closed trades in signal_outcomes — skipping heatmap")
+                return None
+
+            df = pd.DataFrame(rows, columns=["trade_date", "signal_type", "avg_pnl"])
+            counts = df.groupby("signal_type")["avg_pnl"].count()
+            valid_types = counts[counts >= 10].index.tolist()
+            if len(valid_types) < 2:
+                print("[Heatmap] Not enough signal types with ≥10 closed trades for correlation matrix")
+                return None
+
+            df = df[df["signal_type"].isin(valid_types)]
+            pivot = df.pivot(index="trade_date", columns="signal_type", values="avg_pnl")
+            corr = pivot.corr()
+
+            n = len(valid_types)
+            fig_w = max(6, n * 1.5)
+            fig_h = max(5, n * 1.2)
+            fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor="#0d1117")
+            ax.set_facecolor("#0d1117")
+
+            sns.heatmap(
+                corr,
+                ax=ax,
+                cmap="RdYlGn",
+                annot=True,
+                fmt=".2f",
+                vmin=-1,
+                vmax=1,
+                linewidths=0.5,
+                linecolor="#30363d",
+                annot_kws={"size": 9, "color": "#e6edf3"},
+                cbar_kws={"shrink": 0.8},
+            )
+            ax.tick_params(colors="#e6edf3", labelsize=9)
+            ax.set_title("Signal P&L Correlation Matrix", color="#e6edf3", fontsize=12, pad=12)
+            ax.set_xlabel("")
+            ax.set_ylabel("")
+            cbar = ax.collections[0].colorbar
+            cbar.ax.tick_params(colors="#8b949e")
+            plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+            plt.setp(ax.get_yticklabels(), rotation=0)
+
+            plt.tight_layout(pad=1.5)
+
+            charts_dir = Path("discovery/data/charts")
+            charts_dir.mkdir(parents=True, exist_ok=True)
+            fpath = str(charts_dir / f"correlation_heatmap_{datetime.now().strftime('%Y%m%d')}.png")
+            plt.savefig(fpath, dpi=100, bbox_inches="tight", facecolor="#0d1117")
+            plt.close(fig)
+            print(f"[Heatmap] Saved {fpath}")
+            return fpath
+        except Exception as e:
+            print(f"[Heatmap] Generation failed: {e}")
+            return None
+
+    async def _generate_correlation_heatmap(self):
+        """Async wrapper: generate heatmap PNG, upload to 0x0.st, post to #trading-health."""
+        try:
+            file_path = await asyncio.to_thread(self._generate_correlation_heatmap_sync)
+            if file_path is None:
+                return
+            url = await asyncio.to_thread(self._upload_image_to_public, file_path)
+            if url:
+                await notifications.notify_correlation_heatmap(url)
+                print(f"[Heatmap] Posted to #trading-health: {url}")
+            else:
+                print("[Heatmap] Upload failed — Slack notification skipped")
+        except Exception as e:
+            print(f"[Heatmap] Unexpected error: {e}")
+
     async def swing_loop(self):
         print(f"📈 Starting Stock Swing Bot for {Config.SWING_SYMBOLS} (10:30 AM EST Polling)...")
         # Symbols with no statistically validated edge — evaluated but flagged in logs
@@ -929,6 +1041,11 @@ class TradingBot:
                         )
                         risk_to_use = Config.SWING_EQUITY_RISK_PERCENT * disc_mult
                         print(f"[Swing] {symbol} Discovery[{s_type}]: {disc_reason}")
+                        if disc_mult == 0.25:
+                            strategy.discovery_size_note = (
+                                "New discovery strategy — using 25% position size "
+                                "for first 50 trades as validation period."
+                            )
 
                 print(f"Evaluating {symbol} for swing signals [{strategy.name}]")
                 await self._process_symbol(
@@ -1307,9 +1424,10 @@ class TradingBot:
                     level="CRITICAL"
                 ))
 
-            # Sunday 7 PM EST — send weekly macro summary and advance prev-week baseline
+            # Sunday 7 PM EST — send weekly macro summary, correlation heatmap, and advance prev-week baseline
             if datetime.now(est).weekday() == 6:
                 asyncio.create_task(notifications.notify_macro_summary(dict(MACRO_SNAPSHOT)))
+                asyncio.create_task(self._generate_correlation_heatmap())
                 MACRO_SNAPSHOT["prev_week_fed_funds"]    = MACRO_SNAPSHOT.get("fed_funds_rate")
                 MACRO_SNAPSHOT["prev_week_vix"]          = MACRO_SNAPSHOT.get("vix")
                 MACRO_SNAPSHOT["prev_week_treasury"]     = MACRO_SNAPSHOT.get("treasury_10y")

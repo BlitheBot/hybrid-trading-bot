@@ -17,11 +17,11 @@ async def _post_to_slack(webhook_url, payload):
             
     await asyncio.to_thread(_do_post)
 
-async def notify_trade_decision(symbol, strategy_name, signal_data):
+async def notify_trade_decision(symbol, strategy_name, signal_data, discovery_note=None):
     """Sends a detailed trade decision to the #trading-decisions channel."""
     action = signal_data.get("signal", "unknown").upper()
     reasoning = signal_data.get("reasoning", "No specific reasoning provided.")
-    
+
     payload = {
         "text": f"🚨 *TRADE SIGNAL: {action} {symbol}* 🚨",
         "blocks": [
@@ -48,7 +48,7 @@ async def notify_trade_decision(symbol, strategy_name, signal_data):
             }
         ]
     }
-    
+
     # Include any extra details from the signal dictionary if present
     extra_fields = []
     if "stop_price" in signal_data:
@@ -57,13 +57,19 @@ async def notify_trade_decision(symbol, strategy_name, signal_data):
         extra_fields.append({"type": "mrkdwn", "text": f"*Take Profit:*\n${signal_data['target_price']:.2f}"})
     if "current_price" in signal_data:
         extra_fields.append({"type": "mrkdwn", "text": f"*Entry Price:*\n${signal_data['current_price']:.2f}"})
-        
+
     if extra_fields:
         payload["blocks"].append({
             "type": "section",
             "fields": extra_fields
         })
-        
+
+    if discovery_note:
+        payload["blocks"].append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f":information_source: {discovery_note}"}]
+        })
+
     await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
 
 async def notify_trade_skipped(symbol, strategy_name, reason):
@@ -369,6 +375,25 @@ async def notify_market_open(equity: float, watchlist: str, regime: str):
         ]
     }
     await _post_to_slack(Config.SLACK_ALERTS_WEBHOOK, payload)
+
+async def notify_correlation_heatmap(image_url: str):
+    """Sends the weekly signal correlation heatmap to #trading-health."""
+    payload = {
+        "text": "📊 *Weekly Signal Correlation Heatmap*",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "📊 Weekly Signal Correlation Heatmap"}
+            },
+            {
+                "type": "image",
+                "image_url": image_url,
+                "alt_text": "Signal P&L% correlation across strategy types",
+            },
+        ]
+    }
+    await _post_to_slack(Config.SLACK_HEALTH_WEBHOOK, payload)
+
 
 async def notify_discovery_progress(elapsed_min: int):
     """Sends an hourly progress ping while Discovery Engine v2 subprocess is running."""
