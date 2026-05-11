@@ -64,6 +64,7 @@ class Config:
     EARNINGS_FILTER_ENABLED = True # Reduce swing position size to 25% when earnings within 48h; skip if earnings today/tomorrow
     VIX_SPIKE_THRESHOLD = 35      # VIX above this → reduce position size to 25%
     VIX_EXTREME_THRESHOLD = 40    # VIX above this → block trade entirely, alert #trading-alerts
+    BEAR_MARKET_SIZE_REDUCTION = 0.5  # Multiply swing position size by this when SPY < 200 EMA
     CONGRESSIONAL_ALERT_THRESHOLD = 6     # any S&P 500 buy above min amount → Slack alert
     CONGRESSIONAL_AUTO_TRADE_THRESHOLD = 13  # effectively unreachable (max ~11.2) — alert-only
     TRUTH_SOCIAL_ALERT_THRESHOLD = 7

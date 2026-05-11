@@ -593,6 +593,7 @@ class TradingBot:
                 _notes = [n for n in [
                     getattr(strategy, 'discovery_size_note', None),
                     getattr(strategy, 'earnings_size_note', None),
+                    getattr(strategy, 'bear_market_note', None),
                     vix_note,
                 ] if n]
                 asyncio.create_task(notifications.notify_trade_decision(
@@ -1072,6 +1073,18 @@ class TradingBot:
             except Exception:
                 pass
 
+            swing_regime = await self._get_market_regime()
+
+            # Time-of-day safety multiplier: swing loop fires at 10:30am but guard
+            # against any edge case where it runs outside 10:00–11:00am EST.
+            _eval_now = datetime.now(pytz.timezone('America/New_York'))
+            tod_mult = 1.0 if 10 <= _eval_now.hour < 11 else 0.7
+            if tod_mult < 1.0:
+                print(
+                    f"[Swing] Evaluation outside 10–11am EST "
+                    f"({_eval_now.strftime('%H:%M')}) — applying 0.7x conviction"
+                )
+
             for symbol in Config.SWING_SYMBOLS:
                 if symbol in _no_edge:
                     print(f"[Swing] {symbol}: no statistically validated edge (p>0.05 across all 243 discovery combos) — monitoring only")
@@ -1142,6 +1155,15 @@ class TradingBot:
                             symbol, strategy.name, skip_msg
                         ))
                         continue
+
+                # Bear market position size reduction
+                if swing_regime == 'bear':
+                    risk_to_use *= Config.BEAR_MARKET_SIZE_REDUCTION
+                    strategy.bear_market_note = "🐻 Bear market mode — position size reduced 50%"
+                    print(f"[Swing] {symbol}: bear market mode — risk_to_use={risk_to_use:.3f}%")
+
+                # Time-of-day safety multiplier
+                risk_to_use *= tod_mult
 
                 print(f"Evaluating {symbol} for swing signals [{strategy.name}]")
                 await self._process_symbol(
