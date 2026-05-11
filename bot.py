@@ -120,6 +120,8 @@ class TradingBot:
         self.risk_multiplier = 1.0
         self.active_signals = {}
         self.last_loss_times = {}
+        self._alerted_negative_ev: set[str] = set()
+        self._last_ev_check_date = None
         self.last_evaluated_price = {}
 
     def add_scalp_strategy(self, strategy: BaseStrategy):
@@ -527,7 +529,13 @@ class TradingBot:
 
                     # Task 1 — log entry to signal_outcomes after successful execute_trade
                     if signal['signal'] == 'buy':
-                        signal_type = 'swing_long' if isinstance(strategy, SwingStrategy) else 'scalp_long'
+                        disc_type = getattr(strategy, 'discovery_strategy_type', None)
+                        if isinstance(strategy, SwingStrategy) and disc_type:
+                            signal_type = f"discovery_{disc_type}"
+                        elif isinstance(strategy, SwingStrategy):
+                            signal_type = 'swing_long'
+                        else:
+                            signal_type = 'scalp_long'
                         regime = await self._get_market_regime()
                         row_id = await asyncio.to_thread(
                             self._log_trade_entry,
@@ -675,6 +683,16 @@ class TradingBot:
             await asyncio.sleep(600)
             async with self._trade_ids_lock:
                 open_ids_snapshot = dict(self._open_trade_ids)
+
+            # Daily EV check — runs regardless of open positions.
+            # Alert set is reset each day so a strategy that recovers then turns
+            # negative again will fire a new alert.
+            today = datetime.now(pytz.timezone('America/New_York')).date()
+            if today != self._last_ev_check_date:
+                self._alerted_negative_ev.clear()
+                self._last_ev_check_date = today
+                await self._calculate_strategy_ev()
+
             if not open_ids_snapshot:
                 continue
             try:
@@ -721,6 +739,118 @@ class TradingBot:
             except Exception as e:
                 print(f"[DB] Exit monitor error: {e}")
 
+    async def _get_discovery_risk_multiplier(
+        self,
+        symbol: str,
+        strategy_type: str,
+        backtest_win_rate: float | None,
+    ) -> tuple[float, str]:
+        """
+        Returns (position_size_multiplier, log_reason) for a discovery strategy.
+        Ramps from 25% → 50% → 100% of SWING_EQUITY_RISK_PERCENT based on
+        live trade count and win-rate parity with the backtest result.
+        """
+        if not self._db_engine:
+            return 0.25, "no DB — safe default 25%"
+
+        signal_type = f"discovery_{strategy_type}"
+        try:
+            with self._db_engine.connect() as conn:
+                row = conn.execute(sql_text("""
+                    SELECT COUNT(*) AS total,
+                           COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::float
+                               / NULLIF(COUNT(*), 0) AS live_win_rate
+                    FROM signal_outcomes
+                    WHERE signal_type = :st
+                      AND exit_time IS NOT NULL
+                      AND pnl_pct IS NOT NULL
+                """), {"st": signal_type}).mappings().fetchone()
+
+            trade_count   = int(row["total"]) if row else 0
+            live_win_rate = float(row["live_win_rate"]) if (row and row["live_win_rate"] is not None) else None
+
+            if trade_count < 50:
+                return 0.25, f"{trade_count}/50 trades — using 25% position size"
+
+            if trade_count < 100:
+                return 0.50, f"{trade_count}/100 trades — using 50% position size"
+
+            # ≥100 trades: full size only if win rate is within 15% of backtest
+            if backtest_win_rate is not None and live_win_rate is not None:
+                diff = abs(live_win_rate - backtest_win_rate)
+                if diff <= 0.15:
+                    return 1.00, (
+                        f"{trade_count} trades — live win rate {live_win_rate:.1%} "
+                        f"within 15% of backtest {backtest_win_rate:.1%} — using 100% position size"
+                    )
+                else:
+                    return 0.50, (
+                        f"{trade_count} trades — live win rate {live_win_rate:.1%} "
+                        f"diverged from backtest {backtest_win_rate:.1%} — staying at 50% position size"
+                    )
+
+            return 1.00, f"{trade_count} trades — using 100% position size (no backtest win rate to compare)"
+
+        except Exception as e:
+            print(f"[Swing] Discovery risk multiplier query failed: {e}")
+            return 0.25, f"DB error — safe default 25%"
+
+    async def _calculate_strategy_ev(self) -> dict[str, float]:
+        """
+        Computes EV = (win_rate × avg_win_pct) − (loss_rate × avg_loss_pct)
+        per signal_type for strategies with ≥ 20 closed trades.
+        Fires a #trading-alerts warning if EV turns negative (once per day per strategy).
+        Resets alert set daily so recovery → negative cycles re-alert.
+        """
+        if not self._db_engine:
+            return {}
+        try:
+            with self._db_engine.connect() as conn:
+                rows = conn.execute(sql_text("""
+                    SELECT signal_type,
+                           COUNT(*) AS total,
+                           AVG(CASE WHEN pnl_pct > 0  THEN pnl_pct       ELSE NULL END) AS avg_win,
+                           AVG(CASE WHEN pnl_pct <= 0 THEN ABS(pnl_pct)  ELSE NULL END) AS avg_loss,
+                           COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::float
+                               / COUNT(*) AS win_rate
+                    FROM signal_outcomes
+                    WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                    GROUP BY signal_type
+                    HAVING COUNT(*) >= 20
+                """)).mappings().fetchall()
+
+            ev_map: dict[str, float] = {}
+            for row in rows:
+                wr       = float(row["win_rate"]  or 0)
+                avg_win  = float(row["avg_win"]   or 0)
+                avg_loss = float(row["avg_loss"]  or 0)
+                ev       = round((wr * avg_win) - ((1.0 - wr) * avg_loss), 4)
+                ev_map[row["signal_type"]] = ev
+
+                if ev < 0 and row["signal_type"] not in self._alerted_negative_ev:
+                    self._alerted_negative_ev.add(row["signal_type"])
+                    asyncio.create_task(notifications.notify_alert(
+                        f"Strategy EV negative: {row['signal_type']} "
+                        f"EV = {ev:.2f}% over {row['total']} trades. Consider disabling.",
+                        level="WARNING",
+                    ))
+                    print(
+                        f"[EV] ALERT — {row['signal_type']}: EV={ev:.2f}% "
+                        f"(wr={wr:.1%} avg_win={avg_win:.2f}% avg_loss={avg_loss:.2f}%)"
+                    )
+                else:
+                    print(
+                        f"[EV] {row['signal_type']}: EV={ev:.2f}% "
+                        f"(wr={wr:.1%} avg_win={avg_win:.2f}% avg_loss={avg_loss:.2f}% "
+                        f"n={row['total']})"
+                    )
+
+            return ev_map
+
+        except Exception as e:
+            print(f"[EV] Calculation failed: {e}")
+            return {}
+
     async def swing_loop(self):
         print(f"📈 Starting Stock Swing Bot for {Config.SWING_SYMBOLS} (10:30 AM EST Polling)...")
         # Symbols with no statistically validated edge — evaluated but flagged in logs
@@ -756,8 +886,11 @@ class TradingBot:
                     print(f"[Swing] {symbol}: no strategy configured, skipping")
                     continue
 
-                # Check for an approved discovery strategy; upgrade if ema_trend found
-                discovery = apply_to_swing_strategy(symbol, spy_bars)
+                # Check for an approved discovery strategy; upgrade if ema_trend found.
+                # Hardcoded strategies always use 100% size — no change to existing behavior.
+                discovery  = apply_to_swing_strategy(symbol, spy_bars)
+                risk_to_use = Config.SWING_EQUITY_RISK_PERCENT
+
                 if discovery is not None:
                     s_type, s_params = discovery
                     if s_type == "ema_trend":
@@ -770,15 +903,39 @@ class TradingBot:
                             rsi_entry_low=rsi_gate[0],
                             rsi_entry_high=rsi_gate[1],
                         )
-                        print(f"[Swing] {symbol}: using Discovery-approved {s_type} strategy")
+                        # Attribute used by _process_symbol to tag signal_outcomes rows
+                        upgraded.discovery_strategy_type = s_type
                         strategy = upgraded
+
+                        # Fetch backtest win_rate for this approved combo
+                        backtest_win_rate = None
+                        if self._db_engine:
+                            try:
+                                with self._db_engine.connect() as conn:
+                                    bwr = conn.execute(sql_text("""
+                                        SELECT win_rate FROM discovery_results
+                                        WHERE symbol = :sym
+                                          AND strategy_type = :st
+                                          AND status = 'approved'
+                                        ORDER BY test_sharpe DESC NULLS LAST
+                                        LIMIT 1
+                                    """), {"sym": symbol, "st": s_type}).scalar()
+                                backtest_win_rate = float(bwr) if bwr is not None else None
+                            except Exception:
+                                pass
+
+                        disc_mult, disc_reason = await self._get_discovery_risk_multiplier(
+                            symbol, s_type, backtest_win_rate
+                        )
+                        risk_to_use = Config.SWING_EQUITY_RISK_PERCENT * disc_mult
+                        print(f"[Swing] {symbol} Discovery[{s_type}]: {disc_reason}")
 
                 print(f"Evaluating {symbol} for swing signals [{strategy.name}]")
                 await self._process_symbol(
                     symbol,
                     [strategy],
                     is_crypto=False,
-                    risk_percent=Config.SWING_EQUITY_RISK_PERCENT,
+                    risk_percent=risk_to_use,
                     stop_loss_percent=Config.STOP_LOSS_PERCENT,
                     pre_execute_hook=self._swing_pre_trade_hook,
                 )

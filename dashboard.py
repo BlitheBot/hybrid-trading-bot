@@ -448,6 +448,46 @@ def fetch_strategy_results(validated_only: bool):
             return None
 
 
+@st.cache_data(ttl=300)
+def fetch_strategy_ev():
+    """
+    Returns EV = (win_rate × avg_win_pct) − (loss_rate × avg_loss_pct)
+    per signal_type for strategies with ≥ 20 closed trades.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        query_str = """
+            SELECT signal_type,
+                   COUNT(*) AS trades,
+                   ROUND(
+                       100.0 * COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::numeric / COUNT(*),
+                       1
+                   ) AS win_rate_pct,
+                   ROUND(AVG(CASE WHEN pnl_pct > 0  THEN pnl_pct      ELSE NULL END)::numeric, 2)
+                       AS avg_win_pct,
+                   ROUND(AVG(CASE WHEN pnl_pct <= 0 THEN ABS(pnl_pct) ELSE NULL END)::numeric, 2)
+                       AS avg_loss_pct
+            FROM signal_outcomes
+            WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+            GROUP BY signal_type
+            HAVING COUNT(*) >= 20
+            ORDER BY signal_type
+        """
+        with engine.connect() as conn:
+            df = pd.read_sql(text(query_str), conn)
+        if df.empty:
+            return df
+        wr = df["win_rate_pct"] / 100.0
+        lr = 1.0 - wr
+        df["ev_pct"] = ((wr * df["avg_win_pct"]) - (lr * df["avg_loss_pct"])).round(3)
+        return df
+    except Exception as e:
+        st.error(f"EV query failed: {e}")
+        return None
+
+
 @st.cache_data(ttl=60)
 def fetch_daily_pnl():
     engine = _get_engine()
@@ -1061,3 +1101,36 @@ with tab_analytics:
             st.dataframe(styled_wr, width="stretch", hide_index=True)
         else:
             st.info("No closed trades yet — win rate will populate once positions close.")
+
+        st.markdown("---")
+
+        # ── Expected Value by Strategy ─────────────────────────────────────────
+        st.subheader("Expected Value by Strategy")
+        st.caption(
+            "EV = (win_rate × avg_win%) − (loss_rate × avg_loss%). "
+            "Positive EV = edge exists. Negative EV = strategy losing money on average. "
+            "Requires ≥ 20 closed trades."
+        )
+        df_ev = fetch_strategy_ev()
+
+        if df_ev is None:
+            st.warning("Could not load EV data.")
+        elif df_ev.empty:
+            st.info("Not enough closed trades yet (≥ 20 required per strategy).")
+        else:
+            def _ev_color(val):
+                if not isinstance(val, (int, float)):
+                    return ""
+                return "color: #00c851" if val > 0 else "color: #ff4444"
+
+            styled_ev = (
+                df_ev.style
+                .map(_ev_color, subset=["ev_pct"])
+                .format({
+                    "win_rate_pct": "{:.1f}%",
+                    "avg_win_pct":  "{:+.2f}%",
+                    "avg_loss_pct": "{:.2f}%",
+                    "ev_pct":       "{:+.3f}%",
+                }, na_rep="—")
+            )
+            st.dataframe(styled_ev, use_container_width=True, hide_index=True)
