@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import asyncio
 import threading
@@ -34,6 +35,7 @@ from strategies.truth_social_strategy import TruthSocialStrategy
 from strategies.sec_edgar_strategy import SECEdgarStrategy
 from strategies.congressional_trading_strategy import CongressionalTradingStrategy
 from strategies.fred_strategy import FREDStrategy, get_conviction_multiplier, MACRO_SNAPSHOT
+from discovery.regime_adapter import apply_to_swing_strategy
 from utils import get_historical_bars, get_finnhub_price
 
 # ── Flask Health Endpoint ────────────────────────────────────────────
@@ -739,13 +741,38 @@ class TradingBot:
 
             await self._check_account_status()
             print(f"📈 Swing evaluation starting at {datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d %I:%M:%S %p')} EST")
+            spy_bars = None
+            try:
+                spy_bars = await get_historical_bars("SPY", self.stock_data_client, days=365)
+            except Exception:
+                pass
+
             for symbol in Config.SWING_SYMBOLS:
                 if symbol in _no_edge:
                     print(f"[Swing] {symbol}: no statistically validated edge (p>0.05 across all 243 discovery combos) — monitoring only")
+
                 strategy = self.swing_symbol_strategies.get(symbol)
                 if strategy is None:
                     print(f"[Swing] {symbol}: no strategy configured, skipping")
                     continue
+
+                # Check for an approved discovery strategy; upgrade if ema_trend found
+                discovery = apply_to_swing_strategy(symbol, spy_bars)
+                if discovery is not None:
+                    s_type, s_params = discovery
+                    if s_type == "ema_trend":
+                        rsi_gate = s_params.get("rsi_gate", [40, 60])
+                        upgraded = SwingStrategy(
+                            f"{symbol} Discovery[{s_type}]",
+                            ema_short=s_params.get("ema_short", strategy.ema_short),
+                            ema_long=s_params.get("ema_long",  strategy.ema_long),
+                            rsi_period=s_params.get("rsi_period", strategy.rsi_period),
+                            rsi_entry_low=rsi_gate[0],
+                            rsi_entry_high=rsi_gate[1],
+                        )
+                        print(f"[Swing] {symbol}: using Discovery-approved {s_type} strategy")
+                        strategy = upgraded
+
                 print(f"Evaluating {symbol} for swing signals [{strategy.name}]")
                 await self._process_symbol(
                     symbol,
@@ -1251,6 +1278,70 @@ class TradingBot:
             watchlist = ", ".join(Config.SWING_SYMBOLS)
             asyncio.create_task(notifications.notify_market_open(equity, watchlist, regime))
 
+    async def discovery_loop(self):
+        """
+        Loop 13 — fires every Friday at 4:30 PM EST (30 min after market close).
+        Runs discovery_engine_v2 as a subprocess so CPU-intensive work never blocks trading.
+        Sends hourly progress pings and a completion report via Slack.
+        """
+        est = pytz.timezone('America/New_York')
+        print("[Discovery] Discovery loop started — fires every Friday at 4:30 PM EST")
+        while True:
+            now = datetime.now(est)
+            days_until_friday = (4 - now.weekday()) % 7
+            target = now.replace(hour=16, minute=30, second=0, microsecond=0)
+            if days_until_friday > 0:
+                target += timedelta(days=days_until_friday)
+            elif now >= target:
+                target += timedelta(days=7)
+
+            await asyncio.sleep((target - now).total_seconds())
+
+            print("[Discovery] Starting Discovery Engine v2 subprocess")
+            asyncio.create_task(notifications.notify_alert(
+                ":mag: Discovery Engine v2 starting — weekly backtest run. "
+                "Results will arrive in #trading-decisions when complete (~2h).",
+                level="INFO",
+            ))
+
+            try:
+                start_time = asyncio.get_event_loop().time()
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "-m", "discovery.discovery_engine_v2",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+
+                last_progress = asyncio.get_event_loop().time()
+
+                async def _drain():
+                    async for line in proc.stdout:
+                        print(f"[Discovery] {line.decode('utf-8', errors='replace').rstrip()}")
+
+                drain_task = asyncio.create_task(_drain())
+
+                while not drain_task.done():
+                    await asyncio.sleep(60)
+                    now_t = asyncio.get_event_loop().time()
+                    if now_t - last_progress >= 3600:
+                        elapsed_min = int((now_t - start_time) / 60)
+                        asyncio.create_task(notifications.notify_discovery_progress(elapsed_min))
+                        last_progress = now_t
+
+                await drain_task
+                returncode = await proc.wait()
+                if returncode != 0:
+                    asyncio.create_task(notifications.notify_alert(
+                        f":x: Discovery Engine v2 subprocess exited with code {returncode}",
+                        level="ERROR",
+                    ))
+
+            except Exception as e:
+                print(f"[Discovery] Subprocess error: {e}")
+                asyncio.create_task(notifications.notify_alert(
+                    f":x: Discovery loop error: {e}", level="ERROR"
+                ))
+
     async def start_dual_engine(self):
         print("🚀 Hybrid Trading Bot starting...")
 
@@ -1309,6 +1400,7 @@ class TradingBot:
             self.trailing_stop_monitor_loop(),
             self._exit_monitor_loop(),
             self.market_open_notification_loop(),
+            self.discovery_loop(),
         )
 
 if __name__ == "__main__":

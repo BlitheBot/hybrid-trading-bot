@@ -393,29 +393,59 @@ def fetch_signal_outcomes(start_dt: datetime, end_dt: datetime, symbols: tuple):
 
 @st.cache_data(ttl=300)
 def fetch_strategy_results(validated_only: bool):
+    """
+    Queries discovery_results (v2 engine) with fallback to legacy strategy_results.
+    validated_only filters to status IN ('approved', 'pending_approval') for v2
+    or status = 'validated' for the legacy table.
+    """
     engine = _get_engine()
     if engine is None:
         return None
     try:
-        where = "WHERE status = 'validated'" if validated_only else ""
+        # Try v2 table first
+        where = "WHERE status IN ('approved', 'pending_approval')" if validated_only else ""
         query_str = f"""
-            SELECT symbol, ema_short, ema_long, rsi_period,
-                   rsi_entry_low, rsi_entry_high,
-                   ROUND(train_sharpe::numeric, 3)  AS train_sharpe,
-                   ROUND(test_sharpe::numeric,  3)  AS test_sharpe,
-                   ROUND(degradation::numeric,  3)  AS degradation,
-                   ROUND(p_value::numeric,      4)  AS p_value,
-                   total_test_trades, status,
-                   discovered_at::date              AS date
-            FROM strategy_results
+            SELECT symbol, strategy_type,
+                   parameters::text                  AS parameters,
+                   ROUND(train_sharpe::numeric, 3)   AS train_sharpe,
+                   ROUND(test_sharpe::numeric,  3)   AS test_sharpe,
+                   ROUND(degradation::numeric,  3)   AS degradation,
+                   ROUND(p_value::numeric,      4)   AS p_value,
+                   total_trades, win_rate,
+                   best_regime, status,
+                   discovered_at::date               AS date
+            FROM discovery_results
             {where}
             ORDER BY test_sharpe DESC NULLS LAST
         """
         with engine.connect() as conn:
             return pd.read_sql(text(query_str), conn)
-    except Exception as e:
-        st.error(f"Discovery query failed: {e}")
-        return None
+    except Exception:
+        # Fallback to v1 strategy_results if discovery_results doesn't exist yet
+        try:
+            where_v1 = "WHERE status = 'validated'" if validated_only else ""
+            query_v1 = f"""
+                SELECT symbol,
+                       'ema_trend'                       AS strategy_type,
+                       NULL::text                        AS parameters,
+                       ROUND(train_sharpe::numeric, 3)   AS train_sharpe,
+                       ROUND(test_sharpe::numeric,  3)   AS test_sharpe,
+                       ROUND(degradation::numeric,  3)   AS degradation,
+                       ROUND(p_value::numeric,      4)   AS p_value,
+                       total_test_trades                 AS total_trades,
+                       NULL::float                       AS win_rate,
+                       NULL::text                        AS best_regime,
+                       status,
+                       discovered_at::date               AS date
+                FROM strategy_results
+                {where_v1}
+                ORDER BY test_sharpe DESC NULLS LAST
+            """
+            with engine.connect() as conn:
+                return pd.read_sql(text(query_v1), conn)
+        except Exception as e:
+            st.error(f"Discovery query failed: {e}")
+            return None
 
 
 @st.cache_data(ttl=60)
@@ -852,52 +882,71 @@ with tab_discovery:
     if not _db_available():
         st.info(
             "DATABASE_URL is not configured. "
-            "Run `python -m discovery.discovery_engine` and connect PostgreSQL to see results."
+            "Run `python -m discovery.discovery_engine_v2` and connect PostgreSQL to see results."
         )
     else:
-        validated_only = st.toggle("Validated only", value=True, key="disc_toggle")
+        validated_only = st.toggle("Validated / pending approval only", value=True, key="disc_toggle")
         df_disc = fetch_strategy_results(validated_only=validated_only)
 
         if df_disc is None:
             st.warning("Could not load discovery data.")
         elif df_disc.empty:
-            st.info("No results yet. Run:\n```\npython -m discovery.discovery_engine\n```")
-        else:
-            st.subheader("Summary by Symbol")
-            summary = (
-                df_disc.groupby("symbol")
-                .agg(
-                    validated=("status", lambda x: (x == "validated").sum()),
-                    total=("status", "count"),
-                    best_test_sharpe=("test_sharpe", "max"),
-                    avg_test_sharpe=("test_sharpe", "mean"),
-                )
-                .reset_index()
+            st.info(
+                "No results yet. Run:\n```\npython -m discovery.discovery_engine_v2\n```"
             )
-            summary["validated %"] = (summary["validated"] / summary["total"] * 100).round(1)
+        else:
+            # Approval status banner
+            pending_count = int((df_disc["status"] == "pending_approval").sum()) if "status" in df_disc.columns else 0
+            approved_count = int((df_disc["status"] == "approved").sum()) if "status" in df_disc.columns else 0
+            if pending_count > 0:
+                st.warning(
+                    f":hourglass_flowing_sand: **{pending_count} strategies awaiting approval.** "
+                    f"Approve via: `UPDATE discovery_results SET status='approved' WHERE id=<id>;`"
+                )
+            if approved_count > 0:
+                st.success(f":white_check_mark: {approved_count} strategies approved and active in swing_loop.")
+
+            st.subheader("Summary by Symbol")
+            agg_cols: dict = {
+                "total":          ("status",     "count"),
+                "best_sharpe":    ("test_sharpe", "max"),
+                "avg_sharpe":     ("test_sharpe", "mean"),
+            }
+            if "strategy_type" in df_disc.columns:
+                summary_groups = df_disc.groupby("symbol").agg(**agg_cols).reset_index()
+            else:
+                summary_groups = df_disc.groupby("symbol").agg(**agg_cols).reset_index()
+
             st.dataframe(
-                summary.style.format({
-                    "best_test_sharpe": "{:.3f}",
-                    "avg_test_sharpe":  "{:.3f}",
-                    "validated %":      "{:.1f}%",
+                summary_groups.style.format({
+                    "best_sharpe": "{:.3f}",
+                    "avg_sharpe":  "{:.3f}",
                 }),
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
-            st.subheader("All Combos — Ranked by Test Sharpe")
+            st.subheader("All Results — Ranked by Test Sharpe")
+            display_cols = [c for c in [
+                "symbol", "strategy_type", "best_regime", "status",
+                "test_sharpe", "train_sharpe", "degradation", "win_rate",
+                "total_trades", "p_value", "date",
+            ] if c in df_disc.columns]
+
+            fmt = {
+                "train_sharpe": "{:.3f}",
+                "test_sharpe":  "{:.3f}",
+                "degradation":  "{:.3f}",
+                "win_rate":     "{:.1%}",
+                "p_value":      "{:.4f}",
+            }
             styled_disc = (
-                df_disc.style
+                df_disc[display_cols].style
                 .map(_status_color, subset=["status"])
                 .map(_pnl_color,    subset=["test_sharpe", "train_sharpe"])
-                .format({
-                    "train_sharpe": "{:.3f}",
-                    "test_sharpe":  "{:.3f}",
-                    "degradation":  "{:.3f}",
-                    "p_value":      "{:.4f}",
-                }, na_rep="—")
+                .format({k: v for k, v in fmt.items() if k in display_cols}, na_rep="—")
             )
-            st.dataframe(styled_disc, width="stretch", hide_index=True)
+            st.dataframe(styled_disc, use_container_width=True, hide_index=True)
 
 # ── Tab 5: Analytics ───────────────────────────────────────────────────────────
 

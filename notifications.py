@@ -370,6 +370,20 @@ async def notify_market_open(equity: float, watchlist: str, regime: str):
     }
     await _post_to_slack(Config.SLACK_ALERTS_WEBHOOK, payload)
 
+async def notify_discovery_progress(elapsed_min: int):
+    """Sends an hourly progress ping while Discovery Engine v2 subprocess is running."""
+    payload = {
+        "text": f":mag: *Discovery Engine v2 running* — {elapsed_min}m elapsed. Full report on completion."
+    }
+    await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
+
+
+async def notify_discovery_report(report_text: str):
+    """Sends the Discovery Engine v2 completion brief to #trading-decisions."""
+    payload = {"text": report_text}
+    await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
+
+
 async def notify_truth_social_trade(ticker, post_text, direction, entry_price, position_size):
     """Sends a Truth Social-triggered trade execution to #trading-alerts."""
     payload = {
