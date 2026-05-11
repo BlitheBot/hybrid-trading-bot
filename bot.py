@@ -355,7 +355,8 @@ class TradingBot:
 
             cal    = await asyncio.to_thread(_fetch_calendar)
             events = cal.get("earningsCalendar", [])
-            if events:
+            # When EARNINGS_FILTER_ENABLED the earnings_filter layer handles this — don't double-block
+            if events and not Config.EARNINGS_FILTER_ENABLED:
                 report_date = events[0].get("date", "within 48h")
                 return False, f"Earnings report {report_date} — avoid pre-earnings volatility"
 
@@ -364,6 +365,42 @@ class TradingBot:
         except Exception as e:
             print(f"[Fundamentals] {symbol} check failed ({e}) — proceeding without")
             return True, None
+
+    # ── Earnings calendar helper ──────────────────────────────────────────────
+
+    async def _check_upcoming_earnings(
+        self, symbol: str, days_ahead: int = 2
+    ) -> tuple[bool, str | None]:
+        """
+        Returns (has_earnings, report_date_str) if symbol has a scheduled earnings
+        event within the next days_ahead calendar days (inclusive), else (False, None).
+        Silently returns (False, None) if FINNHUB_API_KEY is unset or the request fails.
+        """
+        api_key = Config.FINNHUB_API_KEY
+        if not api_key:
+            return False, None
+        est   = pytz.timezone("America/New_York")
+        today = datetime.now(est).date()
+        try:
+            def _fetch():
+                return _requests.get(
+                    "https://finnhub.io/api/v1/calendar/earnings",
+                    params={
+                        "from":   str(today),
+                        "to":     str(today + timedelta(days=days_ahead)),
+                        "symbol": symbol,
+                        "token":  api_key,
+                    },
+                    timeout=10,
+                ).json()
+            cal    = await asyncio.to_thread(_fetch)
+            events = cal.get("earningsCalendar", [])
+            if events:
+                return True, events[0].get("date", "unknown")
+            return False, None
+        except Exception as e:
+            print(f"[Earnings] Calendar check failed for {symbol}: {e}")
+            return False, None
 
     # ── Bull/Bear debate (Task 2) ─────────────────────────────────────────────
 
@@ -411,7 +448,18 @@ class TradingBot:
     # ── Pre-trade hook: fundamentals → debate (Tasks 2 & 3) ──────────────────
 
     async def _swing_pre_trade_hook(self, symbol: str, signal: dict, strategy) -> tuple[bool, str]:
-        # Task 3 — Fundamentals check
+        # Earnings filter — reduce position size to 25% if earnings within 48h
+        if Config.EARNINGS_FILTER_ENABLED:
+            has_earnings, report_date = await self._check_upcoming_earnings(symbol, days_ahead=2)
+            if has_earnings:
+                strategy.earnings_override_multiplier = 0.25
+                strategy.earnings_size_note = (
+                    f"⚠️ Earnings within 48hrs for {symbol} "
+                    f"(report: {report_date}) — reducing position size to 25%"
+                )
+                print(f"[Earnings] {strategy.earnings_size_note}")
+
+        # Fundamentals check
         proceed, reason = await self._check_fundamentals(symbol)
         if not proceed:
             print(f"[Fundamentals] Blocking {symbol}: {reason}")
@@ -513,14 +561,19 @@ class TradingBot:
                         del self.active_signals[signal_key]
 
                 print(f"Signal generated: {signal}")
+                _notes = [n for n in [
+                    getattr(strategy, 'discovery_size_note', None),
+                    getattr(strategy, 'earnings_size_note', None),
+                ] if n]
                 asyncio.create_task(notifications.notify_trade_decision(
                     symbol, strategy.name, signal,
-                    discovery_note=getattr(strategy, 'discovery_size_note', None),
+                    discovery_note="\n".join(_notes) if _notes else None,
                 ))
 
                 entry_time = datetime.now(pytz.utc)
                 try:
-                    scaled_risk_percent = risk_percent * self.risk_multiplier
+                    earnings_mult = getattr(strategy, 'earnings_override_multiplier', 1.0)
+                    scaled_risk_percent = risk_percent * self.risk_multiplier * earnings_mult
                     strategy.execute_trade(
                         signal,
                         self.trading_client,
@@ -1046,6 +1099,19 @@ class TradingBot:
                                 "New discovery strategy — using 25% position size "
                                 "for first 50 trades as validation period."
                             )
+
+                # Skip new entries entirely if earnings today or tomorrow
+                if Config.EARNINGS_FILTER_ENABLED:
+                    has_earnings_soon, report_date_soon = await self._check_upcoming_earnings(
+                        symbol, days_ahead=1
+                    )
+                    if has_earnings_soon:
+                        skip_msg = f"Earnings on {report_date_soon} — skipping new entries (earnings filter)"
+                        print(f"[Earnings] {symbol}: {skip_msg}")
+                        asyncio.create_task(notifications.notify_trade_skipped(
+                            symbol, strategy.name, skip_msg
+                        ))
+                        continue
 
                 print(f"Evaluating {symbol} for swing signals [{strategy.name}]")
                 await self._process_symbol(
