@@ -560,10 +560,40 @@ class TradingBot:
                         # Cooldown expired, remove from active signals
                         del self.active_signals[signal_key]
 
+                # VIX spike protection
+                vix = MACRO_SNAPSHOT.get("vix") or 0
+                if vix > Config.VIX_EXTREME_THRESHOLD:
+                    block_msg = (
+                        f"VIX {vix:.1f} exceeds extreme threshold "
+                        f"({Config.VIX_EXTREME_THRESHOLD}) — trade blocked"
+                    )
+                    print(f"[VIX] {symbol}: {block_msg}")
+                    asyncio.create_task(notifications.notify_alert(
+                        f"VIX spike: {symbol} {strategy.name} trade BLOCKED — "
+                        f"VIX={vix:.1f} > {Config.VIX_EXTREME_THRESHOLD}. "
+                        f"All new trades suppressed until VIX normalises.",
+                        level="CRITICAL",
+                    ))
+                    asyncio.create_task(notifications.notify_trade_skipped(
+                        symbol, strategy.name, block_msg
+                    ))
+                    continue
+
+                vix_risk_mult = 1.0
+                vix_note = None
+                if vix > Config.VIX_SPIKE_THRESHOLD:
+                    vix_risk_mult = 0.25
+                    vix_note = (
+                        f"⚠️ VIX spike ({vix:.1f} > {Config.VIX_SPIKE_THRESHOLD}) "
+                        f"— position size reduced to 25%"
+                    )
+                    print(f"[VIX] {symbol}: {vix_note}")
+
                 print(f"Signal generated: {signal}")
                 _notes = [n for n in [
                     getattr(strategy, 'discovery_size_note', None),
                     getattr(strategy, 'earnings_size_note', None),
+                    vix_note,
                 ] if n]
                 asyncio.create_task(notifications.notify_trade_decision(
                     symbol, strategy.name, signal,
@@ -573,7 +603,7 @@ class TradingBot:
                 entry_time = datetime.now(pytz.utc)
                 try:
                     earnings_mult = getattr(strategy, 'earnings_override_multiplier', 1.0)
-                    scaled_risk_percent = risk_percent * self.risk_multiplier * earnings_mult
+                    scaled_risk_percent = risk_percent * self.risk_multiplier * earnings_mult * vix_risk_mult
                     strategy.execute_trade(
                         signal,
                         self.trading_client,
