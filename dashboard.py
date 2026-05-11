@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 from datetime import datetime, timedelta
 
@@ -12,6 +14,8 @@ from sqlalchemy import create_engine, text
 os.environ.pop("ALPACA_OAUTH_TOKEN", None)
 os.environ.pop("GITHUB_TOKEN", None)
 
+from alpaca.data.historical import CryptoHistoricalDataClient, StockHistoricalDataClient
+from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.trading.client import TradingClient
 
 from config import Config
@@ -25,51 +29,239 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
+# ── CSS theme — dark trading terminal ─────────────────────────────────────────
 
-st.sidebar.title("📈 Hybrid Trading Bot")
-mode_label = "🟡 Paper Trading" if Config.PAPER_TRADING else "🔴 Live Trading"
-st.sidebar.markdown(f"**Mode:** {mode_label}")
-st.sidebar.markdown("---")
+st.markdown("""
+<style>
+/* ── Base ──────────────────────────────────────── */
+.stApp { background-color: #0d1117; color: #e6edf3; }
+.main .block-container {
+    background-color: #0d1117;
+    padding-top: 1.25rem;
+    max-width: 100%;
+}
 
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
+/* ── Sidebar ────────────────────────────────────── */
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] > div:first-child {
+    background-color: #0d1117 !important;
+    border-right: 1px solid #30363d;
+}
 
-now_est = datetime.now(pytz.timezone("America/New_York"))
-st.sidebar.caption(f"Data cached 60s. Refreshed {now_est.strftime('%I:%M:%S %p EST')}")
+/* ── Headers / text ─────────────────────────────── */
+h1, h2, h3, h4 { color: #e6edf3 !important; font-weight: 700 !important; }
+p, li, label, .stMarkdown p { color: #c9d1d9; }
+.stCaption { color: #484f58 !important; font-size: 11px !important; }
 
-st.sidebar.markdown("---")
+/* ── Metric cards (custom HTML) ─────────────────── */
+.metric-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 14px 16px 16px 16px;
+    margin-bottom: 8px;
+    min-height: 78px;
+}
+.card-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #484f58;
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    margin-bottom: 8px;
+}
+.card-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: #e6edf3;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+}
+.card-value.positive { color: #00c851; }
+.card-value.negative { color: #ff4444; }
+.card-value.neutral  { color: #7d8590; }
 
-# Bot health — pings Flask /health on port 8502 (internal, same Railway instance)
-@st.cache_data(ttl=30)
-def _bot_health():
+/* ── Status dots ────────────────────────────────── */
+.status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 13px;
+    color: #c9d1d9;
+    line-height: 1.5;
+}
+.status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.dot-green  { background: #00c851; box-shadow: 0 0 5px #00c85155; }
+.dot-red    { background: #ff4444; }
+.dot-yellow { background: #f0a500; }
+.status-detail { color: #484f58; font-size: 11px; }
+
+/* ── Sidebar section labels ─────────────────────── */
+.sidebar-section {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #484f58;
+    margin: 18px 0 8px 0;
+    padding-top: 14px;
+    border-top: 1px solid #21262d;
+}
+
+/* ── FRED macro rows ─────────────────────────────── */
+.macro-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid #21262d44;
+}
+.macro-label { color: #7d8590; font-size: 12px; }
+.macro-value {
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 13px;
+    font-weight: 600;
+}
+.macro-ok      { color: #00c851; }
+.macro-warn    { color: #f0a500; }
+.macro-danger  { color: #ff4444; }
+.macro-neutral { color: #c9d1d9; }
+
+/* ── Price ticker rows ──────────────────────────── */
+.price-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid #21262d;
+}
+.price-sym { color: #7d8590; font-size: 12px; font-weight: 600; }
+.price-val {
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    font-size: 13px;
+    color: #e6edf3;
+    font-weight: 500;
+}
+
+/* ── Tabs ───────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+    background: transparent;
+    border-bottom: 1px solid #30363d;
+    gap: 0;
+}
+.stTabs [data-baseweb="tab"] {
+    background: transparent;
+    color: #7d8590;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    border-bottom: 2px solid transparent;
+}
+.stTabs [data-baseweb="tab"]:hover { color: #c9d1d9; }
+.stTabs [aria-selected="true"] {
+    color: #00c851 !important;
+    border-bottom: 2px solid #00c851 !important;
+    background: transparent !important;
+}
+.stTabs [data-baseweb="tab-panel"] { padding-top: 1.25rem; }
+
+/* ── Buttons ────────────────────────────────────── */
+.stButton > button, .stDownloadButton > button {
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #c9d1d9;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    transition: border-color 0.15s, color 0.15s;
+}
+.stButton > button:hover, .stDownloadButton > button:hover {
+    background: #161b22;
+    border-color: #00c851;
+    color: #00c851;
+}
+
+/* ── DataFrames ─────────────────────────────────── */
+.stDataFrame { border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+.ag-root-wrapper { background: #161b22 !important; border: none !important; }
+.ag-header { background: #161b22 !important; border-bottom: 1px solid #30363d !important; }
+.ag-header-cell-label {
+    color: #7d8590 !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+}
+.ag-row { background: #0d1117 !important; color: #c9d1d9 !important; border-color: #21262d !important; }
+.ag-row-even { background: #161b22 !important; }
+.ag-row:hover { background: #1c2128 !important; }
+.ag-cell { border: none !important; }
+
+/* ── Dividers ───────────────────────────────────── */
+hr { border-color: #30363d !important; opacity: 1 !important; }
+
+/* ── Selectbox / multiselect / date ─────────────── */
+.stMultiSelect [data-baseweb="select"] > div,
+.stDateInput > div > div,
+.stSelectbox > div > div {
+    background-color: #161b22 !important;
+    border-color: #30363d !important;
+    color: #e6edf3 !important;
+}
+
+/* ── Toggle ─────────────────────────────────────── */
+.stCheckbox label, [data-testid="stCheckbox"] label { color: #c9d1d9 !important; }
+
+/* ── Alerts ─────────────────────────────────────── */
+[data-testid="stAlert"] { background: #161b22 !important; border-color: #30363d !important; }
+
+/* ── Scrollbar ──────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #0d1117; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #484f58; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Pure helpers ───────────────────────────────────────────────────────────────
+
+def _metric_card(label: str, value: str, value_class: str = "") -> str:
+    return (
+        f'<div class="metric-card">'
+        f'<div class="card-label">{label}</div>'
+        f'<div class="card-value {value_class}">{value}</div>'
+        f'</div>'
+    )
+
+def _status_row(label: str, ok: bool | None, detail: str = "") -> str:
+    dot = "dot-green" if ok else ("dot-yellow" if ok is None else "dot-red")
+    detail_html = f'<span class="status-detail">{detail}</span>' if detail else ""
+    return (
+        f'<div class="status-row">'
+        f'<div class="status-dot {dot}"></div>'
+        f'<span>{label}</span>{detail_html}'
+        f'</div>'
+    )
+
+def _minutes_ago(iso_str) -> int | None:
+    if not iso_str:
+        return None
     try:
-        r = _requests.get("http://localhost:8502/health", timeout=3)
-        if r.status_code == 200:
-            return r.json()
+        dt = datetime.fromisoformat(str(iso_str))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=pytz.utc)
+        return max(0, int((datetime.now(pytz.utc) - dt).total_seconds() / 60))
     except Exception:
-        pass
-    return None
+        return None
 
-_health = _bot_health()
-if _health:
-    uptime_s = int(_health.get("uptime_seconds", 0))
-    h, rem = divmod(uptime_s, 3600)
-    m, s   = divmod(rem, 60)
-    st.sidebar.success(f"🟢 Bot online — {h}h {m}m {s}s uptime")
-else:
-    st.sidebar.error("🔴 Bot offline or unreachable")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Swing Watchlist**")
-for sym in Config.SWING_SYMBOLS:
-    st.sidebar.markdown(f"  - {sym}")
-st.sidebar.markdown("**Crypto Scalp**")
-for sym in Config.SCALP_SYMBOLS:
-    st.sidebar.markdown(f"  - {sym}")
-
-# ── Alpaca client ──────────────────────────────────────────────────────────────
+# ── Alpaca clients ─────────────────────────────────────────────────────────────
 
 @st.cache_resource
 def _get_trading_client():
@@ -88,12 +280,35 @@ def _get_trading_client():
     )
 
 
-trading_client = _get_trading_client()
+@st.cache_resource
+def _get_stock_data_client():
+    if not Config.ALPACA_API_KEY or not Config.ALPACA_SECRET_KEY:
+        return None
+    return StockHistoricalDataClient(
+        api_key=Config.ALPACA_API_KEY,
+        secret_key=Config.ALPACA_SECRET_KEY,
+    )
+
+
+@st.cache_resource
+def _get_crypto_data_client():
+    if not Config.ALPACA_API_KEY or not Config.ALPACA_SECRET_KEY:
+        return None
+    return CryptoHistoricalDataClient(
+        api_key=Config.ALPACA_API_KEY,
+        secret_key=Config.ALPACA_SECRET_KEY,
+    )
+
+
+trading_client     = _get_trading_client()
+stock_data_client  = _get_stock_data_client()
+crypto_data_client = _get_crypto_data_client()
+
 if not trading_client:
     st.error("🔑 ALPACA_API_KEY / ALPACA_SECRET_KEY missing from environment.")
     st.stop()
 
-# ── DB engine (SQLAlchemy — cached for lifetime of the Streamlit process) ──────
+# ── DB engine ──────────────────────────────────────────────────────────────────
 
 @st.cache_resource
 def _get_engine():
@@ -127,7 +342,7 @@ def _pnl_color(val):
 def _status_color(val):
     return "color: #00c851" if val == "validated" else "color: #ff4444"
 
-# ── Data fetchers ──────────────────────────────────────────────────────────────
+# ── Data fetchers — PRESERVED EXACTLY ──────────────────────────────────────────
 
 @st.cache_data(ttl=60)
 def fetch_account():
@@ -251,6 +466,189 @@ def fetch_win_rate():
         st.error(f"Win rate query failed: {e}")
         return None
 
+# ── Sidebar data fetchers ──────────────────────────────────────────────────────
+
+@st.cache_data(ttl=30)
+def _bot_health():
+    try:
+        r = _requests.get("http://localhost:8502/health", timeout=3)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_data(ttl=30)
+def _fetch_prices() -> dict:
+    prices: dict = {}
+
+    # Stock prices — bulk request for all SWING_SYMBOLS
+    if stock_data_client:
+        try:
+            resp = stock_data_client.get_stock_latest_trade(
+                StockLatestTradeRequest(symbol_or_symbols=list(Config.SWING_SYMBOLS))
+            )
+            for sym in Config.SWING_SYMBOLS:
+                if sym in resp:
+                    prices[sym] = float(resp[sym].price)
+        except Exception:
+            pass
+
+    # Crypto prices — per-symbol fallback to handle SDK version differences
+    if crypto_data_client:
+        for sym in ("BTC/USD", "ETH/USD"):
+            try:
+                from alpaca.data.requests import CryptoLatestTradeRequest
+                resp = crypto_data_client.get_crypto_latest_trade(
+                    CryptoLatestTradeRequest(symbol_or_symbols=sym)
+                )
+                if sym in resp:
+                    prices[sym] = float(resp[sym].price)
+            except Exception:
+                pass
+
+    return prices
+
+
+@st.cache_data(ttl=3600)
+def _fetch_fred_sidebar() -> dict:
+    """Fetch VIX, Fed Funds Rate, and 10Y Treasury from FRED public CSV endpoints."""
+    series = {
+        "vix":        "https://fred.stlouisfed.org/graph/fredgraph.csv?id=VIXCLS",
+        "fed_funds":  "https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS",
+        "treasury":   "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10",
+    }
+    headers = {"User-Agent": "HybridTradingBot/1.0 contact@hybridtradingbot.com"}
+    result: dict = {}
+    for key, url in series.items():
+        try:
+            r = _requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                reader = csv.reader(io.StringIO(r.text))
+                next(reader, None)   # skip DATE,VALUE header
+                vals = [
+                    float(row[1].strip())
+                    for row in reader
+                    if len(row) >= 2 and row[1].strip() not in (".", "")
+                ]
+                result[key] = vals[-1] if vals else None
+            else:
+                result[key] = None
+        except Exception:
+            result[key] = None
+    return result
+
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+
+now_est = datetime.now(pytz.timezone("America/New_York"))
+
+# Header
+mode_color = "#f0a500" if Config.PAPER_TRADING else "#ff4444"
+mode_label = "PAPER TRADING" if Config.PAPER_TRADING else "LIVE TRADING"
+st.sidebar.markdown(f"""
+<div style="padding:10px 0 4px 0;">
+  <div style="font-size:16px;font-weight:800;color:#e6edf3;letter-spacing:0.04em;">
+    📈 HYBRID TRADING BOT
+  </div>
+  <div style="margin-top:8px;">
+    <span style="background:{mode_color}1a;color:{mode_color};
+                 border:1px solid {mode_color}44;padding:3px 10px;
+                 border-radius:10px;font-size:10px;font-weight:700;
+                 letter-spacing:0.10em;">{mode_label}</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# Bot status
+st.sidebar.markdown('<div class="sidebar-section">BOT STATUS</div>', unsafe_allow_html=True)
+_health = _bot_health()
+if _health:
+    uptime_s  = int(_health.get("uptime_seconds", 0))
+    h, rem    = divmod(uptime_s, 3600)
+    m, s_     = divmod(rem, 60)
+    news_min  = _minutes_ago(_health.get("last_news_scan"))
+    edgar_min = _minutes_ago(_health.get("last_edgar_scan"))
+    ws_ok     = bool(_health.get("websocket_connected", False))
+    db_ok     = bool(_health.get("db_connected", False))
+    alp_ok    = bool(_health.get("alpaca_connected", False))
+    news_ok   = news_min is not None and news_min < 20
+    edgar_ok  = edgar_min is not None and edgar_min < 45
+    st.sidebar.markdown(
+        _status_row(f"Online — {h}h {m}m {s_}s", True)
+        + _status_row("DB Connected",       db_ok)
+        + _status_row("Alpaca Connected",   alp_ok)
+        + _status_row("WebSocket Live",     ws_ok)
+        + _status_row("News",  news_ok,  f"{news_min}m ago"  if news_min  is not None else "—")
+        + _status_row("EDGAR", edgar_ok, f"{edgar_min}m ago" if edgar_min is not None else "—"),
+        unsafe_allow_html=True,
+    )
+else:
+    st.sidebar.markdown(_status_row("Bot Offline / Unreachable", False), unsafe_allow_html=True)
+
+# FRED macro snapshot
+st.sidebar.markdown('<div class="sidebar-section">MACRO SNAPSHOT</div>', unsafe_allow_html=True)
+fred = _fetch_fred_sidebar()
+vix  = fred.get("vix")
+ff   = fred.get("fed_funds")
+t10  = fred.get("treasury")
+
+def _vix_class(v):
+    if v is None: return "macro-neutral"
+    if v > 30:    return "macro-danger"
+    if v > 20:    return "macro-warn"
+    return "macro-ok"
+
+def _t10_class(v):
+    if v is None: return "macro-neutral"
+    if v > 5.0:   return "macro-danger"
+    if v > 4.5:   return "macro-warn"
+    return "macro-neutral"
+
+macro_rows = [
+    ("VIX",        vix, _vix_class(vix),  f"{vix:.1f}"  if vix is not None else "N/A"),
+    ("Fed Funds",  ff,  "macro-neutral",  f"{ff:.2f}%"  if ff  is not None else "N/A"),
+    ("10Y Yield",  t10, _t10_class(t10),  f"{t10:.2f}%" if t10 is not None else "N/A"),
+]
+macro_html = "".join(
+    f'<div class="macro-row">'
+    f'<span class="macro-label">{lbl}</span>'
+    f'<span class="macro-value {cls}">{disp}</span>'
+    f'</div>'
+    for lbl, _, cls, disp in macro_rows
+)
+st.sidebar.markdown(macro_html, unsafe_allow_html=True)
+
+# Live price ticker
+st.sidebar.markdown('<div class="sidebar-section">LIVE PRICES</div>', unsafe_allow_html=True)
+prices = _fetch_prices()
+ticker_syms = list(Config.SWING_SYMBOLS) + ["BTC/USD", "ETH/USD"]
+price_html = ""
+for sym in ticker_syms:
+    price = prices.get(sym)
+    if price is None:
+        price_str = "N/A"
+    elif price >= 10_000:
+        price_str = f"${price:,.0f}"
+    elif price >= 100:
+        price_str = f"${price:,.2f}"
+    else:
+        price_str = f"${price:.4f}"
+    price_html += (
+        f'<div class="price-row">'
+        f'<span class="price-sym">{sym}</span>'
+        f'<span class="price-val">{price_str}</span>'
+        f'</div>'
+    )
+st.sidebar.markdown(price_html, unsafe_allow_html=True)
+
+# Refresh + timestamp
+st.sidebar.markdown('<div style="height:16px;"></div>', unsafe_allow_html=True)
+if st.sidebar.button("⟳  Refresh Data", key="sidebar_refresh"):
+    st.cache_data.clear()
+    st.rerun()
+st.sidebar.caption(f"Prices 30s · FRED 1h · Refreshed {now_est.strftime('%H:%M:%S EST')}")
+
 # ── Tabs ───────────────────────────────────────────────────────────────────────
 
 tab_account, tab_positions, tab_tradelog, tab_discovery, tab_analytics = st.tabs([
@@ -273,36 +671,54 @@ with tab_account:
         equity       = float(account.equity)
         buying_power = float(account.buying_power)
         cash         = float(account.cash)
+        status_str   = str(account.status).upper()
+        mode_str     = "Paper" if Config.PAPER_TRADING else "Live"
+        status_class = "positive" if status_str == "ACTIVE" else "neutral"
 
         c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Equity",       f"${equity:,.2f}")
-        c2.metric("Buying Power", f"${buying_power:,.2f}")
-        c3.metric("Cash",         f"${cash:,.2f}")
-        c4.metric("Mode",         "Paper" if Config.PAPER_TRADING else "Live")
-        c5.metric("Status",       str(account.status).upper())
+        with c1:
+            st.markdown(_metric_card("Equity",       f"${equity:,.2f}"),         unsafe_allow_html=True)
+        with c2:
+            st.markdown(_metric_card("Buying Power", f"${buying_power:,.2f}"),    unsafe_allow_html=True)
+        with c3:
+            st.markdown(_metric_card("Cash",         f"${cash:,.2f}"),            unsafe_allow_html=True)
+        with c4:
+            st.markdown(_metric_card("Mode",         mode_str),                   unsafe_allow_html=True)
+        with c5:
+            st.markdown(_metric_card("Status",       status_str, status_class),   unsafe_allow_html=True)
 
         positions = fetch_positions()
         if positions:
-            total_mv   = sum(float(p.market_value) for p in positions)
-            total_unrl = sum(float(p.unrealized_pl) for p in positions)
+            total_mv   = sum(float(p.market_value)   for p in positions)
+            total_unrl = sum(float(p.unrealized_pl)  for p in positions)
+            pnl_class  = "positive" if total_unrl >= 0 else "negative"
+            pnl_sign   = "+" if total_unrl >= 0 else ""
+
             st.markdown("---")
             d1, d2, d3 = st.columns(3)
-            d1.metric("Open Positions",     len(positions))
-            d2.metric("Total Market Value", f"${total_mv:,.2f}")
-            d3.metric(
-                "Total Unrealized P&L",
-                f"${total_unrl:+,.2f}",
-                delta=f"${total_unrl:+,.2f}",
-                delta_color="normal",
-            )
+            with d1:
+                st.markdown(_metric_card("Open Positions",   str(len(positions))),                          unsafe_allow_html=True)
+            with d2:
+                st.markdown(_metric_card("Total Market Value", f"${total_mv:,.2f}"),                        unsafe_allow_html=True)
+            with d3:
+                st.markdown(_metric_card("Unrealized P&L", f"{pnl_sign}${total_unrl:,.2f}", pnl_class),    unsafe_allow_html=True)
 
         st.markdown("---")
-        st.markdown("#### Risk Config")
+        st.markdown(
+            '<p style="color:#484f58;font-size:10px;font-weight:700;'
+            'text-transform:uppercase;letter-spacing:0.10em;margin-bottom:12px;">'
+            'Risk Configuration</p>',
+            unsafe_allow_html=True,
+        )
         r1, r2, r3, r4 = st.columns(4)
-        r1.metric("Equity Risk / Trade", f"{Config.SWING_EQUITY_RISK_PERCENT}%")
-        r2.metric("Stop Loss",           f"{Config.STOP_LOSS_PERCENT}%")
-        r3.metric("Take Profit",         f"{Config.TAKE_PROFIT_PERCENT}%")
-        r4.metric("Max Daily Loss",      f"{Config.MAX_DAILY_LOSS_PERCENT}%")
+        with r1:
+            st.markdown(_metric_card("Equity Risk / Trade", f"{Config.SWING_EQUITY_RISK_PERCENT}%"), unsafe_allow_html=True)
+        with r2:
+            st.markdown(_metric_card("Stop Loss",           f"{Config.STOP_LOSS_PERCENT}%"),         unsafe_allow_html=True)
+        with r3:
+            st.markdown(_metric_card("Take Profit",         f"{Config.TAKE_PROFIT_PERCENT}%"),       unsafe_allow_html=True)
+        with r4:
+            st.markdown(_metric_card("Max Daily Loss",      f"{Config.MAX_DAILY_LOSS_PERCENT}%"),    unsafe_allow_html=True)
 
 # ── Tab 2: Positions ───────────────────────────────────────────────────────────
 
@@ -328,8 +744,6 @@ with tab_positions:
             })
 
         df_pos = pd.DataFrame(rows)
-
-        # Totals row
         totals = {
             "Symbol": "TOTAL", "Side": "", "Qty": "",
             "Entry Price": "", "Current Price": "",
@@ -338,7 +752,6 @@ with tab_positions:
             "Market Value":     round(df_pos["Market Value"].sum(), 2),
         }
         df_display = pd.concat([df_pos, pd.DataFrame([totals])], ignore_index=True)
-
         styled = (
             df_display.style
             .map(_pnl_color, subset=["Unrealized P&L %", "Unrealized P&L $"])
@@ -363,7 +776,6 @@ with tab_tradelog:
             "Add a PostgreSQL database in Railway to see trade history."
         )
     else:
-        # Filters
         f1, f2, f3 = st.columns([2, 2, 1])
         with f1:
             date_input = st.date_input(
@@ -380,7 +792,6 @@ with tab_tradelog:
         with f3:
             open_only = st.checkbox("Open only", value=False, key="tl_open")
 
-        # Guard against single-date selection
         if isinstance(date_input, (list, tuple)) and len(date_input) == 2:
             start_d, end_d = date_input
         else:
@@ -450,11 +861,8 @@ with tab_discovery:
         if df_disc is None:
             st.warning("Could not load discovery data.")
         elif df_disc.empty:
-            st.info(
-                "No results yet. Run:\n```\npython -m discovery.discovery_engine\n```"
-            )
+            st.info("No results yet. Run:\n```\npython -m discovery.discovery_engine\n```")
         else:
-            # Per-symbol summary
             st.subheader("Summary by Symbol")
             summary = (
                 df_disc.groupby("symbol")
@@ -493,6 +901,25 @@ with tab_discovery:
 
 # ── Tab 5: Analytics ───────────────────────────────────────────────────────────
 
+_CHART_LAYOUT = dict(
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)",
+    font=dict(color="#7d8590", size=12),
+    xaxis=dict(
+        gridcolor="#21262d", linecolor="#30363d",
+        tickfont=dict(color="#7d8590"),
+        title_font=dict(color="#7d8590"),
+    ),
+    yaxis=dict(
+        gridcolor="#21262d", linecolor="#30363d",
+        tickfont=dict(color="#7d8590"),
+        title_font=dict(color="#7d8590"),
+    ),
+    hovermode="x unified",
+    margin=dict(l=0, r=0, t=10, b=0),
+    showlegend=False,
+)
+
 with tab_analytics:
     st.header("Analytics")
 
@@ -510,9 +937,9 @@ with tab_analytics:
             df_pnl = df_pnl.sort_values("trade_date")
             df_pnl["cumulative_pnl"] = df_pnl["daily_pnl_sum"].cumsum()
 
-            positive = df_pnl["cumulative_pnl"].iloc[-1] >= 0
+            positive   = df_pnl["cumulative_pnl"].iloc[-1] >= 0
             line_color = "#00c851" if positive else "#ff4444"
-            fill_color = "rgba(0,200,81,0.12)" if positive else "rgba(255,68,68,0.12)"
+            fill_color = "rgba(0,200,81,0.10)" if positive else "rgba(255,68,68,0.10)"
 
             fig_pnl = go.Figure()
             fig_pnl.add_trace(go.Scatter(
@@ -523,17 +950,14 @@ with tab_analytics:
                 line=dict(color=line_color, width=2),
                 fill="tozeroy",
                 fillcolor=fill_color,
+                marker=dict(size=4, color=line_color),
                 hovertemplate="%{x}<br>Cumulative: %{y:+.2f}%<extra></extra>",
             ))
-            fig_pnl.add_hline(y=0, line_dash="dash", line_color="rgba(128,128,128,0.4)")
+            fig_pnl.add_hline(y=0, line_dash="dash", line_color="#30363d")
+            fig_pnl.update_layout(height=400, **_CHART_LAYOUT)
             fig_pnl.update_layout(
                 xaxis_title="Date",
                 yaxis_title="Cumulative P&L (%)",
-                hovermode="x unified",
-                height=400,
-                margin=dict(l=0, r=0, t=10, b=0),
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
             )
             st.plotly_chart(fig_pnl, width="stretch")
             st.caption(
@@ -551,10 +975,7 @@ with tab_analytics:
         df_wr = fetch_win_rate()
 
         if df_wr is not None and not df_wr.empty:
-            colors = [
-                "#00c851" if w >= 50 else "#ff4444"
-                for w in df_wr["win_rate_pct"]
-            ]
+            colors = ["#00c851" if w >= 50 else "#ff4444" for w in df_wr["win_rate_pct"]]
             fig_wr = go.Figure()
             fig_wr.add_trace(go.Bar(
                 x=df_wr["symbol"],
@@ -565,28 +986,21 @@ with tab_analytics:
                     for w, n in zip(df_wr["win_rate_pct"], df_wr["total_trades"])
                 ],
                 textposition="outside",
+                textfont=dict(color="#7d8590", size=11),
                 hovertemplate="%{x}<br>Win rate: %{y:.1f}%<extra></extra>",
             ))
             fig_wr.add_hline(
                 y=50,
                 line_dash="dash",
-                line_color="rgba(128,128,128,0.5)",
+                line_color="#30363d",
                 annotation_text="50% breakeven",
                 annotation_position="right",
+                annotation_font_color="#484f58",
             )
-            fig_wr.update_layout(
-                xaxis_title="Symbol",
-                yaxis_title="Win Rate (%)",
-                yaxis_range=[0, 115],
-                height=380,
-                margin=dict(l=0, r=0, t=10, b=0),
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                showlegend=False,
-            )
+            fig_wr.update_layout(height=380, yaxis_range=[0, 115], **_CHART_LAYOUT)
+            fig_wr.update_layout(xaxis_title="Symbol", yaxis_title="Win Rate (%)")
             st.plotly_chart(fig_wr, width="stretch")
 
-            # Detail table beneath the chart
             styled_wr = (
                 df_wr.style
                 .map(_pnl_color, subset=["avg_pnl_pct"])
