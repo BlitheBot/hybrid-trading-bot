@@ -20,6 +20,43 @@ class SwingStrategy(BaseStrategy):
         self.rsi_entry_low = rsi_entry_low
         self.rsi_entry_high = rsi_entry_high
 
+    def _check_candlestick_patterns(self, df: pd.DataFrame) -> tuple:
+        """
+        Checks the last 3 bars for any of four bullish candlestick patterns using pandas-ta.
+        Returns (pattern_name, 1.0) if a bullish pattern is found, (None, 0.8) otherwise.
+        Returns (None, 1.0) on any library error so the gate never blocks a valid signal.
+        """
+        if not Config.CANDLESTICK_CONFIRMATION_ENABLED:
+            return None, 1.0
+        try:
+            if len(df) < 10:
+                return None, 1.0
+
+            o, h, l, c = df["open"], df["high"], df["low"], df["close"]
+
+            pattern_checks = [
+                ("Hammer",            "hammer"),
+                ("Bullish Engulfing", "engulfing"),
+                ("Morning Star",      "morningstar"),
+                ("Doji Star",         "dojistar"),
+            ]
+
+            for label, name in pattern_checks:
+                try:
+                    result = ta.cdl_pattern(o, h, l, c, name=name)
+                    if result is None:
+                        continue
+                    vals = result.iloc[-3:].values.flatten() if isinstance(result, pd.DataFrame) \
+                        else result.iloc[-3:].values
+                    if any(v == 100 for v in vals):
+                        return label, 1.0
+                except Exception:
+                    continue  # unknown pattern name or insufficient data — skip
+
+            return None, 0.8
+        except Exception:
+            return None, 1.0  # library failure — pass silently at full size
+
     def generate_signals(self, market_data):
         if market_data is None or len(market_data) < self.ema_long + self.macd_slow + self.macd_signal + self.rsi_period:
             return None
@@ -77,7 +114,7 @@ class SwingStrategy(BaseStrategy):
         if signal == "buy":
             stop_loss_price = current_price * (1 - (Config.STOP_LOSS_PERCENT / 100))
             take_profit_price = current_price * (1 + (Config.TAKE_PROFIT_PERCENT / 100))
-            
+
             # Enforce 1:2 R/R Check
             risk = current_price - stop_loss_price
             reward = take_profit_price - current_price
@@ -85,10 +122,20 @@ class SwingStrategy(BaseStrategy):
                 signal = "hold"
                 reasoning = f"Insufficient RR Ratio: {(reward/risk):.2f} < {Config.SWING_MIN_RR_RATIO}"
 
+            # Candlestick confirmation gate (only for signals that passed R/R)
+            confidence_multiplier = 1.0
+            if signal == "buy":
+                pattern_name, confidence_multiplier = self._check_candlestick_patterns(df)
+                if pattern_name:
+                    reasoning += f" | Pattern: {pattern_name}"
+                elif confidence_multiplier < 1.0:
+                    reasoning += " | No candlestick confirmation — confidence -20%"
+
             return {
                 "symbol": market_data["symbol"].iloc[-1] if "symbol" in market_data.columns else "UNKNOWN",
                 "signal": signal,
-                "confidence": confidence,
+                "confidence": confidence * confidence_multiplier,
+                "confidence_multiplier": confidence_multiplier,
                 "entry_price": current_price,
                 "stop_price": stop_loss_price,
                 "target_price": take_profit_price,

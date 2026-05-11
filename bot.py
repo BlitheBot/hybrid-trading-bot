@@ -3,6 +3,7 @@ import sys
 import time
 import asyncio
 import threading
+from collections import deque
 from datetime import datetime, timedelta
 import pytz
 import pandas as pd
@@ -37,6 +38,15 @@ from strategies.congressional_trading_strategy import CongressionalTradingStrate
 from strategies.fred_strategy import FREDStrategy, get_conviction_multiplier, MACRO_SNAPSHOT
 from discovery.regime_adapter import apply_to_swing_strategy
 from utils import get_historical_bars, get_finnhub_price
+
+# ── Sentry error monitoring (optional — omit SENTRY_DSN to disable) ─────────
+try:
+    import sentry_sdk as _sentry_sdk
+    if Config.SENTRY_DSN:
+        _sentry_sdk.init(dsn=Config.SENTRY_DSN, traces_sample_rate=0.1)
+        print("🔍 Sentry error monitoring initialized")
+except ImportError:
+    pass
 
 # ── Flask Health Endpoint ────────────────────────────────────────────
 _health_app = Flask(__name__)
@@ -73,6 +83,18 @@ def start_health_server(port=8502):
     )
     thread.start()
     print(f"🩺 Health endpoint running on http://0.0.0.0:{port}/health")
+
+
+# Hardcoded GICS sector mapping for current SWING_SYMBOLS.
+# TODO Phase 4: extend to full S&P 500 mapping and wire into news/EDGAR auto-trade loops.
+_SECTOR_MAP: dict[str, str] = {
+    "JPM":   "Financials",
+    "BRK.B": "Financials",
+    "V":     "Financials",
+    "COST":  "Consumer Staples",
+    "PG":    "Consumer Staples",
+    "SPY":   "Market",
+}
 
 
 class TradingBot:
@@ -123,6 +145,8 @@ class TradingBot:
         self._alerted_negative_ev: set[str] = set()
         self._last_ev_check_date = None
         self.last_evaluated_price = {}
+        self._recent_signals: deque = deque(maxlen=50)
+        self._sector_alert_cooldown: dict[str, datetime] = {}
 
     def add_scalp_strategy(self, strategy: BaseStrategy):
         if not isinstance(strategy, BaseStrategy):
@@ -590,6 +614,12 @@ class TradingBot:
                     print(f"[VIX] {symbol}: {vix_note}")
 
                 print(f"Signal generated: {signal}")
+                # Sector sentiment tracking (buy signals only)
+                # TODO Phase 4: extend to news/EDGAR auto-trade loops with full S&P 500 sector mapping.
+                if signal.get('signal') == 'buy':
+                    self._recent_signals.append((symbol, datetime.now(pytz.utc)))
+                    asyncio.create_task(self._check_sector_alert(symbol))
+
                 _notes = [n for n in [
                     getattr(strategy, 'discovery_size_note', None),
                     getattr(strategy, 'earnings_size_note', None),
@@ -603,8 +633,12 @@ class TradingBot:
 
                 entry_time = datetime.now(pytz.utc)
                 try:
-                    earnings_mult = getattr(strategy, 'earnings_override_multiplier', 1.0)
-                    scaled_risk_percent = risk_percent * self.risk_multiplier * earnings_mult * vix_risk_mult
+                    earnings_mult    = getattr(strategy, 'earnings_override_multiplier', 1.0)
+                    confidence_mult  = signal.get('confidence_multiplier', 1.0)
+                    scaled_risk_percent = (
+                        risk_percent * self.risk_multiplier
+                        * earnings_mult * vix_risk_mult * confidence_mult
+                    )
                     strategy.execute_trade(
                         signal,
                         self.trading_client,
@@ -937,6 +971,38 @@ class TradingBot:
         except Exception as e:
             print(f"[EV] Calculation failed: {e}")
             return {}
+
+    async def _check_sector_alert(self, symbol: str):
+        """
+        Fires a #trading-alerts message when ≥3 distinct symbols from the same GICS sector
+        generate buy signals within a 30-minute window. Cooldown: once per sector per 30 min.
+        """
+        sector = _SECTOR_MAP.get(symbol)
+        if not sector or sector == "Market":
+            return
+
+        now    = datetime.now(pytz.utc)
+        window = timedelta(minutes=30)
+
+        recent_syms = {
+            sym for sym, ts in self._recent_signals
+            if now - ts <= window and _SECTOR_MAP.get(sym) == sector
+        }
+
+        if len(recent_syms) < 3:
+            return
+
+        last_alert = self._sector_alert_cooldown.get(sector)
+        if last_alert and now - last_alert < window:
+            return
+
+        self._sector_alert_cooldown[sector] = now
+        syms_str = ", ".join(sorted(recent_syms))
+        await notifications.notify_alert(
+            f"🔥 Sector hot: {sector} — {len(recent_syms)} signals in 30min "
+            f"({syms_str}). Possible sector rotation.",
+            level="INFO",
+        )
 
     def _upload_image_to_public(self, file_path: str) -> str | None:
         """POSTs an image file to 0x0.st and returns the public URL, or None on failure."""
@@ -1799,5 +1865,13 @@ class TradingBot:
 if __name__ == "__main__":
     start_health_server(port=8502)
     bot = TradingBot()
-    asyncio.run(bot.start_dual_engine())
+    try:
+        asyncio.run(bot.start_dual_engine())
+    except Exception as _exc:
+        try:
+            import sentry_sdk as _sentry_sdk
+            _sentry_sdk.capture_exception(_exc)
+        except Exception:
+            pass
+        raise
 
