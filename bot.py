@@ -1069,7 +1069,7 @@ class TradingBot:
             print(f"📈 Swing evaluation starting at {datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d %I:%M:%S %p')} EST")
             spy_bars = None
             try:
-                spy_bars = await get_historical_bars("SPY", self.stock_data_client, days=365)
+                spy_bars = get_historical_bars("SPY", TimeFrame.Day, 365, self.stock_data_client)
             except Exception:
                 pass
 
@@ -1633,14 +1633,14 @@ class TradingBot:
 
             except Exception as e:
                 print(f"[CongressLoop] Unexpected error: {e}")
-            finally:
-                if strategy._disabled:
-                    print("[CongressLoop] Disabled after auth failure — exiting loop permanently.")
-                    return
-                buy_count  = sum(1 for s in signals if not s.get("informational"))
-                sell_count = sum(1 for s in signals if s.get("informational"))
-                print(f"🏛️ Congressional scan complete — {buy_count} buy signals, {sell_count} informational sell signals, next scan in 60 min")
-                await asyncio.sleep(3600)
+
+            if strategy._disabled:
+                print("[CongressLoop] Disabled after auth failure — exiting loop permanently.")
+                return
+            buy_count  = sum(1 for s in signals if not s.get("informational"))
+            sell_count = sum(1 for s in signals if s.get("informational"))
+            print(f"🏛️ Congressional scan complete — {buy_count} buy signals, {sell_count} informational sell signals, next scan in 60 min")
+            await asyncio.sleep(3600)
 
     async def market_open_notification_loop(self):
         """Sends a morning briefing to #trading-alerts at 9:30 AM EST, weekdays only."""
