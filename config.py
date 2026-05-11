@@ -60,6 +60,7 @@ class Config:
     NEWS_SIGNAL_AUTO_TRADE_THRESHOLD = 13
     TRUTH_SOCIAL_ENABLED = False  # Disabled: Truth Social blocks automated access; re-enable with Quiver API
     CONGRESSIONAL_ENABLED = False  # Disabled: free data sources unavailable; re-enable with QUIVER_API_KEY ($30/mo at quiverquant.com)
+    FRED_ENABLED = True            # Free public FRED CSV endpoints — no API key required
     CONGRESSIONAL_ALERT_THRESHOLD = 6     # any S&P 500 buy above min amount → Slack alert
     CONGRESSIONAL_AUTO_TRADE_THRESHOLD = 13  # effectively unreachable (max ~11.2) — alert-only
     TRUTH_SOCIAL_ALERT_THRESHOLD = 7

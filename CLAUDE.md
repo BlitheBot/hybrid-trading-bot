@@ -47,6 +47,7 @@ A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops
 | `strategies/news_strategy.py` | `news_loop` | Benzinga news via Alpaca News API; Claude NLP scoring with keyword fallback; dynamic sleep; 429 retry (10s/20s/30s) per batch |
 | `strategies/truth_social_strategy.py` | `truth_social_loop` | Disabled — `TRUTH_SOCIAL_ENABLED=False`; scan_once() returns [] immediately. Re-enable when Quiver Quantitative API is integrated |
 | `strategies/sec_edgar_strategy.py` | `sec_edgar_loop` | SEC EDGAR Form 4 insider trades; ElementTree XML parsing; strength-tiered scoring; exponential 429 backoff (30s/60s/120s) |
+| `strategies/fred_strategy.py` | `fred_loop` | FRED macro indicators via free public CSV endpoints; module-level `MACRO_SNAPSHOT` dict + `get_conviction_multiplier()` function readable by any loop; no API key required |
 | `strategies/congressional_trading_strategy.py` | `congressional_trading_loop` | Quiver Quantitative congressional trades; scores buys by amount ($50k/$250k tiers) + committee membership (1.3×) + recency ≤7 days (1.2×); informational sell signals at half strength; 4-hour per-ticker cooldown; self-disables on 401/403 |
 
 ### Strategies (Legacy — in repo, not wired into bot)
@@ -68,7 +69,7 @@ A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops
 
 ---
 
-## 11 Concurrent Loops (`asyncio.gather` in `start_dual_engine`)
+## 12 Concurrent Loops (`asyncio.gather` in `start_dual_engine`)
 
 | # | Method | Interval | What It Does |
 |---|---|---|---|
@@ -82,7 +83,8 @@ A Python asyncio trading bot running 24/7 on Railway. It runs 9 concurrent loops
 | 8 | `trailing_stop_monitor_loop` | Every `TRAILING_STOP_MONITOR_INTERVAL` (60s) | Upgrades static stop-loss orders to trailing stops once unrealized gain ≥ `TRAILING_STOP_ACTIVATION_PCT` (3%) |
 | 9 | `_exit_monitor_loop` | Every 10 min | Queries Alpaca for closed sell orders (7-day lookback, limit 200); updates `signal_outcomes` with exit price, P&L%, and exit reason (stop/target/manual). Protected by `_trade_ids_lock` |
 | 10 | `market_open_notification_loop` | Daily 9:30 AM EST (Mon–Fri) | Sends morning briefing to #trading-alerts: equity, market regime, swing watchlist, reminder that swing evaluation fires at 10:30 AM EST |
-| 11 | `congressional_trading_loop` | — | **Disabled** (`CONGRESSIONAL_ENABLED=False`); free data sources unavailable; re-enable by setting `QUIVER_API_KEY` in Railway and flipping flag |
+| 11 | `fred_loop` | Daily 7 PM EST + startup fetch | Fetches 5 FRED macro indicators (FF rate, VIX, 10Y, unemployment, CPI YoY); updates `MACRO_SNAPSHOT`; VIX > 30 → 0.7× conviction multiplier in news + EDGAR loops; VIX > 40 → one-time `#trading-alerts` critical alert; Sunday 7 PM → weekly summary to `#trading-health` |
+| 12 | `congressional_trading_loop` | — | **Disabled** (`CONGRESSIONAL_ENABLED=False`); free data sources unavailable; re-enable by setting `QUIVER_API_KEY` in Railway and flipping flag |
 
 ---
 
@@ -223,6 +225,9 @@ SEC_EDGAR_ALERT_THRESHOLD = 6         # strength ≥ 6 → Slack alert
 SEC_EDGAR_AUTO_TRADE_THRESHOLD = 13   # only $1M+ insider buys reach this (strength=14)
 SEC_EDGAR_MIN_BUY_VALUE = 100_000     # ignore buys below $100k
 SEC_EDGAR_MIN_SELL_VALUE = 500_000    # ignore sells below $500k
+
+# FRED Macro Indicators
+FRED_ENABLED = True            # free public CSV endpoints; no API key required
 
 # Congressional Trading (Quiver Quantitative)
 QUIVER_API_KEY              # from env — free tier key from quiverquant.com; loop self-disables on 401/403
@@ -370,6 +375,13 @@ _exit_monitor_loop() [every 10 min, concurrent]
 
 ### Signal cooldown key
 - Key is `f"{symbol}-{strategy.name}"` (NOT including signal direction) — prevents buy/sell having separate cooldown windows on the same symbol+strategy
+
+### FRED macro conviction multiplier
+- `get_conviction_multiplier()` in `strategies/fred_strategy.py` reads the module-level `MACRO_SNAPSHOT["vix"]`
+- Returns 0.7 when VIX > 30, else 1.0; returns 1.0 safely if FRED data hasn't loaded yet (startup window before first fetch)
+- Applied in `news_loop` and `sec_edgar_loop` only, after `sig["auto_trade"]` is True, before symbol cooldown check
+- Does NOT modify the strength value shown in Slack — only gates the auto-trade execution path
+- At 0.7× a signal needs raw strength ~18.6 to cross the threshold of 13 — effectively suppresses all auto-trades when VIX > 30
 
 ---
 

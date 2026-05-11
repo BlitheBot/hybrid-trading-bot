@@ -247,6 +247,65 @@ async def notify_truth_social_signal(post_text, tickers, sentiment, score, actio
     }
     await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
 
+async def notify_macro_summary(snapshot: dict):
+    """Sends the weekly FRED macro summary to #trading-health every Sunday 7 PM EST."""
+    def _fmt(label: str, key: str, prev_key: str, unit: str = "%") -> str:
+        val  = snapshot.get(key)
+        prev = snapshot.get(prev_key)
+        val_str = f"{val:.2f}{unit}" if val is not None else "N/A"
+        if val is not None and prev is not None:
+            delta = val - prev
+            sign  = "+" if delta >= 0 else ""
+            delta_str = f"({sign}{delta:.2f}{unit} WoW)"
+        else:
+            delta_str = "(N/A WoW)"
+        return f"*{label}:*\n{val_str} {delta_str}"
+
+    vix = snapshot.get("vix")
+    regime_note = ""
+    if vix is not None:
+        if vix > 40:
+            regime_note = "\n⚠️ *EXTREME FEAR* — VIX > 40. Auto-trade conviction at 0.7×."
+        elif vix > 30:
+            regime_note = "\n⚠️ *Elevated Fear* — VIX > 30. Auto-trade conviction at 0.7×."
+
+    flags = []
+    if snapshot.get("fed_rate_cut"):
+        flags.append("🟢 Fed rate cut detected (bullish macro)")
+    if snapshot.get("yield_rising_fast"):
+        flags.append("🔴 10Y yield rising >0.2% in 30 days (growth concern)")
+    if snapshot.get("vix_extreme_fear"):
+        flags.append("🔴 VIX extreme fear (>40)")
+    flags_text = "\n".join(flags) if flags else "None"
+
+    payload = {
+        "text": "📊 *Weekly Macro Summary — FRED Data*",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "📊 Weekly Macro Summary — FRED Data"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": _fmt("Fed Funds Rate", "fed_funds_rate", "prev_week_fed_funds")},
+                    {"type": "mrkdwn", "text": _fmt("VIX", "vix", "prev_week_vix", "")},
+                    {"type": "mrkdwn", "text": _fmt("10Y Treasury", "treasury_10y", "prev_week_treasury")},
+                    {"type": "mrkdwn", "text": _fmt("Unemployment", "unemployment", "prev_week_unemployment")},
+                    {"type": "mrkdwn", "text": _fmt("CPI YoY", "cpi_yoy", "prev_week_cpi_yoy")},
+                ]
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*Active Macro Flags:*\n{flags_text}{regime_note}"
+                }
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_HEALTH_WEBHOOK, payload)
+
 async def notify_congressional_signal(ticker, headline, representative, party, chamber,
                                        amount_range, transaction_type, strength, action,
                                        informational=False):

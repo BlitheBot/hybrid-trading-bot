@@ -33,6 +33,7 @@ from strategies.news_strategy import NewsStrategy, _get_scan_sleep_seconds
 from strategies.truth_social_strategy import TruthSocialStrategy
 from strategies.sec_edgar_strategy import SECEdgarStrategy
 from strategies.congressional_trading_strategy import CongressionalTradingStrategy
+from strategies.fred_strategy import FREDStrategy, get_conviction_multiplier, MACRO_SNAPSHOT
 from utils import get_historical_bars, get_finnhub_price
 
 # ── Flask Health Endpoint ────────────────────────────────────────────
@@ -820,6 +821,17 @@ class TradingBot:
                         if not sig["auto_trade"]:
                             continue
 
+                        # Guard: macro regime conviction (VIX > 30 → 0.7× multiplier)
+                        macro_mult = get_conviction_multiplier()
+                        if macro_mult < 1.0:
+                            effective = round(sig["strength"] * macro_mult, 2)
+                            if effective < Config.NEWS_SIGNAL_AUTO_TRADE_THRESHOLD:
+                                asyncio.create_task(notifications.notify_trade_skipped(
+                                    ticker, strategy.name,
+                                    f"Macro veto: VIX elevated — effective strength {effective} < {Config.NEWS_SIGNAL_AUTO_TRADE_THRESHOLD}"
+                                ))
+                                continue
+
                         # Guard: symbol cooldown
                         await self._update_loss_cache()
                         if ticker in self.last_loss_times:
@@ -991,6 +1003,17 @@ class TradingBot:
                         if not sig["auto_trade"]:
                             continue
 
+                        # Guard: macro regime conviction (VIX > 30 → 0.7× multiplier)
+                        macro_mult = get_conviction_multiplier()
+                        if macro_mult < 1.0:
+                            effective = round(sig["strength"] * macro_mult, 2)
+                            if effective < Config.SEC_EDGAR_AUTO_TRADE_THRESHOLD:
+                                asyncio.create_task(notifications.notify_trade_skipped(
+                                    ticker, strategy.name,
+                                    f"Macro veto: VIX elevated — effective strength {effective} < {Config.SEC_EDGAR_AUTO_TRADE_THRESHOLD}"
+                                ))
+                                continue
+
                         # Guard: symbol cooldown
                         await self._update_loss_cache()
                         if ticker in self.last_loss_times:
@@ -1061,6 +1084,53 @@ class TradingBot:
                 msg = f"WARNING: Symbol {symbol} failed validation — check config ({e})"
                 print(msg)
                 asyncio.create_task(notifications.notify_alert(msg))
+
+    async def fred_loop(self):
+        """Fetches FRED macro indicators daily at 7 PM EST. Weekly summary fires on Sundays."""
+        if not Config.FRED_ENABLED:
+            print("[FRED] Disabled (FRED_ENABLED=False) — exiting.")
+            return
+        print("📊 Starting FRED Macro Indicator Loop (daily 7 PM EST, weekly summary Sundays)...")
+        strategy = FREDStrategy()
+        est = pytz.timezone('America/New_York')
+
+        # Fetch immediately on startup so conviction multiplier has real data from minute one
+        print("[FRED] Running initial macro fetch on startup...")
+        events = await strategy.scan_once()
+        if "vix_extreme_fear" in events:
+            vix_val = MACRO_SNAPSHOT.get("vix", 0) or 0
+            asyncio.create_task(notifications.notify_alert(
+                f"📊 EXTREME FEAR: VIX has spiked to {vix_val:.1f} (>40). "
+                f"Auto-trade conviction reduced to 0.7× in news and EDGAR loops.",
+                level="CRITICAL"
+            ))
+
+        while True:
+            # Sleep until next 7 PM EST
+            now = datetime.now(est)
+            target = now.replace(hour=19, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target += timedelta(days=1)
+            await asyncio.sleep((target - now).total_seconds())
+
+            events = await strategy.scan_once()
+
+            if "vix_extreme_fear" in events:
+                vix_val = MACRO_SNAPSHOT.get("vix", 0) or 0
+                asyncio.create_task(notifications.notify_alert(
+                    f"📊 EXTREME FEAR: VIX has spiked to {vix_val:.1f} (>40). "
+                    f"Auto-trade conviction reduced to 0.7× in news and EDGAR loops.",
+                    level="CRITICAL"
+                ))
+
+            # Sunday 7 PM EST — send weekly macro summary and advance prev-week baseline
+            if datetime.now(est).weekday() == 6:
+                asyncio.create_task(notifications.notify_macro_summary(dict(MACRO_SNAPSHOT)))
+                MACRO_SNAPSHOT["prev_week_fed_funds"]    = MACRO_SNAPSHOT.get("fed_funds_rate")
+                MACRO_SNAPSHOT["prev_week_vix"]          = MACRO_SNAPSHOT.get("vix")
+                MACRO_SNAPSHOT["prev_week_treasury"]     = MACRO_SNAPSHOT.get("treasury_10y")
+                MACRO_SNAPSHOT["prev_week_unemployment"] = MACRO_SNAPSHOT.get("unemployment")
+                MACRO_SNAPSHOT["prev_week_cpi_yoy"]      = MACRO_SNAPSHOT.get("cpi_yoy")
 
     async def congressional_trading_loop(self):
         """Polls Quiver Quantitative for congressional trades every 60 minutes."""
@@ -1232,6 +1302,7 @@ class TradingBot:
             self.news_loop(),
             self.truth_social_loop(),
             self.sec_edgar_loop(),
+            self.fred_loop(),
             self.congressional_trading_loop(),
             self.health_report_loop(),
             self.performance_report_loop(),
