@@ -87,6 +87,7 @@ def refresh_symbol_universe(
         return
 
     sorted_syms = sorted(vol_map, key=lambda s: vol_map[s], reverse=True)[:top_n]
+    sorted_syms = [s for s in sorted_syms if vol_map[s] >= 5_000_000]  # 5M ADV floor
     ranked = [(sym, int(vol_map[sym]), rank + 1) for rank, sym in enumerate(sorted_syms)]
 
     _ensure_symbol_universe_table(db_engine)
