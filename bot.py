@@ -382,6 +382,9 @@ class TradingBot:
         self._sector_alert_cooldown: dict[str, datetime] = {}
         self._adx_regime_cache = None  # (regime_str, timestamp)
         self._signal_stack: dict[str, list] = {}  # ticker → [{source, strength, timestamp}]
+        self._daily_signals: dict[str, set] = {}  # ticker → set of source names that fired today
+        self._confluence_alerted: set[str] = set()  # tickers already alerted today (dedup)
+        self._last_daily_signals_date = datetime.now(pytz.timezone('America/New_York')).date()
 
     def add_scalp_strategy(self, strategy: BaseStrategy):
         if not isinstance(strategy, BaseStrategy):
@@ -844,6 +847,10 @@ class TradingBot:
                         if not hook_proceed:
                             asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, hook_reason))
                             continue
+
+                    # Confluence tracking: register swing buy after hook passes
+                    if isinstance(strategy, SwingStrategy):
+                        asyncio.create_task(self._record_daily_signal(symbol, 'Swing technical'))
 
                 signal_key = f"{symbol}-{strategy.name}"
 
@@ -1363,6 +1370,25 @@ class TradingBot:
         asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
         return True, 1.3
 
+    async def _record_daily_signal(self, symbol: str, source: str) -> None:
+        """Track day-level confluence. Fires a #trading-alerts alert when ≥2 distinct
+        sources (Swing technical, News, EDGAR) fire on the same ticker the same day."""
+        today = datetime.now(pytz.timezone('America/New_York')).date()
+        if today != self._last_daily_signals_date:
+            self._daily_signals.clear()
+            self._confluence_alerted.clear()
+            self._last_daily_signals_date = today
+        self._daily_signals.setdefault(symbol, set()).add(source)
+        sources = self._daily_signals[symbol]
+        if len(sources) >= 2 and symbol not in self._confluence_alerted:
+            self._confluence_alerted.add(symbol)
+            sources_str = " + ".join(sorted(sources))
+            print(f"[Confluence] {symbol}: {sources_str}")
+            asyncio.create_task(notifications.notify_alert(
+                f"🎯 Confluence: {symbol} — {sources_str} both fired today. High conviction setup.",
+                level="INFO",
+            ))
+
     def _upload_image_to_public(self, file_path: str) -> str | None:
         """POSTs an image file to 0x0.st and returns the public URL, or None on failure."""
         try:
@@ -1798,6 +1824,7 @@ class TradingBot:
                         asyncio.create_task(notifications.notify_news_signal(
                             ticker, sig["headline"], sig["sentiment"], strength, action
                         ))
+                        asyncio.create_task(self._record_daily_signal(ticker, 'News'))
 
                         if not sig["auto_trade"]:
                             continue
@@ -1985,6 +2012,7 @@ class TradingBot:
                         asyncio.create_task(notifications.notify_edgar_signal(
                             ticker, sig["headline"], sig["sentiment"], strength, action
                         ))
+                        asyncio.create_task(self._record_daily_signal(ticker, 'EDGAR'))
 
                         if not sig["auto_trade"]:
                             continue
@@ -2331,6 +2359,57 @@ class TradingBot:
                 print(f"[RedditLoop] Unexpected error: {e}")
             await asyncio.sleep(Config.REDDIT_POLL_INTERVAL)
 
+    async def market_close_digest_loop(self):
+        """Loop 16 — fires at exactly 4:00 PM EST every weekday with a daily close summary."""
+        print("📊 Starting Market Close Digest Loop (4:00 PM EST weekdays)...")
+        while True:
+            now = datetime.now(pytz.timezone('America/New_York'))
+            target = now.replace(hour=16, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target += timedelta(days=1)
+            while target.weekday() >= 5:  # skip Saturday (5) and Sunday (6)
+                target += timedelta(days=1)
+            await asyncio.sleep((target - now).total_seconds())
+            try:
+                trades_today = 0
+                if self._db_engine:
+                    today_str = datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d')
+                    with self._db_engine.connect() as conn:
+                        row = conn.execute(sql_text(
+                            "SELECT COUNT(*) AS cnt FROM signal_outcomes "
+                            "WHERE entry_time::date = :today"
+                        ), {"today": today_str}).mappings().fetchone()
+                        trades_today = int(row["cnt"]) if row else 0
+
+                account = await asyncio.to_thread(self.trading_client.get_account)
+                daily_pnl_pct = 0.0
+                if account and self.start_of_day_equity:
+                    daily_pnl_pct = (
+                        (float(account.equity) - self.start_of_day_equity)
+                        / self.start_of_day_equity * 100
+                    )
+
+                vix = MACRO_SNAPSHOT.get("vix")
+                regime = await self._get_market_regime()
+
+                now_utc = datetime.now(pytz.utc)
+                cooldown_syms = [
+                    sym for sym, t in self.last_loss_times.items()
+                    if (now_utc - t).total_seconds() < 86400
+                ]
+
+                asyncio.create_task(notifications.notify_market_close_digest(
+                    trades_today,
+                    daily_pnl_pct,
+                    _health_state["signals_fired_total"],
+                    vix,
+                    regime,
+                    cooldown_syms,
+                ))
+                print(f"[CloseDigest] 4pm digest sent — trades={trades_today} pnl={daily_pnl_pct:+.2f}%")
+            except Exception as e:
+                print(f"[CloseDigest] Error: {e}")
+
     async def symbol_universe_loop(self):
         """Loop 15 — refreshes symbol_universe table every Sunday at midnight EST."""
         if not self._db_engine:
@@ -2419,6 +2498,7 @@ class TradingBot:
             self.discovery_loop(),
             self.reddit_loop(),
             self.symbol_universe_loop(),
+            self.market_close_digest_loop(),
         )
 
 if __name__ == "__main__":

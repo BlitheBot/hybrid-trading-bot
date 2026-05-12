@@ -509,6 +509,43 @@ async def notify_weekly_performance_brain(stats: dict):
     await _post_to_slack(Config.SLACK_PERFORMANCE_WEBHOOK, payload)
 
 
+async def notify_market_close_digest(
+    trades_today: int,
+    daily_pnl_pct: float,
+    signals_total: int,
+    vix: float | None,
+    regime: str,
+    cooldown_symbols: list[str],
+):
+    """Sends the 4pm daily market close summary to #trading-health."""
+    pnl_sign  = "+" if daily_pnl_pct >= 0 else ""
+    pnl_emoji = "🟢" if daily_pnl_pct >= 0 else "🔴"
+    vix_str   = f"{vix:.1f}" if vix is not None else "N/A"
+    cooldown_str = ", ".join(cooldown_symbols) if cooldown_symbols else "None"
+    regime_emoji = "🐂" if regime == "bull" else ("🐻" if regime == "bear" else "⚖️")
+    payload = {
+        "text": "📊 *4pm Market Close Summary*",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "📊 4pm Market Close Summary"},
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Trades Today:*\n{trades_today}"},
+                    {"type": "mrkdwn", "text": f"*Daily P&L:*\n{pnl_emoji} {pnl_sign}{daily_pnl_pct:.2f}%"},
+                    {"type": "mrkdwn", "text": f"*Signals Fired (total):*\n{signals_total}"},
+                    {"type": "mrkdwn", "text": f"*VIX:*\n{vix_str}"},
+                    {"type": "mrkdwn", "text": f"*Market Regime:*\n{regime_emoji} {regime.capitalize()}"},
+                    {"type": "mrkdwn", "text": f"*Symbols on Cooldown:*\n{cooldown_str}"},
+                ],
+            },
+        ],
+    }
+    await _post_to_slack(Config.SLACK_HEALTH_WEBHOOK, payload)
+
+
 async def notify_truth_social_trade(ticker, post_text, direction, entry_price, position_size):
     """Sends a Truth Social-triggered trade execution to #trading-alerts."""
     payload = {

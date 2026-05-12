@@ -196,6 +196,7 @@ Respond with ONLY a valid JSON object using exactly this schema:
 
                     # Normalise score to 0-10 range and apply source multiplier
                     multiplier = _source_multiplier(source)
+                    print(f"[NewsStrategy] {ticker}: source='{source or 'unknown'}' → multiplier={multiplier:.1f}x (raw={raw_score} confidence={confidence})")
                     strength = (raw_score * confidence / 10.0) * multiplier
                     strength = round(min(strength, 20.0), 2)
 
