@@ -100,6 +100,15 @@ class Config:
     NOTION_API_KEY      = os.getenv("NOTION_API_KEY")
     NOTION_DATABASE_ID  = os.getenv("NOTION_DATABASE_ID")
 
+    # Grok (xAI) X/Twitter crypto sentiment (alert-only)
+    GROK_API_KEY         = os.getenv("GROK_API_KEY")
+    GROK_ENABLED         = True
+    GROK_ALERT_THRESHOLD = 7   # score ≥ 7 (bullish) or ≤ 3 (bearish) fires alert
+
+    # Webull contrarian retail-crowding signal (alert-only)
+    WEBULL_ENABLED         = True
+    WEBULL_ALERT_THRESHOLD = 5.0  # minimum intraday gain % to flag as crowded
+
     # Performance Brain
     PERFORMANCE_SCALING_ENABLED = True  # adjust position size based on last 20-trade win rate
     POSITION_SIZE_FLOOR = 0.1           # floor: no trade below 10% of SWING_EQUITY_RISK_PERCENT

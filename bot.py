@@ -40,6 +40,8 @@ from strategies.truth_social_strategy import TruthSocialStrategy
 from strategies.sec_edgar_strategy import SECEdgarStrategy
 from strategies.congressional_trading_strategy import CongressionalTradingStrategy
 from strategies.fred_strategy import FREDStrategy, get_conviction_multiplier, MACRO_SNAPSHOT
+from strategies.grok_strategy import GrokStrategy
+from strategies.webull_strategy import WebullStrategy
 from discovery.regime_adapter import apply_to_swing_strategy
 from utils import get_historical_bars, get_finnhub_price
 
@@ -2492,6 +2494,59 @@ class TradingBot:
             except Exception as e:
                 print(f"[SymbolUniverse] Refresh error: {e}")
 
+    async def grok_loop(self):
+        """Loop 17 — polls Grok xAI X/Twitter every 30 min for BTC/ETH sentiment (alert-only)."""
+        if not Config.GROK_ENABLED:
+            print("[Grok] Disabled (GROK_ENABLED=False) — exiting loop.")
+            return
+        if not Config.GROK_API_KEY:
+            print("[Grok] No GROK_API_KEY — exiting loop.")
+            return
+        print("🐦 Starting Grok X/Twitter Sentiment Loop (30-min polling, alert-only)...")
+        strategy = GrokStrategy()
+        while True:
+            try:
+                if not _bot_paused:
+                    signals = await strategy.scan_once()
+                    for sig in signals:
+                        _health_state["signals_fired_total"] += 1
+                        asyncio.create_task(notifications.notify_grok_signal(
+                            sig["coin"],
+                            sig["sentiment"],
+                            sig["score"],
+                            sig["confidence"],
+                            sig["reasoning"],
+                            sig["theme"],
+                        ))
+            except Exception as e:
+                print(f"[GrokLoop] Unexpected error: {e}")
+            await asyncio.sleep(30 * 60)
+
+    async def webull_loop(self):
+        """Loop 18 — polls Webull top-active/top-gainer every 15 min on weekdays (alert-only)."""
+        if not Config.WEBULL_ENABLED:
+            print("[Webull] Disabled (WEBULL_ENABLED=False) — exiting loop.")
+            return
+        print("📉 Starting Webull Contrarian Loop (15-min polling weekdays, alert-only)...")
+        strategy = WebullStrategy()
+        while True:
+            try:
+                now = datetime.now(pytz.timezone("America/New_York"))
+                if now.weekday() < 5 and not _bot_paused and not strategy.disabled:
+                    signals = await strategy.scan_once()
+                    for sig in signals:
+                        _health_state["signals_fired_total"] += 1
+                        asyncio.create_task(notifications.notify_webull_signal(
+                            sig["ticker"],
+                            sig["rank"],
+                            sig["change_pct"],
+                            sig["score"],
+                            sig["reasoning"],
+                        ))
+            except Exception as e:
+                print(f"[WebullLoop] Unexpected error: {e}")
+            await asyncio.sleep(15 * 60)
+
     async def start_dual_engine(self):
         print("🚀 Hybrid Trading Bot starting...")
 
@@ -2554,6 +2609,8 @@ class TradingBot:
             self.reddit_loop(),
             self.symbol_universe_loop(),
             self.market_close_digest_loop(),
+            self.grok_loop(),
+            self.webull_loop(),
         )
 
 if __name__ == "__main__":

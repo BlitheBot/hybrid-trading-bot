@@ -554,6 +554,72 @@ async def notify_market_close_digest(
     await _post_to_slack(Config.SLACK_HEALTH_WEBHOOK, payload)
 
 
+async def notify_grok_signal(coin: str, sentiment: str, score: int, confidence: int,
+                              reasoning: str, theme: str):
+    """Sends a Grok X/Twitter crypto sentiment alert to #trading-decisions (alert-only)."""
+    sentiment_emoji = "🟢" if sentiment == "bullish" else ("🔴" if sentiment == "bearish" else "⚪")
+    payload = {
+        "text": f"🐦 *GROK X SENTIMENT: {sentiment.upper()} {coin}* (Score: {score}/10)",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"🐦 Grok X/Twitter: {sentiment.upper()} {coin}"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Coin:*\n{coin}"},
+                    {"type": "mrkdwn", "text": f"*Sentiment:*\n{sentiment_emoji} {sentiment.capitalize()}"},
+                    {"type": "mrkdwn", "text": f"*Score:*\n{score}/10"},
+                    {"type": "mrkdwn", "text": f"*Confidence:*\n{confidence}/10"},
+                    {"type": "mrkdwn", "text": f"*Dominant Theme:*\n{theme}"},
+                ]
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*X/Twitter Narrative:*\n```{reasoning}```"}
+            },
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": ":information_source: Alert-only — Grok signals do not auto-trade"}]
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
+
+
+async def notify_webull_signal(ticker: str, rank: int, change_pct: float,
+                                score: float, reasoning: str):
+    """Sends a Webull contrarian retail-crowding alert to #trading-decisions (alert-only)."""
+    payload = {
+        "text": f"📉 *WEBULL CONTRARIAN: BEARISH {ticker}* (+{change_pct:.1f}% — retail crowding)",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"📉 Webull Contrarian Signal: {ticker}"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Ticker:*\n{ticker}"},
+                    {"type": "mrkdwn", "text": f"*Retail Rank:*\n#{rank}"},
+                    {"type": "mrkdwn", "text": f"*Intraday Gain:*\n+{change_pct:.1f}%"},
+                    {"type": "mrkdwn", "text": f"*Contrarian Score:*\n{score:.1f}/10"},
+                ]
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*Reasoning:*\n```{reasoning}```"}
+            },
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": ":information_source: Alert-only — Webull contrarian signals do not auto-trade"}]
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
+
+
 async def notify_truth_social_trade(ticker, post_text, direction, entry_price, position_size):
     """Sends a Truth Social-triggered trade execution to #trading-alerts."""
     payload = {

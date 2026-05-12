@@ -185,6 +185,8 @@ Respond with ONLY a valid JSON object using exactly this schema:
                     if ticker not in SP500_TICKERS:
                         continue
                     if self._is_on_cooldown(ticker):
+                        elapsed = (datetime.now(pytz.utc) - self._last_seen[ticker]).total_seconds() / 60
+                        print(f"[NewsStrategy] {ticker}: skipping — signal fired {elapsed:.0f}m ago (cooldown {Config.NEWS_DEDUP_HOURS}h)")
                         continue
 
                     headline = article.headline or ""
