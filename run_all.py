@@ -3,8 +3,14 @@ import sys
 import time
 
 # Port assignments:
-#   8501 — Streamlit dashboard  (Railway public domain routes here)
-#   8502 — Flask /health endpoint (internal; bot.py)
+#   8501 — Streamlit dashboard        (Railway public domain #1 → port 8501)
+#   8502 — Flask health/slash/metrics (Railway public domain #2 → port 8502)
+#
+# Railway networking for Slack slash commands:
+#   1. Service → Networking → add second public domain → port 8502
+#      (or set HEALTH_PORT env var if using a different port)
+#   2. Slack app → Slash Commands → Request URL = https://<second-domain>/slack/commands
+#   3. Set SLACK_SIGNING_SECRET in Railway env vars
 DASHBOARD_PORT = "8501"
 
 

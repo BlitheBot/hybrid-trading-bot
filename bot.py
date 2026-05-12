@@ -72,6 +72,9 @@ _health_state: dict = {
 # Set by /pause slash command; cleared by /resume. Checked by all trade-execution paths.
 _bot_paused: bool = False
 
+# Set by TradingBot.__init__; gives the Flask slash-command handlers access to trading_client.
+_bot_instance = None
+
 @_health_app.route("/health", methods=["GET"])
 def health_check():
     uptime_seconds = (datetime.now(pytz.utc) - _bot_start_time).total_seconds()
@@ -145,21 +148,23 @@ def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool
 
 @_health_app.route("/slack/commands", methods=["POST"])
 def slack_commands():
-    body = request.get_data()
-    ts   = request.headers.get("X-Slack-Request-Timestamp", "")
-    sig  = request.headers.get("X-Slack-Signature", "")
+    body         = request.get_data()
+    ts           = request.headers.get("X-Slack-Request-Timestamp", "")
+    sig          = request.headers.get("X-Slack-Signature", "")
     if not _verify_slack_signature(body, ts, sig):
         return jsonify({"text": "Invalid request signature."}), 403
 
-    command = request.form.get("command", "")
-    user    = request.form.get("user_name", "unknown")
+    command      = request.form.get("command", "")
+    user         = request.form.get("user_name", "unknown")
+    text         = request.form.get("text", "").strip()
+    response_url = request.form.get("response_url", "")
 
     if command == "/status":
         pnl_sign = "+" if _health_state["daily_pnl_pct"] >= 0 else ""
         vix      = MACRO_SNAPSHOT.get("vix") or 0.0
         regime   = _health_state.get("market_regime", "unknown")
         paused   = "⏸ *PAUSED*" if _bot_paused else "▶ Running"
-        text = (
+        status_text = (
             f"*Bot Status*\n"
             f"• State: {paused}\n"
             f"• Equity: ${_health_state['equity_usd']:,.2f}\n"
@@ -168,7 +173,7 @@ def slack_commands():
             f"• VIX: {float(vix):.1f}\n"
             f"• Market Regime: {regime.capitalize()}"
         )
-        return jsonify({"text": text})
+        return jsonify({"text": status_text})
 
     if command == "/pause":
         global _bot_paused
@@ -188,27 +193,127 @@ def slack_commands():
             "text": f"▶ *Bot resumed* by @{user} — normal trading has resumed.",
         })
 
+    if command == "/buy":
+        parts = text.split()
+        if len(parts) != 2:
+            return jsonify({"text": "Usage: `/buy SYMBOL SHARES` — e.g. `/buy COST 10`"}), 200
+        symbol = parts[0].upper()
+        try:
+            shares = int(parts[1])
+            if shares <= 0:
+                raise ValueError
+        except ValueError:
+            return jsonify({"text": "SHARES must be a positive integer."}), 200
+
+        if _bot_paused:
+            return jsonify({"text": "⏸ Bot is paused — use `/resume` first."}), 200
+        if _bot_instance is not None and _bot_instance.trading_halted_for_day:
+            return jsonify({"text": "🛑 Trading halted for today (daily loss limit reached)."}), 200
+        if _bot_instance is None:
+            return jsonify({"text": "Bot not initialised yet — try again in a moment."}), 200
+
+        def _submit_buy():
+            try:
+                from alpaca.trading.requests import MarketOrderRequest
+                from alpaca.trading.enums import OrderSide, TimeInForce
+                order = _bot_instance.trading_client.submit_order(MarketOrderRequest(
+                    symbol=symbol,
+                    qty=shares,
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.DAY,
+                ))
+                print(f"[SlashCmd] /buy {symbol} {shares} by @{user} → order {order.id}")
+                if response_url:
+                    _requests.post(response_url, json={
+                        "response_type": "in_channel",
+                        "text": (
+                            f"✅ *BUY {symbol}* — {shares} shares @ market · "
+                            f"order `{order.id}` by @{user}"
+                        ),
+                    }, timeout=5)
+            except Exception as exc:
+                print(f"[SlashCmd] /buy {symbol} error: {exc}")
+                if response_url:
+                    _requests.post(response_url, json={
+                        "text": f"❌ Buy order failed for *{symbol}*: {exc}"
+                    }, timeout=5)
+
+        threading.Thread(target=_submit_buy, daemon=True).start()
+        return jsonify({
+            "text": f"Buying *{shares}* shares of *{symbol}* at market. Order submitted."
+        }), 200
+
+    if command == "/sell":
+        symbol = text.split()[0].upper() if text else ""
+        if not symbol:
+            return jsonify({"text": "Usage: `/sell SYMBOL` — e.g. `/sell COST`"}), 200
+        if _bot_instance is None:
+            return jsonify({"text": "Bot not initialised yet — try again in a moment."}), 200
+
+        # Check position synchronously — fast Alpaca call, well within 3-second timeout
+        try:
+            position = _bot_instance.trading_client.get_open_position(symbol)
+            qty_shares = abs(float(position.qty))
+            qty_str    = f"{qty_shares:.0f}"
+        except Exception:
+            return jsonify({"text": f"No open position for *{symbol}*."}), 200
+
+        def _submit_sell():
+            try:
+                _bot_instance.trading_client.close_position(symbol)
+                print(f"[SlashCmd] /sell {symbol} ({qty_str} shares) by @{user}")
+                if response_url:
+                    _requests.post(response_url, json={
+                        "response_type": "in_channel",
+                        "text": (
+                            f"✅ *SELL {symbol}* — {qty_str} shares @ market · "
+                            f"position closed by @{user}"
+                        ),
+                    }, timeout=5)
+            except Exception as exc:
+                print(f"[SlashCmd] /sell {symbol} error: {exc}")
+                if response_url:
+                    _requests.post(response_url, json={
+                        "text": f"❌ Sell order failed for *{symbol}*: {exc}"
+                    }, timeout=5)
+
+        threading.Thread(target=_submit_sell, daemon=True).start()
+        return jsonify({
+            "text": f"Selling *{qty_str}* shares of *{symbol}* at market. Order submitted."
+        }), 200
+
     if command == "/help":
-        text = (
+        help_text = (
             "*Available Slash Commands*\n"
             "• `/status` — equity, positions, daily P&L, VIX, market regime\n"
+            "• `/buy SYMBOL SHARES` — submit a market buy order\n"
+            "• `/sell SYMBOL` — close your full open position\n"
             "• `/pause` — halt all new trade execution immediately\n"
             "• `/resume` — resume trading after a pause\n"
             "• `/help` — show this message"
         )
-        return jsonify({"text": text})
+        return jsonify({"text": help_text})
 
     return jsonify({"text": f"Unknown command `{command}`. Try `/help`."}), 200
 
 
-def start_health_server(port=8502):
-    """Run the Flask health server in a daemon thread so it never blocks the bot."""
+def start_health_server(port: int | None = None):
+    """
+    Run the Flask health/slash server in a daemon thread.
+    Port defaults to HEALTH_PORT env var, then 8502.
+
+    Railway setup: add a second public domain pointing to port 8502 (or HEALTH_PORT),
+    then register that URL as the Slack slash-command Request URL in the Slack app config.
+    """
+    if port is None:
+        port = int(os.environ.get("HEALTH_PORT", 8502))
     thread = threading.Thread(
         target=lambda: _health_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False),
         daemon=True
     )
     thread.start()
-    print(f"🩺 Health endpoint running on http://0.0.0.0:{port}/health")
+    print(f"🩺 Health/slash endpoint: http://0.0.0.0:{port}/health  (HEALTH_PORT={port})")
+    print(f"   Slack slash commands:  POST :{port}/slack/commands")
 
 
 # Hardcoded GICS sector mapping for current SWING_SYMBOLS.
@@ -225,6 +330,8 @@ _SECTOR_MAP: dict[str, str] = {
 
 class TradingBot:
     def __init__(self):
+        global _bot_instance
+        _bot_instance = self
         print("DEBUG: Initializing TradingBot...")
         
         # Determine Base URL
@@ -2269,7 +2376,7 @@ class TradingBot:
         )
 
 if __name__ == "__main__":
-    start_health_server(port=8502)
+    start_health_server()  # port from HEALTH_PORT env var, default 8502
     bot = TradingBot()
     try:
         asyncio.run(bot.start_dual_engine())
