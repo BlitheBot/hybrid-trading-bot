@@ -146,6 +146,8 @@ Respond with ONLY a valid JSON object using exactly this schema:
         try:
             batch_size = Config.NEWS_BATCH_SIZE
             all_articles = []
+            _news_url = "https://data.alpaca.markets/v1beta1/news"
+            print(f"[NewsStrategy DIAG] scan_once starting — URL: GET {_news_url}")
             for i in range(0, len(SP500_TICKERS), batch_size):
                 batch = SP500_TICKERS[i : i + batch_size]
                 req = NewsRequest(
@@ -154,23 +156,50 @@ Respond with ONLY a valid JSON object using exactly this schema:
                     sort="desc",
                     limit=10,
                 )
+                batch_num = i // batch_size
+                print(
+                    f"[NewsStrategy DIAG] Batch {batch_num}: "
+                    f"symbols={batch[:3]}...({len(batch)} total) "
+                    f"start={req.start.strftime('%H:%M UTC')}"
+                )
                 for attempt in range(3):
                     try:
                         resp = await asyncio.to_thread(self.news_client.get_news, req)
+                        # DIAG: resp.news does NOT exist — articles are at resp.data["news"]
+                        has_news_attr  = hasattr(resp, "news")
+                        data_news      = getattr(resp, "data", {}).get("news", [])
+                        first_headline = data_news[0].headline if data_news else None
+                        print(
+                            f"[NewsStrategy DIAG] Batch {batch_num} OK — "
+                            f"type={type(resp).__name__} | "
+                            f"hasattr(resp,'news')={has_news_attr} | "
+                            f"resp.data['news'] count={len(data_news)} | "
+                            f"first_headline={first_headline!r}"
+                        )
                         if resp and hasattr(resp, "news"):
                             all_articles.extend(resp.news)
                         break  # success
                     except Exception as e:
-                        err = str(e).lower()
+                        err_raw = str(e)
+                        err = err_raw.lower()
+                        # DIAG: log full error including HTTP status code
+                        status_hint = ""
+                        if "403" in err_raw:
+                            status_hint = " [403 FORBIDDEN — likely subscription/tier issue]"
+                        elif "401" in err_raw:
+                            status_hint = " [401 UNAUTHORIZED — invalid or missing API key]"
+                        elif "subscription" in err or "forbidden" in err or "not authorized" in err:
+                            status_hint = " [SUBSCRIPTION/ACCESS ERROR]"
                         if "429" in err or "rate limit" in err or "too many" in err:
                             wait = 10 * (attempt + 1)
-                            print(f"[NewsStrategy] Rate limited on batch {i//batch_size}, waiting {wait}s (attempt {attempt+1}/3)...")
+                            print(f"[NewsStrategy] Rate limited on batch {batch_num}, waiting {wait}s (attempt {attempt+1}/3)...")
                             await asyncio.sleep(wait)
                         else:
-                            print(f"[NewsStrategy] Batch fetch error (batch {i//batch_size}): {e}")
+                            print(f"[NewsStrategy DIAG] Batch {batch_num} ERROR{status_hint}: {err_raw}")
                             break
 
             self._last_articles_scanned = len(all_articles)
+            print(f"[NewsStrategy DIAG] scan_once complete — all_articles={len(all_articles)} (signals will be 0 if this is 0)")
 
             for article in all_articles:
                 tickers = getattr(article, "symbols", []) or []
