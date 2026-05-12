@@ -4,6 +4,29 @@ from config import Config
 from datetime import datetime
 import pytz
 
+
+def _pagerduty_trigger(message: str) -> None:
+    """Fire a PagerDuty phone alert. Silently skips if routing key not configured."""
+    key = Config.PAGERDUTY_ROUTING_KEY
+    if not key:
+        return
+    try:
+        requests.post(
+            "https://events.pagerduty.com/v2/enqueue",
+            json={
+                "routing_key": key,
+                "event_action": "trigger",
+                "payload": {
+                    "summary": message,
+                    "severity": "critical",
+                    "source": "hybrid-trading-bot",
+                },
+            },
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"[PagerDuty] Failed to send alert: {e}")
+
 async def _post_to_slack(webhook_url, payload):
     """Internal method to post asynchronously to a webhook without blocking the main loop."""
     if not webhook_url:
@@ -89,12 +112,14 @@ async def notify_trade_skipped(symbol, strategy_name, reason):
     await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
 
 async def notify_alert(message, level="ERROR"):
-    """Sends critical alerts and errors to the #trading-alerts channel."""
+    """Sends critical alerts to #trading-alerts; fires PagerDuty phone alert on CRITICAL."""
     emoji = "🔥" if level.upper() == "CRITICAL" else "⚠️"
     payload = {
         "text": f"{emoji} *{level} ALERT* {emoji}\n{message}"
     }
     await _post_to_slack(Config.SLACK_ALERTS_WEBHOOK, payload)
+    if level.upper() == "CRITICAL":
+        await asyncio.to_thread(_pagerduty_trigger, message)
 
 async def notify_daily_health(uptime_str, equity, buying_power, daily_pnl):
     """Sends the daily health report to the #trading-health channel."""

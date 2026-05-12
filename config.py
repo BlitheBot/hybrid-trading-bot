@@ -93,6 +93,9 @@ class Config:
     SEC_EDGAR_MIN_BUY_VALUE = 100_000    # ignore buys below $100k
     SEC_EDGAR_MIN_SELL_VALUE = 500_000   # ignore sells below $500k
 
+    # PagerDuty phone alerts (optional — omit PAGERDUTY_ROUTING_KEY to disable)
+    PAGERDUTY_ROUTING_KEY = os.getenv("PAGERDUTY_ROUTING_KEY")
+
     # Performance Brain
     PERFORMANCE_SCALING_ENABLED = True  # adjust position size based on last 20-trade win rate
     POSITION_SIZE_FLOOR = 0.1           # floor: no trade below 10% of SWING_EQUITY_RISK_PERCENT

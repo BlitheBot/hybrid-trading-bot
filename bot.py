@@ -67,6 +67,7 @@ _health_state: dict = {
     "daily_pnl_pct": 0.0,
     "signals_fired_total": 0,
     "market_regime": "unknown",
+    "last_health_report_utc": None,
 }
 
 # Set by /pause slash command; cleared by /resume. Checked by all trade-execution paths.
@@ -1121,6 +1122,18 @@ class TradingBot:
                 self._last_ev_check_date = today
                 await self._calculate_strategy_ev()
 
+            # Health watchdog — if daily health report hasn't fired in 25+ hours,
+            # fire a CRITICAL PagerDuty alert (covers Railway crash/restart scenarios).
+            last_hr = _health_state.get("last_health_report_utc")
+            if last_hr is not None:
+                last_hr_dt = datetime.fromisoformat(last_hr)
+                if (datetime.now(pytz.utc) - last_hr_dt).total_seconds() > 25 * 3600:
+                    asyncio.create_task(notifications.notify_alert(
+                        "Health report has not fired in 25+ hours — bot may have crashed or restarted.",
+                        level="CRITICAL",
+                    ))
+                    _health_state["last_health_report_utc"] = datetime.now(pytz.utc).isoformat()
+
             if not open_ids_snapshot:
                 continue
             try:
@@ -1601,15 +1614,20 @@ class TradingBot:
             if preferred_strategy_type:
                 print(f"[ADX] Market is {adx_regime} — preferring {preferred_strategy_type} strategies")
 
-            # Time-of-day safety multiplier: swing loop fires at 10:30am but guard
-            # against any edge case where it runs outside 10:00–11:00am EST.
+            # 5-window time-of-day multiplier (minutes since midnight, EST)
             _eval_now = datetime.now(pytz.timezone('America/New_York'))
-            tod_mult = 1.0 if 10 <= _eval_now.hour < 11 else 0.7
-            if tod_mult < 1.0:
-                print(
-                    f"[Swing] Evaluation outside 10–11am EST "
-                    f"({_eval_now.strftime('%H:%M')}) — applying 0.7x conviction"
-                )
+            _tod_min = _eval_now.hour * 60 + _eval_now.minute
+            if 570 <= _tod_min < 630:    # 9:30–10:30am — market open momentum window
+                tod_mult = 1.2
+            elif 630 <= _tod_min < 720:  # 10:30am–12pm — prime swing entry window
+                tod_mult = 1.0
+            elif 720 <= _tod_min < 840:  # 12–2pm — midday chop, reduce size
+                tod_mult = 0.7
+            elif 840 <= _tod_min < 960:  # 2–4pm — afternoon trend resumes
+                tod_mult = 1.0
+            else:                        # outside regular hours — safety floor
+                tod_mult = 0.5
+            print(f"[Swing] Time-of-day multiplier: {tod_mult}x ({_eval_now.strftime('%H:%M')} EST)")
 
             for symbol in Config.SWING_SYMBOLS:
                 if symbol in _no_edge:
@@ -1736,6 +1754,7 @@ class TradingBot:
                 equity = float(account.equity)
                 buying_power = float(account.buying_power)
                 asyncio.create_task(notifications.notify_daily_health(uptime_str, equity, buying_power, self.daily_pnl))
+                _health_state["last_health_report_utc"] = datetime.now(pytz.utc).isoformat()
 
     async def performance_report_loop(self):
         print("📊 Starting Weekly Performance Report Loop (Sunday 6:00 PM EST)...")
@@ -2312,6 +2331,33 @@ class TradingBot:
                 print(f"[RedditLoop] Unexpected error: {e}")
             await asyncio.sleep(Config.REDDIT_POLL_INTERVAL)
 
+    async def symbol_universe_loop(self):
+        """Loop 15 — refreshes symbol_universe table every Sunday at midnight EST."""
+        if not self._db_engine:
+            print("[SymbolUniverse] No DB — loop disabled")
+            return
+        from discovery.symbol_universe import refresh_symbol_universe
+        print("🌐 Starting Symbol Universe Loop (Sunday midnight EST)...")
+        while True:
+            now = datetime.now(pytz.timezone("America/New_York"))
+            # Next Sunday midnight
+            days_until_sunday = (6 - now.weekday()) % 7  # weekday() 6 = Sunday
+            next_sunday = (now + timedelta(days=days_until_sunday)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            if now >= next_sunday:
+                next_sunday += timedelta(days=7)
+            await asyncio.sleep((next_sunday - now).total_seconds())
+            try:
+                print("[SymbolUniverse] Sunday midnight — refreshing symbol universe...")
+                await asyncio.to_thread(
+                    refresh_symbol_universe,
+                    self._db_engine,
+                    self.stock_data_client,
+                )
+            except Exception as e:
+                print(f"[SymbolUniverse] Refresh error: {e}")
+
     async def start_dual_engine(self):
         print("🚀 Hybrid Trading Bot starting...")
 
@@ -2372,6 +2418,7 @@ class TradingBot:
             self.market_open_notification_loop(),
             self.discovery_loop(),
             self.reddit_loop(),
+            self.symbol_universe_loop(),
         )
 
 if __name__ == "__main__":

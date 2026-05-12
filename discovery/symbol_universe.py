@@ -1,120 +1,127 @@
 """
-Ranks S&P 500 symbols by trailing 30-day average daily volume via Alpaca.
-Returns the top N by volume, filtering out illiquid symbols (< 5M avg shares/day).
-Cache TTL: 168 hours (1 week). Falls back to cached list, then hardcoded fallback.
+Symbol Universe — weekly refresh of top S&P 500 symbols by average daily volume.
+
+Runs every Sunday at midnight EST via symbol_universe_loop in bot.py.
+Stores results in PostgreSQL `symbol_universe` table (symbol, avg_volume, rank, updated_at).
+`get_discovery_candidates()` returns the top N symbols for the Discovery Engine.
 """
+
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import pytz
+from sqlalchemy import text as sql_text
 
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
-
+from config import Config
 from data.sp500_tickers import SP500_TICKERS
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
-_CACHE_PATH     = DATA_DIR / "symbol_universe.parquet"
-_CACHE_MAX_AGE  = timedelta(hours=168)
-_MIN_AVG_VOL    = 5_000_000
-_BATCH_SIZE     = 50
-
-# Hardcoded fallback — 50 large-cap S&P 500 symbols with reliable liquidity
-_FALLBACK = [
-    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "TSLA", "BRK.B",
-    "JPM", "V", "UNH", "XOM", "JNJ", "WMT", "PG", "MA", "HD", "CVX", "MRK",
-    "ABBV", "LLY", "COST", "PEP", "KO", "AVGO", "ORCL", "TMO", "ACN", "MCD",
-    "BAC", "NFLX", "ADBE", "CRM", "AMD", "INTC", "TXN", "QCOM", "HON", "UNP",
-    "SPY", "QQQ", "GS", "MS", "AXP", "C", "WFC", "BMY", "AMGN", "GILD",
-]
 
 
-def _load_cache() -> list[str] | None:
-    if not _CACHE_PATH.exists():
-        return None
-    age = datetime.now() - datetime.fromtimestamp(_CACHE_PATH.stat().st_mtime)
-    if age > _CACHE_MAX_AGE:
-        return None
-    try:
-        import pyarrow.parquet as pq
-        df = pq.read_table(str(_CACHE_PATH)).to_pandas()
-        return df["symbol"].tolist()
-    except Exception:
-        return None
+def _ensure_symbol_universe_table(db_engine) -> None:
+    with db_engine.begin() as conn:
+        conn.execute(sql_text("""
+            CREATE TABLE IF NOT EXISTS symbol_universe (
+                symbol     VARCHAR(10) PRIMARY KEY,
+                avg_volume BIGINT,
+                rank       INTEGER,
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """))
 
 
-def _save_cache(symbols: list[str]):
-    try:
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-        df = pd.DataFrame({"symbol": symbols})
-        pq.write_table(pa.Table.from_pandas(df), str(_CACHE_PATH))
-    except Exception as e:
-        print(f"[SymbolUniverse] Cache write failed: {e}")
+def refresh_symbol_universe(
+    db_engine,
+    stock_data_client,
+    top_n: int = 100,
+) -> None:
+    """Fetch 5-day avg volume for all SP500_TICKERS and UPSERT top top_n into DB."""
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
 
+    est = pytz.timezone("America/New_York")
+    end = datetime.now(est).replace(hour=0, minute=0, second=0, microsecond=0)
+    # 10 calendar days → guarantees at least 5 trading days of bars
+    start = end - timedelta(days=10)
 
-def get_top_n(
-    data_client: StockHistoricalDataClient,
-    limit: int = 100,
-    min_avg_vol: int = _MIN_AVG_VOL,
-) -> list[str]:
-    """
-    Returns up to `limit` S&P 500 symbols ranked by 30-day average daily volume.
-    Uses parquet cache (168h TTL). Falls back to cached list on API failure.
-    """
-    cached = _load_cache()
-    if cached is not None:
-        print(f"[SymbolUniverse] Using cached universe ({len(cached)} symbols)")
-        return cached[:limit]
+    # Strip symbols that Alpaca IEX feed won't accept (dots, slashes)
+    tickers = [t for t in SP500_TICKERS if t and "." not in t and "/" not in t]
 
-    print(f"[SymbolUniverse] Fetching 30-day volume for {len(SP500_TICKERS)} S&P 500 symbols...")
-    end   = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    start = end - timedelta(days=35)  # fetch 35 days → ~21 trading days
-
+    batch_size = Config.NEWS_BATCH_SIZE
     vol_map: dict[str, float] = {}
-    tickers = list(SP500_TICKERS)
 
-    for i in range(0, len(tickers), _BATCH_SIZE):
-        batch = tickers[i : i + _BATCH_SIZE]
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i : i + batch_size]
         try:
-            req  = StockBarsRequest(symbol_or_symbols=batch, timeframe=TimeFrame.Day, start=start, end=end)
-            bars = data_client.get_stock_bars(req)
-            df   = bars.df
+            req = StockBarsRequest(
+                symbol_or_symbols=batch,
+                timeframe=TimeFrame.Day,
+                start=start,
+                end=end,
+                feed="iex",
+            )
+            bars = stock_data_client.get_stock_bars(req)
+            df = bars.df
             if df is None or df.empty:
                 continue
             if isinstance(df.index, pd.MultiIndex):
                 df = df.reset_index()
-                for sym, grp in df.groupby("symbol"):
-                    vol_map[sym] = grp["volume"].mean()
             else:
                 df = df.reset_index()
-                for sym, grp in df.groupby("symbol"):
-                    vol_map[sym] = grp["volume"].mean()
+
+            if "symbol" not in df.columns:
+                continue
+
+            for sym, grp in df.groupby("symbol"):
+                if "volume" in grp.columns:
+                    vol_map[sym] = float(grp["volume"].tail(5).mean())
         except Exception as e:
-            print(f"[SymbolUniverse] Batch {i//50+1} fetch error: {e}")
+            print(f"[SymbolUniverse] Batch {i // batch_size + 1} error: {e}")
+        time.sleep(0.2)  # light courtesy sleep between Alpaca batches
 
     if not vol_map:
-        print("[SymbolUniverse] Volume fetch failed — using fallback list")
-        fallback = _load_cache() or _FALLBACK
-        return fallback[:limit]
+        print("[SymbolUniverse] No volume data fetched — skipping DB update")
+        return
 
-    ranked = sorted(
-        [(sym, avg) for sym, avg in vol_map.items() if avg >= min_avg_vol],
-        key=lambda x: x[1],
-        reverse=True,
-    )
+    sorted_syms = sorted(vol_map, key=lambda s: vol_map[s], reverse=True)[:top_n]
+    ranked = [(sym, int(vol_map[sym]), rank + 1) for rank, sym in enumerate(sorted_syms)]
 
-    symbols = [sym for sym, _ in ranked[:limit]]
-    print(f"[SymbolUniverse] {len(symbols)} symbols pass {min_avg_vol/1e6:.0f}M volume filter (from {len(vol_map)} fetched)")
-    _save_cache(symbols)
-    return symbols
+    _ensure_symbol_universe_table(db_engine)
+    with db_engine.begin() as conn:
+        for sym, avg_vol, rank in ranked:
+            conn.execute(sql_text("""
+                INSERT INTO symbol_universe (symbol, avg_volume, rank, updated_at)
+                VALUES (:sym, :vol, :rank, NOW())
+                ON CONFLICT (symbol) DO UPDATE SET
+                    avg_volume = EXCLUDED.avg_volume,
+                    rank       = EXCLUDED.rank,
+                    updated_at = EXCLUDED.updated_at
+            """), {"sym": sym, "vol": avg_vol, "rank": rank})
+
+    print(f"[SymbolUniverse] Refreshed — top {len(ranked)} symbols by 5-day avg volume")
 
 
-def refresh(data_client: StockHistoricalDataClient) -> list[str]:
-    """Force-expire cache and rebuild. Called Sunday midnight by discovery_loop."""
-    if _CACHE_PATH.exists():
-        _CACHE_PATH.unlink()
-    return get_top_n(data_client)
+def get_discovery_candidates(
+    db_engine,
+    exclude: list[str] | None = None,
+    top_n: int = 20,
+) -> list[str]:
+    """Return top top_n symbols from symbol_universe, excluding symbols in exclude list."""
+    if db_engine is None:
+        return []
+    exclude_set = set(exclude or [])
+    try:
+        with db_engine.connect() as conn:
+            rows = conn.execute(sql_text("""
+                SELECT symbol FROM symbol_universe
+                ORDER BY rank ASC
+                LIMIT :limit
+            """), {"limit": top_n + len(exclude_set) + 10}).mappings().fetchall()
+        candidates = [r["symbol"] for r in rows if r["symbol"] not in exclude_set]
+        return candidates[:top_n]
+    except Exception as e:
+        print(f"[SymbolUniverse] get_discovery_candidates error: {e}")
+        return []
