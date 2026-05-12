@@ -1088,7 +1088,7 @@ with tab_discovery:
                     "best_sharpe": "{:.3f}",
                     "avg_sharpe":  "{:.3f}",
                 }),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
@@ -1112,7 +1112,7 @@ with tab_discovery:
                 .map(_pnl_color,    subset=["test_sharpe", "train_sharpe"])
                 .format({k: v for k, v in fmt.items() if k in display_cols}, na_rep="—")
             )
-            st.dataframe(styled_disc, use_container_width=True, hide_index=True)
+            st.dataframe(styled_disc, width="stretch", hide_index=True)
 
 # ── Tab 5: Analytics ───────────────────────────────────────────────────────────
 
@@ -1259,7 +1259,7 @@ with tab_analytics:
                     "ev_pct":       "{:+.3f}%",
                 }, na_rep="—")
             )
-            st.dataframe(styled_ev, use_container_width=True, hide_index=True)
+            st.dataframe(styled_ev, width="stretch", hide_index=True)
 
 # ── Tab 6: Performance Brain ───────────────────────────────────────────────────
 
@@ -1313,7 +1313,7 @@ with tab_perf:
                 **_layout_no_hover,
             )
             fig_st.update_layout(xaxis_title="Win Rate (%)", yaxis_title="")
-            st.plotly_chart(fig_st, use_container_width=True)
+            st.plotly_chart(fig_st, width="stretch")
 
             styled_st = (
                 df_st.style
@@ -1325,7 +1325,7 @@ with tab_perf:
                     "ev":          "{:+.3f}%",
                 }, na_rep="—")
             )
-            st.dataframe(styled_st, use_container_width=True, hide_index=True)
+            st.dataframe(styled_st, width="stretch", hide_index=True)
         else:
             st.info("No closed trades yet — signal type breakdown will populate once positions close.")
 
@@ -1358,7 +1358,7 @@ with tab_perf:
             fig_reg.update_layout(
                 xaxis_title="Strategy", yaxis_title="Win Rate (%)", yaxis_range=[0, 120],
             )
-            st.plotly_chart(fig_reg, use_container_width=True)
+            st.plotly_chart(fig_reg, width="stretch")
         else:
             st.info("No regime data yet — win rate by regime will populate as trades close.")
 
@@ -1389,7 +1389,7 @@ with tab_perf:
             fig_dow.add_hline(y=50, line_dash="dash", line_color="#30363d")
             fig_dow.update_layout(height=320, yaxis_range=[0, 125], **_CHART_LAYOUT)
             fig_dow.update_layout(xaxis_title="Day of Week", yaxis_title="Win Rate (%)")
-            st.plotly_chart(fig_dow, use_container_width=True)
+            st.plotly_chart(fig_dow, width="stretch")
         else:
             st.info("No day-of-week data yet.")
 
@@ -1420,7 +1420,7 @@ with tab_perf:
             fig_hr.add_hline(y=50, line_dash="dash", line_color="#30363d")
             fig_hr.update_layout(height=320, yaxis_range=[0, 125], **_CHART_LAYOUT)
             fig_hr.update_layout(xaxis_title="Entry Hour (EST)", yaxis_title="Win Rate (%)")
-            st.plotly_chart(fig_hr, use_container_width=True)
+            st.plotly_chart(fig_hr, width="stretch")
         else:
             st.info("No hour-of-day data yet.")
 
@@ -1454,4 +1454,4 @@ with tab_perf:
                     "ev":           "{:+.3f}%",
                 }, na_rep="—")
             )
-            st.dataframe(styled_tw, use_container_width=True, hide_index=True)
+            st.dataframe(styled_tw, width="stretch", hide_index=True)

@@ -148,6 +148,7 @@ def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool
 
 @_health_app.route("/slack/commands", methods=["POST"])
 def slack_commands():
+    global _bot_paused  # must precede any read of _bot_paused in this function
     body         = request.get_data()
     ts           = request.headers.get("X-Slack-Request-Timestamp", "")
     sig          = request.headers.get("X-Slack-Signature", "")
@@ -176,7 +177,6 @@ def slack_commands():
         return jsonify({"text": status_text})
 
     if command == "/pause":
-        global _bot_paused
         _bot_paused = True
         print(f"[SlashCmd] Bot PAUSED by @{user}")
         return jsonify({
@@ -185,7 +185,6 @@ def slack_commands():
         })
 
     if command == "/resume":
-        global _bot_paused
         _bot_paused = False
         print(f"[SlashCmd] Bot RESUMED by @{user}")
         return jsonify({
