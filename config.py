@@ -96,6 +96,10 @@ class Config:
     # PagerDuty phone alerts (optional — omit PAGERDUTY_ROUTING_KEY to disable)
     PAGERDUTY_ROUTING_KEY = os.getenv("PAGERDUTY_ROUTING_KEY")
 
+    # Notion trade journal (optional — omit either key to disable)
+    NOTION_API_KEY      = os.getenv("NOTION_API_KEY")
+    NOTION_DATABASE_ID  = os.getenv("NOTION_DATABASE_ID")
+
     # Performance Brain
     PERFORMANCE_SCALING_ENABLED = True  # adjust position size based on last 20-trade win rate
     POSITION_SIZE_FLOOR = 0.1           # floor: no trade below 10% of SWING_EQUITY_RISK_PERCENT

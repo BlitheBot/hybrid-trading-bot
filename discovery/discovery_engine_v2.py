@@ -817,6 +817,11 @@ class DiscoveryEngineV2:
         pending = len([r for r in all_results if r.get("status") == "pending_approval"])
         lines.append(f"*Strategies awaiting approval:* {pending}")
         lines.append("Review at: hybrid-trading-bot-production.up.railway.app")
+
+        fi_brief = self._feature_importance_brief()
+        if fi_brief:
+            lines.append(f"\n*ML Feature Importance:* {fi_brief}")
+
         self._slack("\n".join(lines))
 
         # Generate and post equity curve charts for top 5 findings
@@ -848,6 +853,72 @@ class DiscoveryEngineV2:
                     print(f"[v2] Chart upload failed for {r['symbol']} — skipping image post")
             except Exception as e:
                 print(f"[v2] Chart pipeline error for {r.get('symbol')}: {e}")
+
+    def _feature_importance_brief(self) -> str:
+        """
+        Trains a RandomForestClassifier on closed signal_outcomes rows.
+        Returns a human-readable importance line for the Slack brief,
+        or "" if there is insufficient data or no DB connection.
+        """
+        if not self._db_url:
+            return ""
+        try:
+            from sklearn.ensemble import RandomForestClassifier
+        except ImportError:
+            print("[v2] scikit-learn not installed — feature importance skipped")
+            return ""
+        try:
+            engine = create_engine(self._db_url, pool_pre_ping=True)
+            with engine.connect() as conn:
+                df = pd.read_sql_query(
+                    sql_text("""
+                        SELECT rsi_at_entry,
+                               macd_at_entry,
+                               ema_short,
+                               ema_long,
+                               market_regime,
+                               EXTRACT(HOUR FROM entry_time AT TIME ZONE 'America/New_York')::int
+                                   AS hour_of_day,
+                               EXTRACT(DOW  FROM entry_time AT TIME ZONE 'America/New_York')::int
+                                   AS day_of_week,
+                               pnl_pct
+                        FROM signal_outcomes
+                        WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                    """),
+                    conn,
+                )
+            engine.dispose()
+
+            if len(df) < 30:
+                print(f"[v2] Feature importance: {len(df)} closed trades — need ≥30, skipping")
+                return ""
+
+            regime_map = {"bull": 1, "bear": -1, "neutral": 0}
+            df["market_regime_enc"] = df["market_regime"].map(regime_map).fillna(0).astype(int)
+
+            feature_cols   = ["rsi_at_entry", "macd_at_entry", "ema_short", "ema_long",
+                               "market_regime_enc", "hour_of_day", "day_of_week"]
+            feature_labels = ["RSI at entry", "MACD at entry", "EMA short", "EMA long",
+                               "Market regime", "Hour of day", "Day of week"]
+
+            X = df[feature_cols].apply(lambda col: col.fillna(col.median())).values
+            y = (df["pnl_pct"] > 0).astype(int).values
+
+            if y.sum() < 5 or (len(y) - y.sum()) < 5:
+                return ""
+
+            clf = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=1)
+            clf.fit(X, y)
+
+            sorted_idx = np.argsort(clf.feature_importances_)[::-1]
+            top3 = [(feature_labels[i], clf.feature_importances_[i]) for i in sorted_idx[:3]]
+            parts = [f"{name} ({imp * 100:.0f}%)" for name, imp in top3]
+            brief = f"Key predictors ({len(df)} trades): {', '.join(parts)}"
+            print(f"[v2] {brief}")
+            return brief
+        except Exception as e:
+            print(f"[v2] Feature importance failed: {e}")
+            return ""
 
     def run(self):
         strategy_classes    = load_all_strategies()

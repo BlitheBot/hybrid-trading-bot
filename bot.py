@@ -11,6 +11,7 @@ import pytz
 import pandas as pd
 from flask import Flask, jsonify, request
 import notifications
+import notion_journal
 from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
 
@@ -1004,6 +1005,18 @@ class TradingBot:
                         if row_id:
                             async with self._trade_ids_lock:
                                 self._open_trade_ids[symbol] = (row_id, float(signal.get('entry_price', 0)), entry_time)
+                            asyncio.create_task(notion_journal.post_trade_to_notion({
+                                "symbol":        symbol,
+                                "signal_type":   signal_type,
+                                "entry_price":   float(signal.get('entry_price', 0)),
+                                "entry_time":    entry_time,
+                                "stop_price":    float(signal.get('stop_price', 0)),
+                                "target_price":  float(signal.get('target_price', 0)),
+                                "position_size": round(scaled_risk_percent, 4),
+                                "market_regime": regime,
+                                "signal_source": strategy.name,
+                                "reasoning":     signal.get('reasoning', ''),
+                            }))
 
                 except Exception as e:
                     msg = f"Error executing trade for {symbol}: {e}"
