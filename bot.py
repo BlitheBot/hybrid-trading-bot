@@ -841,6 +841,28 @@ class TradingBot:
                             print(f"[ProcessSymbol] Unexpected error checking position for {symbol}: {e}")
                             continue  # Don't trade on unexpected API errors
 
+                    # Portfolio heat cap: block new trades if aggregate open-position risk ≥ cap
+                    _equity_ref = _health_state.get("equity_usd") or self.start_of_day_equity
+                    if _equity_ref > 0:
+                        try:
+                            _all_pos = await asyncio.to_thread(self.trading_client.get_all_positions)
+                            _heat = sum(
+                                abs(float(p.market_value)) * (stop_loss_percent / 100.0)
+                                for p in _all_pos
+                            ) / _equity_ref
+                            if _heat >= Config.PORTFOLIO_HEAT_CAP:
+                                _heat_msg = (
+                                    f"Portfolio heat {_heat:.1%} ≥ cap "
+                                    f"{Config.PORTFOLIO_HEAT_CAP:.0%} — trade skipped"
+                                )
+                                print(f"[HeatCap] {symbol}: {_heat_msg}")
+                                asyncio.create_task(notifications.notify_trade_skipped(
+                                    symbol, strategy.name, _heat_msg
+                                ))
+                                continue
+                        except Exception as _heat_err:
+                            print(f"[HeatCap] Position check failed for {symbol}: {_heat_err}")
+
                     # Pre-execute hook: fundamentals check + bull/bear debate (swing only)
                     if pre_execute_hook:
                         hook_proceed, hook_reason = await pre_execute_hook(symbol, signal, strategy)
@@ -1590,6 +1612,22 @@ class TradingBot:
                     LIMIT 1
                 """)).mappings().fetchone()
 
+            with self._db_engine.connect() as conn:
+                overall_row = conn.execute(sql_text("""
+                    SELECT AVG(CASE WHEN pnl_pct > 0  THEN pnl_pct      ELSE NULL END) AS avg_win,
+                           AVG(CASE WHEN pnl_pct <= 0 THEN ABS(pnl_pct) ELSE NULL END) AS avg_loss
+                    FROM signal_outcomes
+                    WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                      AND entry_time >= :week_ago
+                """), {"week_ago": week_ago}).mappings().fetchone()
+
+            overall_avg_win  = float(overall_row["avg_win"]  or 0) if overall_row else 0.0
+            overall_avg_loss = float(overall_row["avg_loss"] or 0) if overall_row else 0.0
+            overall_ratio = (
+                round(overall_avg_win / overall_avg_loss, 2)
+                if overall_avg_loss > 0 else None
+            )
+
             return {
                 "total_trades":      total_trades,
                 "best_signal_type":  best_type,
@@ -1598,6 +1636,9 @@ class TradingBot:
                 "worst_ev":          round(worst_ev, 3) if worst_type else None,
                 "best_day":          _DAY_NAMES.get(int(day_row["dow"]), "—") if day_row else "—",
                 "best_day_win_rate": float(day_row["win_rate"] or 0) if day_row else 0.0,
+                "overall_avg_win":   round(overall_avg_win, 2),
+                "overall_avg_loss":  round(overall_avg_loss, 2),
+                "overall_ratio":     overall_ratio,
             }
         except Exception as e:
             print(f"[PerfBrain] Weekly stats query failed: {e}")

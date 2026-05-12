@@ -1683,3 +1683,70 @@ with tab_perf:
                 }, na_rep="—")
             )
             st.dataframe(styled_tw, width="stretch", hide_index=True)
+
+        st.markdown("---")
+
+        # ── Average winner vs loser size ────────────────────────────────────────
+        st.subheader("Average Winner vs Loser Size")
+        st.caption(
+            "Avg win % vs avg loss % per strategy — ratio > 1 means wins are larger than losses. "
+            "Requires ≥ 3 closed trades."
+        )
+        df_wl = fetch_performance_by_dimension("signal_type")
+
+        if df_wl is not None and not df_wl.empty:
+            df_wl = df_wl.copy()
+            df_wl = df_wl[df_wl["avg_win_pct"].notna() & df_wl["avg_loss_pct"].notna()]
+
+            if not df_wl.empty:
+                fig_wl = go.Figure()
+                fig_wl.add_trace(go.Bar(
+                    name="Avg Win",
+                    x=df_wl["dim_value"].astype(str),
+                    y=df_wl["avg_win_pct"],
+                    marker_color="#00c851",
+                    hovertemplate="%{x}<br>Avg Win: +%{y:.2f}%<extra></extra>",
+                ))
+                fig_wl.add_trace(go.Bar(
+                    name="Avg Loss",
+                    x=df_wl["dim_value"].astype(str),
+                    y=df_wl["avg_loss_pct"],
+                    marker_color="#ff4444",
+                    hovertemplate="%{x}<br>Avg Loss: -%{y:.2f}%<extra></extra>",
+                ))
+                _layout_wl = {k: v for k, v in _CHART_LAYOUT.items() if k != "showlegend"}
+                fig_wl.update_layout(
+                    height=max(300, 70 * len(df_wl)),
+                    barmode="group",
+                    showlegend=True,
+                    legend=dict(font=dict(color="#7d8590")),
+                    **_layout_wl,
+                )
+                fig_wl.update_layout(xaxis_title="Strategy", yaxis_title="Return (%)")
+                st.plotly_chart(fig_wl, width="stretch")
+
+                df_wl["ratio"] = (
+                    df_wl["avg_win_pct"] / df_wl["avg_loss_pct"].replace(0, float("nan"))
+                ).round(2)
+
+                def _ratio_color(val):
+                    if not isinstance(val, (int, float)):
+                        return ""
+                    return "color: #00c851" if val > 1.0 else "color: #ff4444"
+
+                styled_wl = (
+                    df_wl[["dim_value", "trade_count", "avg_win_pct", "avg_loss_pct", "ratio"]]
+                    .rename(columns={"dim_value": "strategy"})
+                    .style
+                    .map(_ratio_color, subset=["ratio"])
+                    .format({
+                        "avg_win_pct":  "{:+.2f}%",
+                        "avg_loss_pct": "{:.2f}%",
+                        "ratio":        "{:.2f}x",
+                    }, na_rep="—")
+                )
+                st.dataframe(styled_wl, width="stretch", hide_index=True)
+            else:
+                st.info("No win/loss data yet — needs at least one winning and one losing trade.")
+        else:
+            st.info("No closed trade data yet.")

@@ -484,6 +484,13 @@ async def notify_weekly_performance_brain(stats: dict):
     best_ev_str  = f"{best_ev:+.2f}%"  if best_ev  is not None else "—"
     worst_ev_str = f"{worst_ev:+.2f}%" if worst_ev is not None else "—"
 
+    avg_win  = stats.get("overall_avg_win",  0.0)
+    avg_loss = stats.get("overall_avg_loss", 0.0)
+    ratio    = stats.get("overall_ratio")
+    avg_win_str  = f"+{avg_win:.2f}%"  if avg_win  else "—"
+    avg_loss_str = f"-{avg_loss:.2f}%" if avg_loss else "—"
+    ratio_str    = f"{ratio:.2f}x"     if ratio is not None else "—"
+
     payload = {
         "text": "🧠 *Weekly Performance Brain Digest*",
         "blocks": [
@@ -498,6 +505,7 @@ async def notify_weekly_performance_brain(stats: dict):
                     {"type": "mrkdwn", "text": f"*Best Strategy:*\n{best_type} (EV {best_ev_str})"},
                     {"type": "mrkdwn", "text": f"*Worst Strategy:*\n{worst_type} (EV {worst_ev_str})"},
                     {"type": "mrkdwn", "text": f"*Best Entry Day:*\n{best_day} ({best_day_wr:.1f}% WR)"},
+                    {"type": "mrkdwn", "text": f"*Avg Win | Avg Loss | Ratio:*\n{avg_win_str} | {avg_loss_str} | {ratio_str}"},
                 ]
             },
             {

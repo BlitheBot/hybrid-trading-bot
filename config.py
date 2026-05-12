@@ -100,6 +100,9 @@ class Config:
     PERFORMANCE_SCALING_ENABLED = True  # adjust position size based on last 20-trade win rate
     POSITION_SIZE_FLOOR = 0.1           # floor: no trade below 10% of SWING_EQUITY_RISK_PERCENT
 
+    # Portfolio heat cap
+    PORTFOLIO_HEAT_CAP = 0.15   # max aggregate open-position risk as % of equity
+
     # Backtester / Strategy Discovery Engine
     BACKTEST_START_DATE = "2019-01-01"
     BACKTEST_END_DATE = "2024-12-31"
