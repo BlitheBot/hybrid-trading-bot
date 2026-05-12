@@ -1074,29 +1074,13 @@ class TradingBot:
                     secret_key=Config.ALPACA_SECRET_KEY
                 )
                 self.crypto_stream.subscribe_trades(self._on_crypto_trade, *Config.SCALP_SYMBOLS)
-                # _connect() makes a single connection attempt and returns when it drops.
-                # _run_forever() has an internal retry loop that bypasses our backoff — avoid it.
+                # _run_forever() handles auth, subscription, and the consume loop internally.
+                # It reconnects on WebSocketException and only returns on a clean stop or
+                # ValueError (e.g. "insufficient subscription") — our outer loop handles that.
                 _health_state["websocket_connected"] = True
-                print(f"[WebSocket DIAG] Calling _connect() at t=0...")
-                await self.crypto_stream._connect()
+                await self.crypto_stream._run_forever()
                 _health_state["websocket_connected"] = False
-                elapsed_connect = time.time() - connect_time
-                ws_obj = getattr(self.crypto_stream, '_ws', None)
-                ws_open   = ws_obj is not None and not getattr(ws_obj, 'closed', True)
-                close_code   = getattr(ws_obj, 'close_code',   None)
-                close_reason = getattr(ws_obj, 'close_reason', b'')
-                if isinstance(close_reason, bytes):
-                    close_reason = close_reason.decode('utf-8', errors='replace')
-                print(
-                    f"[WebSocket DIAG] _connect() returned after {elapsed_connect:.2f}s | "
-                    f"ws_open={ws_open} | close_code={close_code} | close_reason='{close_reason}'"
-                )
-                print(
-                    "[WebSocket DIAG] _connect() only does handshake — "
-                    "_auth()/_send_subscribe_msg()/_consume() were NOT called. "
-                    "No trade data was ever delivered to _on_crypto_trade."
-                )
-                print("WebSocket stream closed cleanly.")
+                print("WebSocket stream exited _run_forever().")
             except Exception as e:
                 _health_state["websocket_connected"] = False
                 msg = f"WebSocket error: {e}"
