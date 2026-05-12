@@ -443,6 +443,47 @@ async def notify_reddit_signal(ticker: str, score: float, mention_count: int,
     await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
 
 
+async def notify_weekly_performance_brain(stats: dict):
+    """Sends the weekly Performance Brain digest to #trading-performance every Sunday 6 PM EST."""
+    total = stats.get("total_trades", 0)
+    if total == 0:
+        return
+
+    best_type  = stats.get("best_signal_type")  or "—"
+    best_ev    = stats.get("best_ev")
+    worst_type = stats.get("worst_signal_type") or "—"
+    worst_ev   = stats.get("worst_ev")
+    best_day   = stats.get("best_day", "—")
+    best_day_wr = stats.get("best_day_win_rate", 0.0)
+
+    best_ev_str  = f"{best_ev:+.2f}%"  if best_ev  is not None else "—"
+    worst_ev_str = f"{worst_ev:+.2f}%" if worst_ev is not None else "—"
+
+    payload = {
+        "text": "🧠 *Weekly Performance Brain Digest*",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "🧠 Weekly Performance Brain Digest"}
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Trades This Week:*\n{total}"},
+                    {"type": "mrkdwn", "text": f"*Best Strategy:*\n{best_type} (EV {best_ev_str})"},
+                    {"type": "mrkdwn", "text": f"*Worst Strategy:*\n{worst_type} (EV {worst_ev_str})"},
+                    {"type": "mrkdwn", "text": f"*Best Entry Day:*\n{best_day} ({best_day_wr:.1f}% WR)"},
+                ]
+            },
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": ":information_source: Performance Brain uses last 20 trades per strategy to scale next week's position sizes: WR >60% → +20%, WR <40% → −30%, floor at 10% of normal size."}]
+            }
+        ]
+    }
+    await _post_to_slack(Config.SLACK_PERFORMANCE_WEBHOOK, payload)
+
+
 async def notify_truth_social_trade(ticker, post_text, direction, entry_price, position_size):
     """Sends a Truth Social-triggered trade execution to #trading-alerts."""
     payload = {

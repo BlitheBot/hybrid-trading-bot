@@ -536,6 +536,131 @@ def fetch_win_rate():
         st.error(f"Win rate query failed: {e}")
         return None
 
+@st.cache_data(ttl=300)
+def fetch_performance_by_dimension(dimension: str) -> pd.DataFrame | None:
+    """
+    Per-dimension win rate, avg win/loss, and EV from closed signal_outcomes.
+    dimension: 'signal_type' | 'market_regime' | 'exit_reason' | 'day_of_week' | 'hour_of_day'
+    Returns columns: dim_value, trade_count, win_rate, avg_win_pct, avg_loss_pct, ev
+    """
+    _DIM_SQL = {
+        "signal_type":   "signal_type",
+        "market_regime": "market_regime",
+        "exit_reason":   "exit_reason",
+        "day_of_week":   "EXTRACT(DOW  FROM entry_time AT TIME ZONE 'America/New_York')::int",
+        "hour_of_day":   "EXTRACT(HOUR FROM entry_time AT TIME ZONE 'America/New_York')::int",
+    }
+    dim_expr = _DIM_SQL.get(dimension)
+    if not dim_expr:
+        return None
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        query_str = f"""
+            SELECT {dim_expr} AS dim_value,
+                   COUNT(*) AS trade_count,
+                   ROUND(100.0 * COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::numeric
+                       / NULLIF(COUNT(*), 0), 1) AS win_rate,
+                   ROUND(AVG(CASE WHEN pnl_pct > 0  THEN pnl_pct      ELSE NULL END)::numeric, 2)
+                       AS avg_win_pct,
+                   ROUND(AVG(CASE WHEN pnl_pct <= 0 THEN ABS(pnl_pct) ELSE NULL END)::numeric, 2)
+                       AS avg_loss_pct
+            FROM signal_outcomes
+            WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+            GROUP BY 1
+            HAVING COUNT(*) >= 3
+            ORDER BY 1
+        """
+        with engine.connect() as conn:
+            df = pd.read_sql(text(query_str), conn)
+        if df.empty:
+            return df
+        wr = df["win_rate"] / 100.0
+        lr = 1.0 - wr
+        df["ev"] = ((wr * df["avg_win_pct"]) - (lr * df["avg_loss_pct"])).round(3)
+        return df
+    except Exception as e:
+        st.error(f"Performance dimension query failed: {e}")
+        return None
+
+
+@st.cache_data(ttl=300)
+def fetch_win_rate_by_regime() -> pd.DataFrame | None:
+    """Win rate pivoted by signal_type (rows) × market_regime (columns) for grouped bar chart."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        query_str = """
+            SELECT signal_type, market_regime,
+                   COUNT(*) AS trade_count,
+                   ROUND(100.0 * COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::numeric
+                       / NULLIF(COUNT(*), 0), 1) AS win_rate
+            FROM signal_outcomes
+            WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+              AND market_regime IS NOT NULL
+            GROUP BY signal_type, market_regime
+            HAVING COUNT(*) >= 3
+        """
+        with engine.connect() as conn:
+            df = pd.read_sql(text(query_str), conn)
+        if df.empty:
+            return df
+        return df.pivot_table(
+            index="signal_type", columns="market_regime",
+            values="win_rate", fill_value=None,
+        )
+    except Exception as e:
+        st.error(f"Regime win rate query failed: {e}")
+        return None
+
+
+@st.cache_data(ttl=300)
+def fetch_best_time_windows(min_trades: int = 5, top_n: int = 5) -> pd.DataFrame | None:
+    """Top day×hour windows ranked by EV — tells you when each dollar of risk pays the most."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        query_str = """
+            SELECT EXTRACT(DOW  FROM entry_time AT TIME ZONE 'America/New_York')::int AS dow,
+                   EXTRACT(HOUR FROM entry_time AT TIME ZONE 'America/New_York')::int AS hour,
+                   COUNT(*) AS trade_count,
+                   ROUND(100.0 * COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::numeric / COUNT(*), 1)
+                       AS win_rate,
+                   ROUND(AVG(CASE WHEN pnl_pct > 0  THEN pnl_pct      ELSE NULL END)::numeric, 2)
+                       AS avg_win_pct,
+                   ROUND(AVG(CASE WHEN pnl_pct <= 0 THEN ABS(pnl_pct) ELSE NULL END)::numeric, 2)
+                       AS avg_loss_pct
+            FROM signal_outcomes
+            WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+              AND EXTRACT(DOW  FROM entry_time AT TIME ZONE 'America/New_York') BETWEEN 1 AND 5
+              AND EXTRACT(HOUR FROM entry_time AT TIME ZONE 'America/New_York') BETWEEN 9 AND 16
+            GROUP BY 1, 2
+            HAVING COUNT(*) >= :min_trades
+        """
+        with engine.connect() as conn:
+            df = pd.read_sql(text(query_str), conn, params={"min_trades": min_trades})
+        if df.empty:
+            return df
+        wr = df["win_rate"] / 100.0
+        lr = 1.0 - wr
+        df["ev"] = ((wr * df["avg_win_pct"]) - (lr * df["avg_loss_pct"])).round(3)
+        _DAY_NAMES = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri"}
+        df["window"] = df.apply(
+            lambda r: f"{_DAY_NAMES.get(int(r['dow']), '?')} {int(r['hour']):02d}:00 EST",
+            axis=1,
+        )
+        top = df.nlargest(top_n, "ev")[
+            ["window", "trade_count", "win_rate", "avg_win_pct", "avg_loss_pct", "ev"]
+        ]
+        return top.reset_index(drop=True)
+    except Exception as e:
+        st.error(f"Best time windows query failed: {e}")
+        return None
+
+
 # ── Sidebar data fetchers ──────────────────────────────────────────────────────
 
 @st.cache_data(ttl=30)
@@ -721,12 +846,13 @@ st.sidebar.caption(f"Prices 30s · FRED 1h · Refreshed {now_est.strftime('%H:%M
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
 
-tab_account, tab_positions, tab_tradelog, tab_discovery, tab_analytics = st.tabs([
+tab_account, tab_positions, tab_tradelog, tab_discovery, tab_analytics, tab_perf = st.tabs([
     "💰 Account",
     "📊 Positions",
     "📋 Trade Log",
     "🔬 Discovery",
     "📈 Analytics",
+    "🧠 Performance",
 ])
 
 # ── Tab 1: Account ─────────────────────────────────────────────────────────────
@@ -1134,3 +1260,198 @@ with tab_analytics:
                 }, na_rep="—")
             )
             st.dataframe(styled_ev, use_container_width=True, hide_index=True)
+
+# ── Tab 6: Performance Brain ───────────────────────────────────────────────────
+
+_REGIME_COLORS = {"bull": "#00c851", "bear": "#ff4444", "neutral": "#f0a500"}
+_DOW_NAMES     = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri"}
+
+with tab_perf:
+    st.header("Performance Brain")
+    st.caption(
+        "Derived from `signal_outcomes`. Win rate thresholds drive live position-size scaling: "
+        "WR >60% → +20%, WR <40% → −30%, floor at 10% of normal. "
+        "Requires ≥ 3 closed trades per group."
+    )
+
+    if not _db_available():
+        st.info(
+            "DATABASE_URL is not configured. "
+            "Connect PostgreSQL to see performance analytics."
+        )
+    else:
+        # ── Win rate by signal type ─────────────────────────────────────────────
+        st.subheader("Win Rate by Signal Type")
+        df_st = fetch_performance_by_dimension("signal_type")
+
+        if df_st is not None and not df_st.empty:
+            _colors_st = ["#00c851" if w >= 50 else "#ff4444" for w in df_st["win_rate"]]
+            fig_st = go.Figure()
+            fig_st.add_trace(go.Bar(
+                x=df_st["win_rate"],
+                y=df_st["dim_value"].astype(str),
+                orientation="h",
+                marker_color=_colors_st,
+                text=[
+                    f"{w:.0f}%  ({n} trades)"
+                    for w, n in zip(df_st["win_rate"], df_st["trade_count"])
+                ],
+                textposition="outside",
+                textfont=dict(color="#7d8590", size=11),
+                hovertemplate="%{y}<br>Win rate: %{x:.1f}%<extra></extra>",
+            ))
+            fig_st.add_vline(
+                x=50, line_dash="dash", line_color="#30363d",
+                annotation_text="50%", annotation_position="top right",
+                annotation_font_color="#484f58",
+            )
+            _layout_no_hover = {k: v for k, v in _CHART_LAYOUT.items() if k != "hovermode"}
+            fig_st.update_layout(
+                height=max(280, 70 * len(df_st)),
+                xaxis_range=[0, 125],
+                hovermode="y unified",
+                **_layout_no_hover,
+            )
+            fig_st.update_layout(xaxis_title="Win Rate (%)", yaxis_title="")
+            st.plotly_chart(fig_st, use_container_width=True)
+
+            styled_st = (
+                df_st.style
+                .map(_pnl_color, subset=["ev"])
+                .format({
+                    "win_rate":    "{:.1f}%",
+                    "avg_win_pct": "{:+.2f}%",
+                    "avg_loss_pct": "{:.2f}%",
+                    "ev":          "{:+.3f}%",
+                }, na_rep="—")
+            )
+            st.dataframe(styled_st, use_container_width=True, hide_index=True)
+        else:
+            st.info("No closed trades yet — signal type breakdown will populate once positions close.")
+
+        st.markdown("---")
+
+        # ── Win rate by market regime ───────────────────────────────────────────
+        st.subheader("Win Rate by Market Regime")
+        df_regime = fetch_win_rate_by_regime()
+
+        if df_regime is not None and not df_regime.empty:
+            fig_reg = go.Figure()
+            for regime_col in df_regime.columns:
+                col_vals = df_regime[regime_col]
+                if col_vals.dropna().empty:
+                    continue
+                fig_reg.add_trace(go.Bar(
+                    name=str(regime_col).capitalize(),
+                    x=df_regime.index.astype(str),
+                    y=col_vals,
+                    marker_color=_REGIME_COLORS.get(str(regime_col), "#7d8590"),
+                    hovertemplate=f"{str(regime_col).capitalize()}: %{{y:.1f}}%<extra></extra>",
+                ))
+            fig_reg.add_hline(y=50, line_dash="dash", line_color="#30363d")
+            _layout_no_legend = {k: v for k, v in _CHART_LAYOUT.items() if k != "showlegend"}
+            fig_reg.update_layout(
+                height=380, barmode="group", showlegend=True,
+                legend=dict(font=dict(color="#7d8590")),
+                **_layout_no_legend,
+            )
+            fig_reg.update_layout(
+                xaxis_title="Strategy", yaxis_title="Win Rate (%)", yaxis_range=[0, 120],
+            )
+            st.plotly_chart(fig_reg, use_container_width=True)
+        else:
+            st.info("No regime data yet — win rate by regime will populate as trades close.")
+
+        st.markdown("---")
+
+        # ── Win rate by day of week ─────────────────────────────────────────────
+        st.subheader("Win Rate by Day of Week")
+        df_dow = fetch_performance_by_dimension("day_of_week")
+
+        if df_dow is not None and not df_dow.empty:
+            df_dow = df_dow.copy()
+            df_dow["dim_value"] = pd.to_numeric(df_dow["dim_value"], errors="coerce")
+            df_dow = df_dow[df_dow["dim_value"].between(1, 5)].sort_values("dim_value")
+            df_dow["day_name"] = df_dow["dim_value"].map(_DOW_NAMES)
+
+            _colors_dow = ["#00c851" if w >= 50 else "#ff4444" for w in df_dow["win_rate"]]
+            fig_dow = go.Figure()
+            fig_dow.add_trace(go.Bar(
+                x=df_dow["day_name"],
+                y=df_dow["win_rate"],
+                marker_color=_colors_dow,
+                text=[f"{w:.0f}%<br>{n} trades" for w, n in
+                      zip(df_dow["win_rate"], df_dow["trade_count"])],
+                textposition="outside",
+                textfont=dict(color="#7d8590", size=11),
+                hovertemplate="%{x}: %{y:.1f}% win rate<extra></extra>",
+            ))
+            fig_dow.add_hline(y=50, line_dash="dash", line_color="#30363d")
+            fig_dow.update_layout(height=320, yaxis_range=[0, 125], **_CHART_LAYOUT)
+            fig_dow.update_layout(xaxis_title="Day of Week", yaxis_title="Win Rate (%)")
+            st.plotly_chart(fig_dow, use_container_width=True)
+        else:
+            st.info("No day-of-week data yet.")
+
+        st.markdown("---")
+
+        # ── Win rate by hour of day ─────────────────────────────────────────────
+        st.subheader("Win Rate by Entry Hour (EST)")
+        df_hour = fetch_performance_by_dimension("hour_of_day")
+
+        if df_hour is not None and not df_hour.empty:
+            df_hour = df_hour.copy()
+            df_hour["dim_value"] = pd.to_numeric(df_hour["dim_value"], errors="coerce")
+            df_hour = df_hour[df_hour["dim_value"].between(9, 16)].sort_values("dim_value")
+            df_hour["hour_label"] = df_hour["dim_value"].apply(lambda h: f"{int(h):02d}:00")
+
+            _colors_hr = ["#00c851" if w >= 50 else "#ff4444" for w in df_hour["win_rate"]]
+            fig_hr = go.Figure()
+            fig_hr.add_trace(go.Bar(
+                x=df_hour["hour_label"],
+                y=df_hour["win_rate"],
+                marker_color=_colors_hr,
+                text=[f"{w:.0f}%<br>{n} trades" for w, n in
+                      zip(df_hour["win_rate"], df_hour["trade_count"])],
+                textposition="outside",
+                textfont=dict(color="#7d8590", size=11),
+                hovertemplate="%{x}: %{y:.1f}% win rate<extra></extra>",
+            ))
+            fig_hr.add_hline(y=50, line_dash="dash", line_color="#30363d")
+            fig_hr.update_layout(height=320, yaxis_range=[0, 125], **_CHART_LAYOUT)
+            fig_hr.update_layout(xaxis_title="Entry Hour (EST)", yaxis_title="Win Rate (%)")
+            st.plotly_chart(fig_hr, use_container_width=True)
+        else:
+            st.info("No hour-of-day data yet.")
+
+        st.markdown("---")
+
+        # ── Best time windows ───────────────────────────────────────────────────
+        st.subheader("Best Time Windows")
+        st.caption(
+            "Top 5 (weekday × entry hour) windows ranked by EV "
+            f"— requires ≥ 5 trades per window."
+        )
+        df_tw = fetch_best_time_windows(min_trades=5, top_n=5)
+
+        if df_tw is None:
+            st.warning("Could not load time-window data.")
+        elif df_tw.empty:
+            st.info("Not enough data yet — need ≥ 5 trades per (day × hour) window.")
+        else:
+            def _ev_color_tw(val):
+                if not isinstance(val, (int, float)):
+                    return ""
+                return "color: #00c851" if val > 0 else "color: #ff4444"
+
+            styled_tw = (
+                df_tw.style
+                .map(_ev_color_tw, subset=["ev"])
+                .format({
+                    "win_rate":     "{:.1f}%",
+                    "avg_win_pct":  "{:+.2f}%",
+                    "avg_loss_pct": "{:.2f}%",
+                    "ev":           "{:+.3f}%",
+                }, na_rep="—")
+            )
+            st.dataframe(styled_tw, use_container_width=True, hide_index=True)

@@ -786,11 +786,43 @@ class TradingBot:
                     self._recent_signals.append((symbol, datetime.now(pytz.utc)))
                     asyncio.create_task(self._check_sector_alert(symbol))
 
+                # Determine signal_type early for Performance Brain + DB logging
+                signal_type = None
+                if signal['signal'] == 'buy':
+                    disc_type = getattr(strategy, 'discovery_strategy_type', None)
+                    if isinstance(strategy, (SwingStrategy, BollingerMeanReversionStrategy)) and disc_type:
+                        signal_type = f"discovery_{disc_type}"
+                    elif isinstance(strategy, SwingStrategy):
+                        signal_type = 'swing_long'
+                    elif isinstance(strategy, BollingerMeanReversionStrategy):
+                        signal_type = 'swing_bb'
+                    else:
+                        signal_type = 'scalp_long'
+
+                # Performance Brain: adjust size based on last 20-trade win rate
+                perf_mult = 1.0
+                perf_note = None
+                if signal_type and Config.PERFORMANCE_SCALING_ENABLED:
+                    perf_mult = await asyncio.to_thread(
+                        self._get_performance_multiplier, signal_type
+                    )
+                    if perf_mult > 1.0:
+                        perf_note = (
+                            f"🧠 Performance Brain: {signal_type} WR >60% "
+                            f"→ size +{int((perf_mult - 1) * 100)}%"
+                        )
+                    elif perf_mult < 1.0:
+                        perf_note = (
+                            f"🧠 Performance Brain: {signal_type} WR <40% "
+                            f"→ size {int((perf_mult - 1) * 100)}%"
+                        )
+
                 _notes = [n for n in [
                     getattr(strategy, 'discovery_size_note', None),
                     getattr(strategy, 'earnings_size_note', None),
                     getattr(strategy, 'bear_market_note', None),
                     vix_note,
+                    perf_note,
                 ] if n]
                 asyncio.create_task(notifications.notify_trade_decision(
                     symbol, strategy.name, signal,
@@ -799,11 +831,16 @@ class TradingBot:
 
                 entry_time = datetime.now(pytz.utc)
                 try:
-                    earnings_mult    = getattr(strategy, 'earnings_override_multiplier', 1.0)
-                    confidence_mult  = signal.get('confidence_multiplier', 1.0)
+                    earnings_mult   = getattr(strategy, 'earnings_override_multiplier', 1.0)
+                    confidence_mult = signal.get('confidence_multiplier', 1.0)
                     scaled_risk_percent = (
                         risk_percent * self.risk_multiplier
-                        * earnings_mult * vix_risk_mult * confidence_mult
+                        * earnings_mult * vix_risk_mult * confidence_mult * perf_mult
+                    )
+                    # Floor: no trade can go below 10% of normal size regardless of stacked multipliers
+                    scaled_risk_percent = max(
+                        scaled_risk_percent,
+                        Config.SWING_EQUITY_RISK_PERCENT * Config.POSITION_SIZE_FLOOR,
                     )
                     strategy.execute_trade(
                         signal,
@@ -818,15 +855,8 @@ class TradingBot:
                     if signal['signal'] == 'buy':
                         _health_state["signals_fired_total"] += 1
 
-                    # Task 1 — log entry to signal_outcomes after successful execute_trade
-                    if signal['signal'] == 'buy':
-                        disc_type = getattr(strategy, 'discovery_strategy_type', None)
-                        if isinstance(strategy, SwingStrategy) and disc_type:
-                            signal_type = f"discovery_{disc_type}"
-                        elif isinstance(strategy, SwingStrategy):
-                            signal_type = 'swing_long'
-                        else:
-                            signal_type = 'scalp_long'
+                    # Log entry to signal_outcomes after successful execute_trade
+                    if signal['signal'] == 'buy' and signal_type:
                         regime = await self._get_market_regime()
                         row_id = await asyncio.to_thread(
                             self._log_trade_entry,
@@ -1323,6 +1353,111 @@ class TradingBot:
         except Exception as e:
             print(f"[Heatmap] Unexpected error: {e}")
 
+    def _get_performance_multiplier(self, signal_type: str) -> float:
+        """
+        Returns a position-size multiplier based on the last 20 closed trades for signal_type.
+        WR > 60% → 1.2x  |  WR < 40% → 0.7x  |  < 10 trades → 1.0x (no penalty for new strategies)
+        Sync — called via asyncio.to_thread from _process_symbol.
+        """
+        if not Config.PERFORMANCE_SCALING_ENABLED:
+            return 1.0
+        if not self._db_engine:
+            return 1.0
+        try:
+            with self._db_engine.connect() as conn:
+                row = conn.execute(sql_text("""
+                    SELECT COUNT(*) AS total,
+                           COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::float
+                               / NULLIF(COUNT(*), 0) AS win_rate
+                    FROM (
+                        SELECT pnl_pct
+                        FROM signal_outcomes
+                        WHERE signal_type = :st
+                          AND exit_time IS NOT NULL
+                          AND pnl_pct IS NOT NULL
+                        ORDER BY exit_time DESC
+                        LIMIT 20
+                    ) recent
+                """), {"st": signal_type}).mappings().fetchone()
+
+            total = int(row["total"]) if row and row["total"] else 0
+            if total < 10:
+                return 1.0
+            wr = float(row["win_rate"] or 0)
+            if wr > 0.60:
+                return 1.2
+            if wr < 0.40:
+                return 0.7
+            return 1.0
+        except Exception as e:
+            print(f"[PerfBrain] Multiplier query failed for {signal_type}: {e}")
+            return 1.0
+
+    def _fetch_weekly_brain_stats(self) -> dict:
+        """Queries last 7 days of signal_outcomes for the Sunday Performance Brain digest."""
+        if not self._db_engine:
+            return {}
+        try:
+            week_ago = datetime.now(pytz.utc) - timedelta(days=7)
+            with self._db_engine.connect() as conn:
+                rows = conn.execute(sql_text("""
+                    SELECT signal_type,
+                           COUNT(*) AS trades,
+                           COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::float
+                               / NULLIF(COUNT(*), 0) AS win_rate,
+                           AVG(CASE WHEN pnl_pct > 0  THEN pnl_pct      ELSE NULL END) AS avg_win,
+                           AVG(CASE WHEN pnl_pct <= 0 THEN ABS(pnl_pct) ELSE NULL END) AS avg_loss
+                    FROM signal_outcomes
+                    WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                      AND entry_time >= :week_ago
+                    GROUP BY signal_type
+                    HAVING COUNT(*) >= 2
+                """), {"week_ago": week_ago}).mappings().fetchall()
+
+            best_ev, worst_ev = float('-inf'), float('inf')
+            best_type = worst_type = None
+            total_trades = 0
+
+            for row in rows:
+                wr       = float(row["win_rate"]  or 0)
+                avg_win  = float(row["avg_win"]   or 0)
+                avg_loss = float(row["avg_loss"]  or 0)
+                ev       = round((wr * avg_win) - ((1.0 - wr) * avg_loss), 3)
+                count    = int(row["trades"])
+                total_trades += count
+                if ev > best_ev:
+                    best_ev, best_type = ev, row["signal_type"]
+                if ev < worst_ev:
+                    worst_ev, worst_type = ev, row["signal_type"]
+
+            _DAY_NAMES = {1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday", 5: "Friday"}
+            with self._db_engine.connect() as conn:
+                day_row = conn.execute(sql_text("""
+                    SELECT EXTRACT(DOW FROM entry_time AT TIME ZONE 'America/New_York')::int AS dow,
+                           ROUND(100.0 * COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::numeric
+                               / NULLIF(COUNT(*), 0), 1) AS win_rate
+                    FROM signal_outcomes
+                    WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                      AND EXTRACT(DOW FROM entry_time AT TIME ZONE 'America/New_York') BETWEEN 1 AND 5
+                    GROUP BY 1
+                    HAVING COUNT(*) >= 3
+                    ORDER BY win_rate DESC NULLS LAST
+                    LIMIT 1
+                """)).mappings().fetchone()
+
+            return {
+                "total_trades":      total_trades,
+                "best_signal_type":  best_type,
+                "best_ev":           round(best_ev, 3)  if best_type  else None,
+                "worst_signal_type": worst_type,
+                "worst_ev":          round(worst_ev, 3) if worst_type else None,
+                "best_day":          _DAY_NAMES.get(int(day_row["dow"]), "—") if day_row else "—",
+                "best_day_win_rate": float(day_row["win_rate"] or 0) if day_row else 0.0,
+            }
+        except Exception as e:
+            print(f"[PerfBrain] Weekly stats query failed: {e}")
+            return {}
+
     async def swing_loop(self):
         print(f"📈 Starting Stock Swing Bot for {Config.SWING_SYMBOLS} (10:30 AM EST Polling)...")
         # Symbols with no statistically validated edge — evaluated but flagged in logs
@@ -1518,6 +1653,8 @@ class TradingBot:
                     active_positions_count = 0
 
                 asyncio.create_task(notifications.notify_weekly_performance(equity, active_positions_count, self.daily_pnl))
+                brain_stats = await asyncio.to_thread(self._fetch_weekly_brain_stats)
+                asyncio.create_task(notifications.notify_weekly_performance_brain(brain_stats))
 
     async def news_loop(self):
         """Continuously polls Benzinga news via Alpaca and routes signals to Slack / trade execution."""
