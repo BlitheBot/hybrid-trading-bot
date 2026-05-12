@@ -405,7 +405,7 @@ def fetch_strategy_results(validated_only: bool):
         # Try v2 table first
         where = "WHERE status IN ('approved', 'pending_approval')" if validated_only else ""
         query_str = f"""
-            SELECT symbol, strategy_type,
+            SELECT id, symbol, strategy_type,
                    parameters::text                  AS parameters,
                    ROUND(train_sharpe::numeric, 3)   AS train_sharpe,
                    ROUND(test_sharpe::numeric,  3)   AS test_sharpe,
@@ -425,7 +425,7 @@ def fetch_strategy_results(validated_only: bool):
         try:
             where_v1 = "WHERE status = 'validated'" if validated_only else ""
             query_v1 = f"""
-                SELECT symbol,
+                SELECT id, symbol,
                        'ema_trend'                       AS strategy_type,
                        NULL::text                        AS parameters,
                        ROUND(train_sharpe::numeric, 3)   AS train_sharpe,
@@ -446,6 +446,108 @@ def fetch_strategy_results(validated_only: bool):
         except Exception as e:
             st.error(f"Discovery query failed: {e}")
             return None
+
+
+def _approve_strategy(row_id: int) -> bool:
+    """UPDATE discovery_results SET status='approved' WHERE id=row_id. Not cached."""
+    engine = _get_engine()
+    if engine is None:
+        return False
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE discovery_results SET status='approved' WHERE id=:id"),
+                {"id": row_id},
+            )
+        return True
+    except Exception as e:
+        st.error(f"Approval failed: {e}")
+        return False
+
+
+@st.cache_data(ttl=300)
+def fetch_golive_readiness() -> dict:
+    """Computes all 5 go-live criteria from signal_outcomes and discovery tables."""
+    engine = _get_engine()
+    result: dict = {
+        "monthly_positive": None,
+        "months_total": None,
+        "win_rate": None,
+        "total_trades": 0,
+        "max_drawdown_pct": None,
+        "validated_strategies": None,
+    }
+    if engine is None:
+        return result
+    try:
+        with engine.connect() as conn:
+            # Win rate
+            row = conn.execute(text("""
+                SELECT COUNT(*) AS total,
+                       ROUND(100.0 * COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::numeric
+                           / NULLIF(COUNT(*), 0), 1) AS win_rate_pct
+                FROM signal_outcomes
+                WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+            """)).mappings().fetchone()
+            if row and row["total"]:
+                result["total_trades"] = int(row["total"])
+                result["win_rate"] = float(row["win_rate_pct"]) / 100.0 if row["win_rate_pct"] else 0.0
+
+            # Monthly P&L — last 4 calendar months, count positive months
+            monthly_rows = conn.execute(text("""
+                SELECT DATE_TRUNC('month', exit_time AT TIME ZONE 'America/New_York') AS month,
+                       SUM(pnl_pct) AS monthly_pnl
+                FROM signal_outcomes
+                WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                  AND exit_time >= NOW() - INTERVAL '4 months'
+                GROUP BY 1
+                ORDER BY 1 DESC
+                LIMIT 4
+            """)).mappings().fetchall()
+            if monthly_rows:
+                result["months_total"] = len(monthly_rows)
+                result["monthly_positive"] = sum(
+                    1 for r in monthly_rows if float(r["monthly_pnl"]) > 0
+                )
+
+            # Max drawdown from running cumulative P&L curve
+            trade_rows = conn.execute(text("""
+                SELECT pnl_pct FROM signal_outcomes
+                WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                ORDER BY exit_time ASC
+            """)).mappings().fetchall()
+            if trade_rows:
+                peak = 0.0
+                cum = 0.0
+                max_dd = 0.0
+                for r in trade_rows:
+                    cum += float(r["pnl_pct"])
+                    if cum > peak:
+                        peak = cum
+                    dd = peak - cum
+                    if dd > max_dd:
+                        max_dd = dd
+                result["max_drawdown_pct"] = max_dd
+
+            # Validated strategies count — v2 first, then v1 fallback
+            try:
+                r2 = conn.execute(text("""
+                    SELECT COUNT(*) AS cnt FROM discovery_results
+                    WHERE status IN ('approved', 'pending_approval')
+                """)).mappings().fetchone()
+                result["validated_strategies"] = int(r2["cnt"]) if r2 else 0
+            except Exception:
+                try:
+                    r1 = conn.execute(text("""
+                        SELECT COUNT(*) AS cnt FROM strategy_results
+                        WHERE status = 'validated'
+                    """)).mappings().fetchone()
+                    result["validated_strategies"] = int(r1["cnt"]) if r1 else 0
+                except Exception:
+                    result["validated_strategies"] = 0
+    except Exception:
+        pass
+    return result
 
 
 @st.cache_data(ttl=300)
@@ -916,6 +1018,94 @@ with tab_account:
         with r4:
             st.markdown(_metric_card("Max Daily Loss",      f"{Config.MAX_DAILY_LOSS_PERCENT}%"),    unsafe_allow_html=True)
 
+        # ── Go-Live Readiness ────────────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("Go-Live Readiness")
+
+        readiness = fetch_golive_readiness()
+        health = _bot_health()
+        uptime_days = health.get("uptime_seconds", 0) / 86400 if health else None
+
+        _criteria: list[tuple[str, bool, str]] = []
+
+        # 1. Positive returns ≥3 of last 4 paper months
+        mp = readiness.get("monthly_positive")
+        mt = readiness.get("months_total") or 0
+        if mp is not None:
+            _criteria.append((
+                "Positive returns ≥3 of last 4 paper months",
+                mp >= 3,
+                f"{mp}/{mt} months positive",
+            ))
+        else:
+            _criteria.append(("Positive returns ≥3 of last 4 paper months", False, "Insufficient trade data"))
+
+        # 2. Win rate >50%
+        wr = readiness.get("win_rate")
+        n_trades = readiness.get("total_trades", 0)
+        if wr is not None and n_trades > 0:
+            _criteria.append(("Win rate >50%", wr > 0.5, f"{wr:.1%} across {n_trades} trades"))
+        else:
+            _criteria.append(("Win rate >50%", False, "No closed trades yet"))
+
+        # 3. Max drawdown <15%
+        dd = readiness.get("max_drawdown_pct")
+        if dd is not None:
+            _criteria.append((
+                "Max drawdown <15% (cumulative P&L)",
+                dd < 15.0,
+                f"{dd:.1f} P&L points cumulative drawdown",
+            ))
+        else:
+            _criteria.append(("Max drawdown <15% (cumulative P&L)", False, "No trade data"))
+
+        # 4. Bot uptime ≥30 consecutive days
+        if uptime_days is not None:
+            _criteria.append((
+                "Bot uptime ≥30 consecutive days",
+                uptime_days >= 30,
+                f"{uptime_days:.1f} days since last restart",
+            ))
+        else:
+            _criteria.append(("Bot uptime ≥30 consecutive days", False, "Health endpoint unreachable"))
+
+        # 5. Discovery Engine ≥3 validated strategies
+        vs = readiness.get("validated_strategies")
+        if vs is not None:
+            _criteria.append((
+                "Discovery Engine: ≥3 validated strategies",
+                vs >= 3,
+                f"{vs} strategy combos validated",
+            ))
+        else:
+            _criteria.append(("Discovery Engine: ≥3 validated strategies", False, "No discovery data"))
+
+        _score = sum(1 for _, m, _ in _criteria if m)
+        _score_color = "#00c851" if _score == 5 else ("#f0a500" if _score >= 3 else "#ff4444")
+        _score_label = (
+            "Ready for live trading"
+            if _score == 5 else ("Getting close" if _score >= 3 else "Not yet ready")
+        )
+
+        st.markdown(
+            f'<div class="metric-card" style="margin-bottom:16px;">'
+            f'<div class="card-label">Overall Readiness</div>'
+            f'<div class="card-value" style="color:{_score_color};font-size:28px;">{_score}/5</div>'
+            f'<div style="font-size:11px;color:#484f58;margin-top:4px;">{_score_label}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        for _label, _met, _detail in _criteria:
+            _dot = "dot-green" if _met else "dot-red"
+            st.markdown(
+                f'<div class="status-row">'
+                f'<span class="status-dot {_dot}"></span>'
+                f'<span>{_label}</span>'
+                f'<span class="status-detail">&nbsp;—&nbsp;{_detail}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
 # ── Tab 2: Positions ───────────────────────────────────────────────────────────
 
 with tab_positions:
@@ -1067,7 +1257,7 @@ with tab_discovery:
             if pending_count > 0:
                 st.warning(
                     f":hourglass_flowing_sand: **{pending_count} strategies awaiting approval.** "
-                    f"Approve via: `UPDATE discovery_results SET status='approved' WHERE id=<id>;`"
+                    f"Review the candidates below and click Approve to activate."
                 )
             if approved_count > 0:
                 st.success(f":white_check_mark: {approved_count} strategies approved and active in swing_loop.")
@@ -1113,6 +1303,44 @@ with tab_discovery:
                 .format({k: v for k, v in fmt.items() if k in display_cols}, na_rep="—")
             )
             st.dataframe(styled_disc, width="stretch", hide_index=True)
+
+            # ── Approve pending strategies ──────────────────────────────────
+            pending_df = (
+                df_disc[df_disc["status"] == "pending_approval"]
+                if "status" in df_disc.columns else pd.DataFrame()
+            )
+            if not pending_df.empty and "id" in pending_df.columns:
+                st.markdown("---")
+                st.subheader("Approve Pending Strategies")
+                st.caption(
+                    "Each candidate passed walk-forward validation. "
+                    "Approve to activate it in the swing loop."
+                )
+                hdr = st.columns([2, 2, 1.5, 1.5, 1.5, 1.2])
+                for label, col in zip(
+                    ["Symbol", "Strategy Type", "Test Sharpe", "Win Rate", "Best Regime", ""],
+                    hdr,
+                ):
+                    col.markdown(f"**{label}**")
+
+                for _, prow in pending_df.iterrows():
+                    row_id = int(prow["id"])
+                    cols = st.columns([2, 2, 1.5, 1.5, 1.5, 1.2])
+                    cols[0].write(prow.get("symbol", "—"))
+                    cols[1].write(prow.get("strategy_type", "—") or "—")
+                    ts = prow.get("test_sharpe")
+                    cols[2].write(f"{ts:.3f}" if pd.notna(ts) else "—")
+                    wr = prow.get("win_rate")
+                    cols[3].write(f"{float(wr):.1%}" if pd.notna(wr) else "—")
+                    cols[4].write(prow.get("best_regime", "—") or "—")
+                    if cols[5].button("Approve", key=f"approve_{row_id}"):
+                        if _approve_strategy(row_id):
+                            fetch_strategy_results.clear()
+                            st.toast(
+                                f"✅ {prow.get('symbol', '')} {prow.get('strategy_type', '')} approved!",
+                                icon="✅",
+                            )
+                            st.rerun()
 
 # ── Tab 5: Analytics ───────────────────────────────────────────────────────────
 
