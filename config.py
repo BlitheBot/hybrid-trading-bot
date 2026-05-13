@@ -59,6 +59,7 @@ class Config:
     # Sentiment & News Parameters
     NEWS_SIGNAL_ALERT_THRESHOLD = 7
     NEWS_SIGNAL_AUTO_TRADE_THRESHOLD = 13
+    CLAUDE_DAILY_CALL_LIMIT = 100   # fall back to keyword scoring once exceeded
     TRUTH_SOCIAL_ENABLED = False  # Disabled: Truth Social blocks automated access; re-enable with Quiver API
     CONGRESSIONAL_ENABLED = False  # Disabled: free data sources unavailable; re-enable with QUIVER_API_KEY ($30/mo at quiverquant.com)
     FRED_ENABLED = True            # Free public FRED CSV endpoints — no API key required

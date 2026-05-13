@@ -71,6 +71,7 @@ _health_state: dict = {
     "signals_fired_total": 0,
     "market_regime": "unknown",
     "last_health_report_utc": None,
+    "claude_api_calls_today": 0,
 }
 
 # Set by /pause slash command; cleared by /resume. Checked by all trade-execution paths.
@@ -1885,6 +1886,7 @@ class TradingBot:
             try:
                 if not self.trading_halted_for_day and not _bot_paused:
                     signals = await strategy.scan_once()
+                    _health_state["claude_api_calls_today"] = strategy._claude_calls_today
                     for sig in signals:
                         ticker  = sig["ticker"]
                         strength = sig["strength"]

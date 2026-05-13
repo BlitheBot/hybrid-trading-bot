@@ -14,7 +14,7 @@ from strategies.base_strategy import BaseStrategy
 # ── Trusted source multipliers ──────────────────────────────────────────────
 HIGH_TRUST_SOURCES = {"bloomberg", "reuters", "wsj", "cnbc", "wall street journal", "financial times", "ft.com"}
 
-# ── Keyword fallback scoring (used if Claude call fails) ────────────────────
+# ── Keyword fallback scoring (used if Claude call fails or is skipped) ───────
 BULLISH_KEYWORDS = {
     "earnings beat": 8, "record revenue": 8, "raised guidance": 7, "buyback": 6,
     "dividend increase": 6, "acquisition": 5, "upgrade": 6, "partnership": 5,
@@ -25,6 +25,8 @@ BEARISH_KEYWORDS = {
     "layoffs": 4, "guidance cut": 2, "missed estimates": 2, "regulatory action": 3,
     "bankruptcy": 1, "fraud": 1, "weak quarter": 3,
 }
+
+_CLAUDE_BATCH_SIZE = 5   # headlines per Claude API call
 
 
 def _get_scan_sleep_seconds() -> float:
@@ -58,6 +60,18 @@ def _keyword_score(headline: str) -> tuple[float, str]:
     return 0.0, "neutral"
 
 
+def _keyword_result(headline: str, reason: str = "") -> dict:
+    """Build a full result dict from keyword scoring alone."""
+    kw_score, kw_sentiment = _keyword_score(headline)
+    return {
+        "sentiment": kw_sentiment,
+        "score":     kw_score,
+        "confidence": 5,
+        "reasoning": reason or "Keyword scoring (Claude not called).",
+        "action": "buy" if kw_sentiment == "bullish" else ("sell" if kw_sentiment == "bearish" else "hold"),
+    }
+
+
 def _source_multiplier(source: str) -> float:
     """Return a trust multiplier based on the news source."""
     if any(trusted in source.lower() for trusted in HIGH_TRUST_SOURCES):
@@ -67,9 +81,13 @@ def _source_multiplier(source: str) -> float:
 
 class NewsStrategy(BaseStrategy):
     """
-    Polls Alpaca's Benzinga news feed for S&P 500 tickers, scores each headline
-    using Anthropic Claude (with keyword fallback), and returns trade signals when
-    the composite score passes configured thresholds.
+    Polls Alpaca's Benzinga news feed for S&P 500 tickers, scores headlines
+    using Anthropic Claude in batches of up to 5, and returns trade signals
+    when the composite score passes configured thresholds.
+
+    Claude is only called for headlines with keyword score > 3 (pre-filter).
+    A daily call counter enforces CLAUDE_DAILY_CALL_LIMIT; once exceeded the
+    strategy falls back to keyword scoring for the rest of the calendar day.
     """
 
     def __init__(self, name: str = "News Sentiment"):
@@ -81,6 +99,8 @@ class NewsStrategy(BaseStrategy):
         self._claude = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
         self._last_seen: dict[str, datetime] = {}
         self._last_articles_scanned: int = 0
+        self._claude_calls_today: int = 0
+        self._claude_calls_date: str = ""   # YYYY-MM-DD in EST
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
@@ -92,58 +112,95 @@ class NewsStrategy(BaseStrategy):
     def _mark_seen(self, ticker: str):
         self._last_seen[ticker] = datetime.now(pytz.utc)
 
-    def _score_with_claude(self, ticker: str, headline: str, summary: str) -> dict:
-        """
-        Ask Claude to score the headline. Returns a dict with keys:
-          sentiment, score (0-10), confidence (0-10), reasoning, action
-        Falls back to keyword scoring on any error.
-        """
-        prompt = f"""You are an expert stock market analyst. Analyze the following news headline and summary for {ticker}.
+    def _reset_daily_counter_if_needed(self) -> None:
+        today = datetime.now(pytz.timezone("America/New_York")).strftime("%Y-%m-%d")
+        if today != self._claude_calls_date:
+            if self._claude_calls_date:
+                print(
+                    f"[NewsStrategy] New day — resetting Claude call counter "
+                    f"(yesterday: {self._claude_calls_today} calls)"
+                )
+            self._claude_calls_today = 0
+            self._claude_calls_date = today
 
-Headline: {headline}
-Summary: {summary if summary else "(no summary available)"}
+    def _over_daily_limit(self) -> bool:
+        return self._claude_calls_today >= Config.CLAUDE_DAILY_CALL_LIMIT
 
-Respond with ONLY a valid JSON object using exactly this schema:
-{{
-  "sentiment": "bullish" | "bearish" | "neutral",
-  "score": <integer 0-10, where 10=extremely bullish, 0=extremely bearish, 5=neutral>,
-  "confidence": <integer 0-10, confidence in the score>,
-  "reasoning": "<one sentence explanation>",
-  "action": "buy" | "sell" | "hold"
-}}"""
+    # ── Batch Claude scoring ─────────────────────────────────────────────────
+
+    def _score_batch_with_claude(self, items: list[dict]) -> list[dict]:
+        """
+        Score up to _CLAUDE_BATCH_SIZE headlines in a single Claude API call.
+        Returns one result dict per item in the same order.
+        Falls back to keyword scoring per-item if the API call or JSON parse fails.
+        """
+        numbered = []
+        for i, item in enumerate(items, 1):
+            numbered.append(f"[{i}] Ticker: {item['ticker']}")
+            numbered.append(f"Headline: {item['headline']}")
+            if item["summary"]:
+                numbered.append(f"Summary: {item['summary'][:300]}")
+
+        prompt = (
+            "You are an expert stock market analyst. Score each of the following "
+            "news items for their likely price impact on the named ticker.\n\n"
+            + "\n".join(numbered)
+            + "\n\nRespond with ONLY a valid JSON array, one object per item:\n"
+            '[\n  {\n'
+            '    "index": <1-based integer>,\n'
+            '    "sentiment": "bullish" | "bearish" | "neutral",\n'
+            '    "score": <integer 0-10, 10=extremely bullish, 0=extremely bearish, 5=neutral>,\n'
+            '    "confidence": <integer 0-10>,\n'
+            '    "reasoning": "<one sentence>",\n'
+            '    "action": "buy" | "sell" | "hold"\n'
+            '  }\n]'
+        )
         try:
             message = self._claude.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=256,
+                max_tokens=512,
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = message.content[0].text.strip()
-            # Strip markdown code fences if Claude wraps output
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
                     raw = raw[4:]
-            return json.loads(raw)
-        except Exception as e:
-            print(f"[NewsStrategy] Claude call failed for {ticker}: {e}. Using keyword fallback.")
-            kw_score, kw_sentiment = _keyword_score(headline)
-            return {
-                "sentiment": kw_sentiment,
-                "score": kw_score,
-                "confidence": 5,
-                "reasoning": "Keyword fallback scoring (Claude unavailable).",
-                "action": "buy" if kw_sentiment == "bullish" else ("sell" if kw_sentiment == "bearish" else "hold"),
+            parsed = json.loads(raw)
+            result_map = {
+                r["index"]: r
+                for r in parsed
+                if isinstance(r, dict) and "index" in r
             }
+            results = []
+            for i, item in enumerate(items, 1):
+                if i in result_map:
+                    results.append(result_map[i])
+                else:
+                    results.append(_keyword_result(
+                        item["headline"],
+                        "Keyword fallback — item missing from batch response.",
+                    ))
+            return results
+        except Exception as e:
+            print(f"[NewsStrategy] Batch Claude call failed: {e}. Keyword fallback for {len(items)} items.")
+            return [_keyword_result(item["headline"], "Keyword fallback (batch call failed).") for item in items]
 
     # ── Main async scan ──────────────────────────────────────────────────────
 
     async def scan_once(self) -> list[dict]:
         """
-        Fetch the latest news for all S&P 500 tickers and return a list of
-        actionable signal dicts for any article that crosses the alert threshold.
+        Fetch latest news for all S&P 500 tickers and return actionable signals.
+
+        Flow:
+          Pass 1 — fetch articles from Alpaca (unchanged)
+          Pass 2 — collect candidates: dedup + keyword prefilter (score > 3)
+          Pass 3 — batch-score candidates with Claude (up to 5 per call)
+          Pass 4 — compute strength, build signal list
         """
         signals = []
         try:
+            # ── Pass 1: fetch articles ────────────────────────────────────────
             batch_size = Config.NEWS_BATCH_SIZE
             all_articles = []
             for i in range(0, len(SP500_TICKERS), batch_size):
@@ -160,7 +217,7 @@ Respond with ONLY a valid JSON object using exactly this schema:
                         resp = await asyncio.to_thread(self.news_client.get_news, req)
                         articles = resp.data.get("news", []) if resp else []
                         all_articles.extend(articles)
-                        break  # success
+                        break
                     except Exception as e:
                         err_raw = str(e)
                         err = err_raw.lower()
@@ -179,8 +236,18 @@ Respond with ONLY a valid JSON object using exactly this schema:
             self._last_articles_scanned = len(all_articles)
             print(f"[NewsStrategy] scan complete — {len(all_articles)} articles across {len(SP500_TICKERS)//batch_size} batches")
 
+            # ── Pass 2: collect candidates ────────────────────────────────────
+            self._reset_daily_counter_if_needed()
+            candidates: list[dict] = []
+
             for article in all_articles:
                 tickers = getattr(article, "symbols", []) or []
+                headline = article.headline or ""
+                summary  = article.summary  or ""
+                source   = article.source   or ""
+
+                kw_score, kw_sentiment = _keyword_score(headline)
+
                 for ticker in tickers:
                     if ticker not in SP500_TICKERS:
                         continue
@@ -188,49 +255,90 @@ Respond with ONLY a valid JSON object using exactly this schema:
                         elapsed = (datetime.now(pytz.utc) - self._last_seen[ticker]).total_seconds() / 60
                         print(f"[NewsStrategy] {ticker}: skipping — signal fired {elapsed:.0f}m ago (cooldown {Config.NEWS_DEDUP_HOURS}h)")
                         continue
+                    if kw_score <= 3:
+                        print(f"[NewsStrategy] {ticker}: keyword score {kw_score:.0f} <= 3 — skipping Claude")
+                        continue
 
-                    headline = article.headline or ""
-                    summary = article.summary or ""
-                    source = article.source or ""
+                    candidates.append({
+                        "ticker":       ticker,
+                        "headline":     headline,
+                        "summary":      summary,
+                        "source":       source,
+                        "kw_score":     kw_score,
+                        "kw_sentiment": kw_sentiment,
+                        "result":       None,
+                    })
 
-                    result = await asyncio.to_thread(
-                        self._score_with_claude, ticker, headline, summary
+            # ── Pass 3: batch-score with Claude (or keyword fallback) ─────────
+            limit_logged = False
+            for batch_start in range(0, len(candidates), _CLAUDE_BATCH_SIZE):
+                batch = candidates[batch_start : batch_start + _CLAUDE_BATCH_SIZE]
+
+                if self._over_daily_limit():
+                    if not limit_logged:
+                        print(
+                            f"[NewsStrategy] Daily Claude API limit ({Config.CLAUDE_DAILY_CALL_LIMIT}) "
+                            f"reached — keyword fallback for remaining headlines"
+                        )
+                        limit_logged = True
+                    for item in batch:
+                        item["result"] = _keyword_result(
+                            item["headline"],
+                            f"Daily Claude API limit ({Config.CLAUDE_DAILY_CALL_LIMIT}) reached — keyword fallback.",
+                        )
+                else:
+                    self._claude_calls_today += 1
+                    print(
+                        f"[NewsStrategy] Claude batch call #{self._claude_calls_today} "
+                        f"({len(batch)} headlines, limit={Config.CLAUDE_DAILY_CALL_LIMIT})"
+                    )
+                    results = await asyncio.to_thread(self._score_batch_with_claude, batch)
+                    for item, result in zip(batch, results):
+                        item["result"] = result
+
+            # ── Pass 4: compute strength and build signals ────────────────────
+            for item in candidates:
+                result = item["result"]
+                if result is None:
+                    continue
+
+                ticker     = item["ticker"]
+                headline   = item["headline"]
+                source     = item["source"]
+                raw_score  = result.get("score", 5)
+                confidence = result.get("confidence", 5)
+                sentiment  = result.get("sentiment", "neutral")
+                action     = result.get("action", "hold")
+                reasoning  = result.get("reasoning", "")
+
+                multiplier = _source_multiplier(source)
+                print(f"[NewsStrategy] {ticker}: source='{source or 'unknown'}' → multiplier={multiplier:.1f}x (raw={raw_score} confidence={confidence})")
+                strength = (raw_score * confidence / 10.0) * multiplier
+                strength = round(min(strength, 20.0), 2)
+
+                if strength >= 5.0:
+                    print(
+                        f"[NewsStrength] {ticker}: raw={raw_score} conf={confidence} "
+                        f"src_mult={multiplier:.1f}x -> strength={strength:.2f} "
+                        f"(alert>={Config.NEWS_SIGNAL_ALERT_THRESHOLD} "
+                        f"trade>={Config.NEWS_SIGNAL_AUTO_TRADE_THRESHOLD}) "
+                        f"headline={headline[:80]!r}"
                     )
 
-                    raw_score = result.get("score", 5)
-                    confidence = result.get("confidence", 5)
-                    sentiment = result.get("sentiment", "neutral")
-                    action = result.get("action", "hold")
-                    reasoning = result.get("reasoning", "")
-
-                    # Normalise score to 0-10 range and apply source multiplier
-                    multiplier = _source_multiplier(source)
-                    print(f"[NewsStrategy] {ticker}: source='{source or 'unknown'}' → multiplier={multiplier:.1f}x (raw={raw_score} confidence={confidence})")
-                    strength = (raw_score * confidence / 10.0) * multiplier
-                    strength = round(min(strength, 20.0), 2)
-
-                    if strength >= 5.0:
-                        print(
-                            f"[NewsStrength] {ticker}: raw={raw_score} conf={confidence} "
-                            f"src_mult={multiplier:.1f}x → strength={strength:.2f} "
-                            f"(alert≥{Config.NEWS_SIGNAL_ALERT_THRESHOLD} "
-                            f"trade≥{Config.NEWS_SIGNAL_AUTO_TRADE_THRESHOLD}) "
-                            f"headline={headline[:80]!r}"
-                        )
-                    if strength >= Config.NEWS_SIGNAL_ALERT_THRESHOLD:
-                        self._mark_seen(ticker)
-                        signals.append({
-                            "ticker": ticker,
-                            "headline": headline,
-                            "source": source,
-                            "sentiment": sentiment,
-                            "score": raw_score,
-                            "confidence": confidence,
-                            "strength": strength,
-                            "action": action,
-                            "reasoning": reasoning,
-                            "auto_trade": strength >= Config.NEWS_SIGNAL_AUTO_TRADE_THRESHOLD,
-                        })
+                if strength >= Config.NEWS_SIGNAL_ALERT_THRESHOLD:
+                    self._mark_seen(ticker)
+                    signals.append({
+                        "ticker":     ticker,
+                        "headline":   headline,
+                        "source":     source,
+                        "sentiment":  sentiment,
+                        "score":      raw_score,
+                        "confidence": confidence,
+                        "strength":   strength,
+                        "action":     action,
+                        "reasoning":  reasoning,
+                        "auto_trade": strength >= Config.NEWS_SIGNAL_AUTO_TRADE_THRESHOLD,
+                    })
 
         except Exception as e:
             print(f"[NewsStrategy] scan_once error: {e}")
