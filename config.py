@@ -112,6 +112,7 @@ class Config:
 
     # Diagnostic / verbose logging flags
     SWING_VERBOSE_LOGGING = True   # log EMA/RSI/MACD values + exact hold reason each evaluation
+    BULL_BEAR_DEBATE_ENABLED = False  # set True to re-enable Claude debate gate (costs API credits)
 
     # Performance Brain
     PERFORMANCE_SCALING_ENABLED = True  # adjust position size based on last 20-trade win rate
