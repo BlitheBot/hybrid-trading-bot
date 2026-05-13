@@ -1096,6 +1096,19 @@ class TradingBot:
                 await self.crypto_stream._run_forever()
                 _health_state["websocket_connected"] = False
                 print("WebSocket stream exited _run_forever().")
+            except ValueError as e:
+                _health_state["websocket_connected"] = False
+                if "connection limit" in str(e).lower():
+                    print("[WebSocket] Connection limit exceeded — waiting 10 minutes for stale connections to expire...")
+                    asyncio.create_task(notifications.notify_alert(
+                        "[WebSocket] Connection limit exceeded — waiting 10 minutes for stale connections to expire..."
+                    ))
+                    await asyncio.sleep(600)
+                    retry_delay = 5
+                    consecutive_failures = 0
+                    continue
+                print(f"WebSocket ValueError: {e}")
+                asyncio.create_task(notifications.notify_alert(f"WebSocket ValueError: {e} Retrying in {retry_delay}s..."))
             except Exception as e:
                 _health_state["websocket_connected"] = False
                 msg = f"WebSocket error: {e}"
