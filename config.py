@@ -59,7 +59,8 @@ class Config:
     # Sentiment & News Parameters
     NEWS_SIGNAL_ALERT_THRESHOLD = 7
     NEWS_SIGNAL_AUTO_TRADE_THRESHOLD = 13
-    CLAUDE_DAILY_CALL_LIMIT = 100   # fall back to keyword scoring once exceeded
+    CLAUDE_DAILY_CALL_LIMIT = 100        # fall back to keyword scoring once exceeded
+    NEWS_CLAUDE_SCORING_ENABLED = False  # set True to re-enable Claude NLP (costs API credits)
     TRUTH_SOCIAL_ENABLED = False  # Disabled: Truth Social blocks automated access; re-enable with Quiver API
     CONGRESSIONAL_ENABLED = False  # Disabled: free data sources unavailable; re-enable with QUIVER_API_KEY ($30/mo at quiverquant.com)
     FRED_ENABLED = True            # Free public FRED CSV endpoints — no API key required
@@ -112,7 +113,8 @@ class Config:
 
     # Diagnostic / verbose logging flags
     SWING_VERBOSE_LOGGING = True   # log EMA/RSI/MACD values + exact hold reason each evaluation
-    BULL_BEAR_DEBATE_ENABLED = False  # set True to re-enable Claude debate gate (costs API credits)
+    BULL_BEAR_DEBATE_ENABLED = False     # set True to re-enable Claude debate gate (costs API credits)
+    DISCOVERY_DEBATE_ENABLED = False     # reserved for future discovery engine Claude integration
 
     # Performance Brain
     PERFORMANCE_SCALING_ENABLED = True  # adjust position size based on last 20-trade win rate

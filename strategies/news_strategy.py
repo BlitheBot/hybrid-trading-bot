@@ -270,31 +270,36 @@ class NewsStrategy(BaseStrategy):
                     })
 
             # ── Pass 3: batch-score with Claude (or keyword fallback) ─────────
-            limit_logged = False
-            for batch_start in range(0, len(candidates), _CLAUDE_BATCH_SIZE):
-                batch = candidates[batch_start : batch_start + _CLAUDE_BATCH_SIZE]
+            if not Config.NEWS_CLAUDE_SCORING_ENABLED:
+                print(f"[NewsStrategy] NEWS_CLAUDE_SCORING_ENABLED=False — keyword scoring for all {len(candidates)} candidates")
+                for item in candidates:
+                    item["result"] = _keyword_result(item["headline"], "Keyword scoring (Claude disabled).")
+            else:
+                limit_logged = False
+                for batch_start in range(0, len(candidates), _CLAUDE_BATCH_SIZE):
+                    batch = candidates[batch_start : batch_start + _CLAUDE_BATCH_SIZE]
 
-                if self._over_daily_limit():
-                    if not limit_logged:
+                    if self._over_daily_limit():
+                        if not limit_logged:
+                            print(
+                                f"[NewsStrategy] Daily Claude API limit ({Config.CLAUDE_DAILY_CALL_LIMIT}) "
+                                f"reached — keyword fallback for remaining headlines"
+                            )
+                            limit_logged = True
+                        for item in batch:
+                            item["result"] = _keyword_result(
+                                item["headline"],
+                                f"Daily Claude API limit ({Config.CLAUDE_DAILY_CALL_LIMIT}) reached — keyword fallback.",
+                            )
+                    else:
+                        self._claude_calls_today += 1
                         print(
-                            f"[NewsStrategy] Daily Claude API limit ({Config.CLAUDE_DAILY_CALL_LIMIT}) "
-                            f"reached — keyword fallback for remaining headlines"
+                            f"[NewsStrategy] Claude batch call #{self._claude_calls_today} "
+                            f"({len(batch)} headlines, limit={Config.CLAUDE_DAILY_CALL_LIMIT})"
                         )
-                        limit_logged = True
-                    for item in batch:
-                        item["result"] = _keyword_result(
-                            item["headline"],
-                            f"Daily Claude API limit ({Config.CLAUDE_DAILY_CALL_LIMIT}) reached — keyword fallback.",
-                        )
-                else:
-                    self._claude_calls_today += 1
-                    print(
-                        f"[NewsStrategy] Claude batch call #{self._claude_calls_today} "
-                        f"({len(batch)} headlines, limit={Config.CLAUDE_DAILY_CALL_LIMIT})"
-                    )
-                    results = await asyncio.to_thread(self._score_batch_with_claude, batch)
-                    for item, result in zip(batch, results):
-                        item["result"] = result
+                        results = await asyncio.to_thread(self._score_batch_with_claude, batch)
+                        for item, result in zip(batch, results):
+                            item["result"] = result
 
             # ── Pass 4: compute strength and build signals ────────────────────
             for item in candidates:
