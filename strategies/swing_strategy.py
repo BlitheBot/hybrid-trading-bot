@@ -83,22 +83,39 @@ class SwingStrategy(BaseStrategy):
         if (pd.isna(df['EMA_short'].iloc[-1]) or pd.isna(df['EMA_long'].iloc[-1]) or
                 pd.isna(df['MACD'].iloc[-1]) or pd.isna(df['MACD_Signal'].iloc[-1]) or
                 pd.isna(df['RSI'].iloc[-1])):
+            if Config.SWING_VERBOSE_LOGGING:
+                print(
+                    f"[SwingVerbose] {self.name}: indicators have NaN — insufficient history "
+                    f"(need {self.ema_long + self.macd_slow + self.macd_signal + self.rsi_period} bars)"
+                )
             return None
 
-        last_ema_short = df['EMA_short'].iloc[-1]
-        last_ema_long = df['EMA_long'].iloc[-1]
-        last_macd = df['MACD'].iloc[-1]
+        last_ema_short  = df['EMA_short'].iloc[-1]
+        last_ema_long   = df['EMA_long'].iloc[-1]
+        last_macd       = df['MACD'].iloc[-1]
         last_macd_signal = df['MACD_Signal'].iloc[-1]
-        last_rsi = df['RSI'].iloc[-1]
-        current_price = df['close'].iloc[-1]
+        last_rsi        = df['RSI'].iloc[-1]
+        current_price   = df['close'].iloc[-1]
+
+        if Config.SWING_VERBOSE_LOGGING:
+            print(
+                f"[SwingVerbose] {self.name}: price={current_price:.2f} | "
+                f"EMA{self.ema_short}={last_ema_short:.2f} EMA{self.ema_long}={last_ema_long:.2f} | "
+                f"MACD={last_macd:.4f} MACDsig={last_macd_signal:.4f} | "
+                f"RSI({self.rsi_period})={last_rsi:.2f} (gate [{self.rsi_entry_low},{self.rsi_entry_high}])"
+            )
+
+        # Decompose entry conditions for clean logging
+        ema_ok   = last_ema_short > last_ema_long
+        macd_ok  = (last_macd > last_macd_signal and
+                    df['MACD'].iloc[-2] <= df['MACD_Signal'].iloc[-2])
+        rsi_ok   = self.rsi_entry_low <= last_rsi <= self.rsi_entry_high
 
         signal = None
         confidence = 0.0
 
         # Entry conditions: EMA_short > EMA_long + MACD crossover + RSI in configured range
-        if last_ema_short > last_ema_long and \
-           last_macd > last_macd_signal and df['MACD'].iloc[-2] <= df['MACD_Signal'].iloc[-2] and \
-           self.rsi_entry_low <= last_rsi <= self.rsi_entry_high:
+        if ema_ok and macd_ok and rsi_ok:
             signal = "buy"
             confidence = 0.7
             reasoning = f"EMA{self.ema_short}({last_ema_short:.2f}) > EMA{self.ema_long}({last_ema_long:.2f}), MACD Cross Up, RSI({last_rsi:.2f}) in [{self.rsi_entry_low},{self.rsi_entry_high}]"
@@ -111,6 +128,30 @@ class SwingStrategy(BaseStrategy):
             confidence = 0.9
             reasoning = f"Exit Condition Met: RSI({last_rsi:.2f}) > 70 OR MACD Reversal Down"
 
+        elif Config.SWING_VERBOSE_LOGGING:
+            # Log which specific entry condition(s) failed
+            failed = []
+            if not ema_ok:
+                failed.append(
+                    f"EMA{self.ema_short}({last_ema_short:.2f}) <= EMA{self.ema_long}({last_ema_long:.2f}) — no bullish trend"
+                )
+            if not macd_ok:
+                if last_macd <= last_macd_signal:
+                    failed.append(
+                        f"MACD({last_macd:.4f}) below signal({last_macd_signal:.4f}) — bearish momentum"
+                    )
+                else:
+                    failed.append(
+                        f"MACD no fresh crossover — already above signal prev bar "
+                        f"(prev MACD={df['MACD'].iloc[-2]:.4f} sig={df['MACD_Signal'].iloc[-2]:.4f})"
+                    )
+            if not rsi_ok:
+                if last_rsi < self.rsi_entry_low:
+                    failed.append(f"RSI({last_rsi:.2f}) < low gate {self.rsi_entry_low} — oversold / not yet recovering")
+                else:
+                    failed.append(f"RSI({last_rsi:.2f}) > high gate {self.rsi_entry_high} — overbought")
+            print(f"[SwingVerbose] {self.name}: HOLD — {' | '.join(failed)}")
+
         if signal == "buy":
             stop_loss_price = current_price * (1 - (Config.STOP_LOSS_PERCENT / 100))
             take_profit_price = current_price * (1 + (Config.TAKE_PROFIT_PERCENT / 100))
@@ -121,6 +162,12 @@ class SwingStrategy(BaseStrategy):
             if risk > 0 and (reward / risk) < Config.SWING_MIN_RR_RATIO:
                 signal = "hold"
                 reasoning = f"Insufficient RR Ratio: {(reward/risk):.2f} < {Config.SWING_MIN_RR_RATIO}"
+                if Config.SWING_VERBOSE_LOGGING:
+                    print(
+                        f"[SwingVerbose] {self.name}: HOLD — R/R {reward/risk:.2f} < "
+                        f"min {Config.SWING_MIN_RR_RATIO} "
+                        f"(risk=${risk:.2f} reward=${reward:.2f})"
+                    )
 
             # Candlestick confirmation gate (only for signals that passed R/R)
             confidence_multiplier = 1.0
@@ -130,6 +177,12 @@ class SwingStrategy(BaseStrategy):
                     reasoning += f" | Pattern: {pattern_name}"
                 elif confidence_multiplier < 1.0:
                     reasoning += " | No candlestick confirmation — confidence -20%"
+                if Config.SWING_VERBOSE_LOGGING:
+                    pattern_str = pattern_name if pattern_name else "none"
+                    print(
+                        f"[SwingVerbose] {self.name}: BUY signal confirmed — "
+                        f"candlestick={pattern_str} confidence_mult={confidence_multiplier}"
+                    )
 
             return {
                 "symbol": market_data["symbol"].iloc[-1] if "symbol" in market_data.columns else "UNKNOWN",

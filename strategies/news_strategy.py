@@ -209,6 +209,14 @@ Respond with ONLY a valid JSON object using exactly this schema:
                     strength = (raw_score * confidence / 10.0) * multiplier
                     strength = round(min(strength, 20.0), 2)
 
+                    if strength >= 5.0:
+                        print(
+                            f"[NewsStrength] {ticker}: raw={raw_score} conf={confidence} "
+                            f"src_mult={multiplier:.1f}x → strength={strength:.2f} "
+                            f"(alert≥{Config.NEWS_SIGNAL_ALERT_THRESHOLD} "
+                            f"trade≥{Config.NEWS_SIGNAL_AUTO_TRADE_THRESHOLD}) "
+                            f"headline={headline[:80]!r}"
+                        )
                     if strength >= Config.NEWS_SIGNAL_ALERT_THRESHOLD:
                         self._mark_seen(ticker)
                         signals.append({
