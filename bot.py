@@ -1080,6 +1080,9 @@ class TradingBot:
         )
 
     async def scalp_loop(self):
+        if not Config.SCALP_ENABLED:
+            print("[Scalp] Disabled via config — skipping crypto scalp loop.")
+            return
         print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS} (Websocket)...")
         retry_delay = 5
         consecutive_failures = 0
