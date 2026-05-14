@@ -986,13 +986,14 @@ class TradingBot:
                         scaled_risk_percent,
                         Config.SWING_EQUITY_RISK_PERCENT * Config.POSITION_SIZE_FLOOR,
                     )
-                    strategy.execute_trade(
+                    await asyncio.to_thread(
+                        strategy.execute_trade,
                         signal,
                         self.trading_client,
                         scaled_risk_percent,
                         stop_loss_percent,
                         Config.TAKE_PROFIT_PERCENT,
-                        Config.MAX_BUYING_POWER_UTILIZATION_PERCENT
+                        Config.MAX_BUYING_POWER_UTILIZATION_PERCENT,
                     )
 
                     # Prometheus counter: confirmed buy execution
@@ -1890,6 +1891,7 @@ class TradingBot:
         print("📰 Starting Benzinga News Sentiment Loop...")
         strategy = NewsStrategy()
         while True:
+            signals: list[dict] = []
             try:
                 if not self.trading_halted_for_day and not _bot_paused:
                     signals = await strategy.scan_once()
