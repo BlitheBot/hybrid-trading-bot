@@ -27,6 +27,9 @@ class VWAPDeviationStrategy(DiscoveryStrategy):
 
     def compute_indicators(self, bars: pd.DataFrame, params: dict) -> pd.DataFrame:
         df = bars.copy()
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df = df.set_index(pd.DatetimeIndex(df.index))
+        df = df.sort_index()
         typical = (df["high"] + df["low"] + df["close"]) / 3
         vol     = df["volume"]
         n       = params["vwap_period"]
