@@ -2569,6 +2569,31 @@ class TradingBot:
     async def start_dual_engine(self):
         print("🚀 Hybrid Trading Bot starting...")
 
+        # ── Validate Slack webhooks synchronously so Railway logs show result immediately ──
+        _webhook_vars = {
+            "SLACK_ALERTS_WEBHOOK":      Config.SLACK_ALERTS_WEBHOOK,
+            "SLACK_DECISIONS_WEBHOOK":   Config.SLACK_DECISIONS_WEBHOOK,
+            "SLACK_HEALTH_WEBHOOK":      Config.SLACK_HEALTH_WEBHOOK,
+            "SLACK_PERFORMANCE_WEBHOOK": Config.SLACK_PERFORMANCE_WEBHOOK,
+        }
+        missing = [k for k, v in _webhook_vars.items() if not v]
+        if missing:
+            print(f"[Slack] WARNING: {len(missing)} webhook(s) not configured: {missing}")
+            print("[Slack] Set these env vars in Railway → Project → Variables")
+        else:
+            print("[Slack] All 4 webhook env vars are set — testing #trading-alerts...")
+            try:
+                import requests as _req
+                _resp = _req.post(
+                    Config.SLACK_ALERTS_WEBHOOK,
+                    json={"text": "🔌 Bot diagnostic test — Slack connection confirmed"},
+                    timeout=10,
+                )
+                print(f"[Slack] Startup webhook test → HTTP {_resp.status_code}"
+                      + ("" if _resp.status_code == 200 else f" ERROR: {_resp.text[:200]}"))
+            except Exception as _e:
+                print(f"[Slack] Startup webhook test → EXCEPTION: {_e}")
+
         if not await self._check_account_status():
             return
 

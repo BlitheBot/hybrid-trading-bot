@@ -27,17 +27,31 @@ def _pagerduty_trigger(message: str) -> None:
     except Exception as e:
         print(f"[PagerDuty] Failed to send alert: {e}")
 
+_missing_webhook_logged: set[str] = set()
+
 async def _post_to_slack(webhook_url, payload):
-    """Internal method to post asynchronously to a webhook without blocking the main loop."""
+    """Post to a Slack webhook. Logs the HTTP status on every attempt."""
     if not webhook_url:
-        return # Silently ignore if webhook isn't configured
-        
+        # Log once per unique missing URL to avoid log spam
+        key = repr(webhook_url)
+        if key not in _missing_webhook_logged:
+            _missing_webhook_logged.add(key)
+            print("[Slack] WARNING: webhook_url is not configured — Slack notification suppressed. "
+                  "Set SLACK_*_WEBHOOK env vars in Railway / .env.")
+        return
+
+    masked = webhook_url[:35] + "..." if len(webhook_url) > 35 else webhook_url
+
     def _do_post():
         try:
-            requests.post(webhook_url, json=payload, timeout=10)
+            resp = requests.post(webhook_url, json=payload, timeout=10)
+            if resp.status_code == 200:
+                print(f"[Slack] POST {masked} → HTTP {resp.status_code} OK")
+            else:
+                print(f"[Slack] POST {masked} → HTTP {resp.status_code} ERROR: {resp.text[:200]}")
         except Exception as e:
-            print(f"Failed to send Slack notification: {e}")
-            
+            print(f"[Slack] POST {masked} → EXCEPTION: {e}")
+
     await asyncio.to_thread(_do_post)
 
 async def notify_trade_decision(symbol, strategy_name, signal_data, discovery_note=None):
