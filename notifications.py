@@ -1,8 +1,12 @@
 import requests
 import asyncio
+import time
 from config import Config
 from datetime import datetime
 import pytz
+
+_bot_start_time = time.time()
+SLACK_STARTUP_GRACE_SECONDS = 60
 
 
 def _pagerduty_trigger(message: str) -> None:
@@ -31,6 +35,9 @@ _missing_webhook_logged: set[str] = set()
 
 async def _post_to_slack(webhook_url, payload):
     """Post to a Slack webhook. Logs the HTTP status on every attempt."""
+    if time.time() - _bot_start_time < SLACK_STARTUP_GRACE_SECONDS:
+        print(f"[Slack] Startup grace period — suppressing message")
+        return
     if not webhook_url:
         # Log once per unique missing URL to avoid log spam
         key = repr(webhook_url)
