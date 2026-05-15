@@ -602,6 +602,51 @@ def _run_symbol(args: dict) -> list[dict]:
     return all_validated
 
 
+# ── Claude debate gate (main-process, sync wrapper around async call_llm) ─────
+
+def _debate_strategy_sync(result: dict) -> bool:
+    """
+    Asks Claude to review a statistically validated strategy and return APPROVE/REJECT.
+    Runs synchronously in the main process (safe — no event loop is active here).
+    Fails open: returns True on any error so a Claude outage never blocks results.
+    Only called when Config.DISCOVERY_DEBATE_ENABLED=True.
+    """
+    import asyncio
+    from llm_client import call_llm
+
+    params_dict = json.loads(result["parameters"]) if isinstance(result["parameters"], str) else result["parameters"]
+    params_str  = ", ".join(f"{k}={v}" for k, v in params_dict.items())
+    bull_s = f"{result['bull_sharpe']:.2f}"  if result.get("bull_sharpe")  is not None else "N/A"
+    bear_s = f"{result['bear_sharpe']:.2f}"  if result.get("bear_sharpe")  is not None else "N/A"
+
+    prompt = (
+        "You are a quantitative strategy validator. Review this backtested trading strategy "
+        "and decide if it shows genuine edge or looks like over-fitting / data-mining.\n\n"
+        f"Symbol:          {result['symbol']}\n"
+        f"Strategy type:   {result['strategy_type']}\n"
+        f"Parameters:      {params_str}\n"
+        f"Test Sharpe:     {result.get('test_sharpe', 0):.2f}\n"
+        f"Train Sharpe:    {result.get('train_sharpe', 0):.2f}\n"
+        f"Degradation:     {result.get('degradation', 0):.2f}  (train − test; lower is better)\n"
+        f"Win Rate:        {result.get('win_rate', 0)*100:.0f}%\n"
+        f"Total Trades:    {result.get('total_trades', 0)}\n"
+        f"Best Regime:     {result.get('best_regime', 'N/A')}\n"
+        f"Bull Sharpe:     {bull_s}\n"
+        f"Bear Sharpe:     {bear_s}\n\n"
+        "Does this strategy show genuine edge worth live-testing? "
+        "Start your response with APPROVE or REJECT, then give one sentence reason."
+    )
+    try:
+        response = asyncio.run(call_llm(prompt, max_tokens=120))
+        approved = response.upper().startswith("APPROVE")
+        verdict  = "APPROVE" if approved else "REJECT"
+        print(f"[v2] Debate {verdict}: {result['symbol']} {result['strategy_type']} — {response[:100]}")
+        return approved
+    except Exception as e:
+        print(f"[v2] Debate error for {result['symbol']} {result['strategy_type']}: {e} — defaulting APPROVE")
+        return True  # fail open
+
+
 # ── Discovery Engine ──────────────────────────────────────────────────────────
 
 class DiscoveryEngineV2:
@@ -966,11 +1011,15 @@ class DiscoveryEngineV2:
 
         with multiprocessing.Pool(processes=n_workers) as pool:
             for results in pool.imap_unordered(_run_symbol, symbol_args):
-                all_results.extend(results)
                 symbols_done += 1
 
                 for r in results:
+                    if Config.DISCOVERY_DEBATE_ENABLED and r.get("status") == "pending_approval":
+                        if not _debate_strategy_sync(r):
+                            r["status"] = "rejected_by_debate"
                     _upsert_result(self._db_url, r)
+                    if r.get("status") != "rejected_by_debate":
+                        all_results.append(r)
 
                 elapsed_min = (time.time() - start_time) / 60
                 print(
