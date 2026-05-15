@@ -111,8 +111,11 @@ async def notify_trade_decision(symbol, strategy_name, signal_data, discovery_no
 
     await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
 
-async def notify_trade_skipped(symbol, strategy_name, reason):
-    """Sends a skipped trade notification to the #trading-decisions channel."""
+async def notify_trade_skipped(symbol, strategy_name, reason, critical=False):
+    """Sends a skipped trade notification to the #trading-decisions channel.
+    Set critical=True for VIX block, daily loss limit, or portfolio heat cap skips."""
+    if not Config.SLACK_VERBOSE and not critical:
+        return
     payload = {
         "text": f"⏭️ *TRADE SKIPPED: {symbol}*",
         "blocks": [
@@ -129,6 +132,8 @@ async def notify_trade_skipped(symbol, strategy_name, reason):
 
 async def notify_alert(message, level="ERROR"):
     """Sends critical alerts to #trading-alerts; fires PagerDuty phone alert on CRITICAL."""
+    if not Config.SLACK_VERBOSE and level.upper() == "INFO":
+        return
     emoji = "🔥" if level.upper() == "CRITICAL" else "⚠️"
     payload = {
         "text": f"{emoji} *{level} ALERT* {emoji}\n{message}"
@@ -140,6 +145,10 @@ async def notify_alert(message, level="ERROR"):
 async def notify_daily_health(uptime_str, equity, buying_power, daily_pnl):
     """Sends the daily health report to the #trading-health channel."""
     pnl_emoji = "🟢" if daily_pnl >= 0 else "🔴"
+    if not Config.SLACK_VERBOSE:
+        payload = {"text": f"🏥 Health: uptime {uptime_str} | equity ${equity:,.0f} | {pnl_emoji} P&L ${daily_pnl:+,.2f}"}
+        await _post_to_slack(Config.SLACK_HEALTH_WEBHOOK, payload)
+        return
     payload = {
         "text": f"🏥 *Daily Bot Health Report*",
         "blocks": [
@@ -190,6 +199,8 @@ async def notify_weekly_performance(equity, active_positions_count, weekly_pnl):
 
 async def notify_news_signal(ticker, headline, sentiment, score, action):
     """Sends a Benzinga news sentiment signal to #trading-decisions (alert only, no trade yet)."""
+    if not Config.SLACK_VERBOSE:
+        return
     payload = {
         "text": f"📰 *NEWS SIGNAL: {action.upper()} {ticker}* (Score: {score:.1f})",
         "blocks": [
@@ -242,6 +253,8 @@ async def notify_news_trade(ticker, headline, direction, entry_price, position_s
 
 async def notify_edgar_signal(ticker, headline, sentiment, strength, action):
     """Sends a SEC EDGAR insider trade signal to #trading-decisions with 📋 emoji."""
+    if not Config.SLACK_VERBOSE:
+        return
     sentiment_emoji = "🟢" if sentiment == "bullish" else "🔴"
     payload = {
         "text": f"📋 *EDGAR INSIDER: {action.upper()} {ticker}* (Strength: {strength:.1f})",
@@ -269,6 +282,8 @@ async def notify_edgar_signal(ticker, headline, sentiment, strength, action):
 
 async def notify_truth_social_signal(post_text, tickers, sentiment, score, action):
     """Sends a Truth Social sentiment signal to #trading-decisions (alert only, no trade yet)."""
+    if not Config.SLACK_VERBOSE:
+        return
     ticker_str = ", ".join(tickers) if tickers else "N/A"
     payload = {
         "text": f"🇺🇸 *TRUTH SOCIAL SIGNAL: {action.upper()} {ticker_str}* (Score: {score:.1f})",
@@ -296,6 +311,8 @@ async def notify_truth_social_signal(post_text, tickers, sentiment, score, actio
 
 async def notify_macro_summary(snapshot: dict):
     """Sends the weekly FRED macro summary to #trading-health every Sunday 7 PM EST."""
+    if not Config.SLACK_VERBOSE:
+        return
     def _fmt(label: str, key: str, prev_key: str, unit: str = "%") -> str:
         val  = snapshot.get(key)
         prev = snapshot.get(prev_key)
@@ -357,8 +374,10 @@ async def notify_congressional_signal(ticker, headline, representative, party, c
                                        amount_range, transaction_type, strength, action,
                                        informational=False):
     """Sends a congressional trade signal to #trading-decisions.
-    Buys use 🏛️ emoji. Informational sells use ⚠️ with explicit label.
-    """
+    Buys use emoji. Informational sells use warning emoji with explicit label.
+    Suppressed when SLACK_VERBOSE=False."""
+    if not Config.SLACK_VERBOSE:
+        return
     if informational:
         emoji = "⚠️"
         header_text = f"Congressional SELL — Informational: {ticker}"
@@ -396,6 +415,8 @@ async def notify_congressional_signal(ticker, headline, representative, party, c
 
 async def notify_market_open(equity: float, watchlist: str, regime: str):
     """Sends a morning briefing to #trading-alerts at 9:30 AM EST market open."""
+    if not Config.SLACK_VERBOSE:
+        return
     regime_emoji = "🐂" if regime == "bull" else ("🐻" if regime == "bear" else "⚖️")
     payload = {
         "text": "🔔 *Market Open — Morning Briefing*",
@@ -419,6 +440,8 @@ async def notify_market_open(equity: float, watchlist: str, regime: str):
 
 async def notify_correlation_heatmap(image_url: str):
     """Sends the weekly signal correlation heatmap to #trading-health."""
+    if not Config.SLACK_VERBOSE:
+        return
     payload = {
         "text": "📊 *Weekly Signal Correlation Heatmap*",
         "blocks": [
@@ -438,6 +461,8 @@ async def notify_correlation_heatmap(image_url: str):
 
 async def notify_discovery_progress(elapsed_min: int):
     """Sends an hourly progress ping while Discovery Engine v2 subprocess is running."""
+    if not Config.SLACK_VERBOSE:
+        return
     payload = {
         "text": f":mag: *Discovery Engine v2 running* — {elapsed_min}m elapsed. Full report on completion."
     }
@@ -453,6 +478,8 @@ async def notify_discovery_report(report_text: str):
 async def notify_reddit_signal(ticker: str, score: float, mention_count: int,
                                subreddits: list[str], sample_titles: list[str]):
     """Sends a Reddit momentum signal to #trading-decisions (alert-only, 🤖 emoji)."""
+    if not Config.SLACK_VERBOSE:
+        return
     subs_str = " + ".join(f"r/{s}" for s in subreddits)
     titles_block = "\n".join(f"• {t[:120]}" for t in sample_titles[:3])
     payload = {
@@ -541,7 +568,10 @@ async def notify_market_close_digest(
     regime: str,
     cooldown_symbols: list[str],
 ):
-    """Sends the 4pm daily market close summary to #trading-health."""
+    """Sends the 4pm daily market close summary to #trading-health.
+    Suppressed when SLACK_VERBOSE=False and no trades occurred today."""
+    if not Config.SLACK_VERBOSE and trades_today == 0:
+        return
     pnl_sign  = "+" if daily_pnl_pct >= 0 else ""
     pnl_emoji = "🟢" if daily_pnl_pct >= 0 else "🔴"
     vix_str   = f"{vix:.1f}" if vix is not None else "N/A"
@@ -573,6 +603,8 @@ async def notify_market_close_digest(
 async def notify_grok_signal(coin: str, sentiment: str, score: int, confidence: int,
                               reasoning: str, theme: str):
     """Sends a Grok X/Twitter crypto sentiment alert to #trading-decisions (alert-only)."""
+    if not Config.SLACK_VERBOSE:
+        return
     sentiment_emoji = "🟢" if sentiment == "bullish" else ("🔴" if sentiment == "bearish" else "⚪")
     payload = {
         "text": f"🐦 *GROK X SENTIMENT: {sentiment.upper()} {coin}* (Score: {score}/10)",
@@ -607,6 +639,8 @@ async def notify_grok_signal(coin: str, sentiment: str, score: int, confidence: 
 async def notify_webull_signal(ticker: str, rank: int, change_pct: float,
                                 score: float, reasoning: str):
     """Sends a Webull contrarian retail-crowding alert to #trading-decisions (alert-only)."""
+    if not Config.SLACK_VERBOSE:
+        return
     payload = {
         "text": f"📉 *WEBULL CONTRARIAN: BEARISH {ticker}* (+{change_pct:.1f}% — retail crowding)",
         "blocks": [

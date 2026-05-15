@@ -826,7 +826,7 @@ class TradingBot:
             
             if signal:
                 if self.trading_halted_for_day:
-                    asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, "Daily loss limit hit"))
+                    asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, "Daily loss limit hit", critical=True))
                     continue
                     
                 if signal['signal'] == "hold":
@@ -860,7 +860,7 @@ class TradingBot:
                                 )
                                 print(f"[HeatCap] {symbol}: {_heat_msg}")
                                 asyncio.create_task(notifications.notify_trade_skipped(
-                                    symbol, strategy.name, _heat_msg
+                                    symbol, strategy.name, _heat_msg, critical=True
                                 ))
                                 continue
                         except Exception as _heat_err:
@@ -904,7 +904,7 @@ class TradingBot:
                         level="CRITICAL",
                     ))
                     asyncio.create_task(notifications.notify_trade_skipped(
-                        symbol, strategy.name, block_msg
+                        symbol, strategy.name, block_msg, critical=True
                     ))
                     continue
 
@@ -1371,7 +1371,7 @@ class TradingBot:
             if now - ts <= window and _SECTOR_MAP.get(sym) == sector
         }
 
-        if len(recent_syms) < 3:
+        if len(recent_syms) < 4:
             return
 
         last_alert = self._sector_alert_cooldown.get(sector)
@@ -1383,7 +1383,7 @@ class TradingBot:
         await notifications.notify_alert(
             f"🔥 Sector hot: {sector} — {len(recent_syms)} signals in 30min "
             f"({syms_str}). Possible sector rotation.",
-            level="INFO",
+            level="WARNING",
         )
 
     async def _push_signal_stack(
@@ -1422,7 +1422,7 @@ class TradingBot:
             f"High confidence entry."
         )
         print(f"[SignalStack] {msg}")
-        asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
+        asyncio.create_task(notifications.notify_alert(msg, level="WARNING"))
         return True, 1.3
 
     async def _record_daily_signal(self, symbol: str, source: str) -> None:
@@ -1441,7 +1441,7 @@ class TradingBot:
             print(f"[Confluence] {symbol}: {sources_str}")
             asyncio.create_task(notifications.notify_alert(
                 f"🎯 Confluence: {symbol} — {sources_str} both fired today. High conviction setup.",
-                level="INFO",
+                level="WARNING",
             ))
 
     def _upload_image_to_public(self, file_path: str) -> str | None:
