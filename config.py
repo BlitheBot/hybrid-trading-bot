@@ -115,7 +115,7 @@ class Config:
     GROK_ALERT_THRESHOLD = 7   # score ≥ 7 (bullish) or ≤ 3 (bearish) fires alert
 
     # Webull contrarian retail-crowding signal (alert-only)
-    WEBULL_ENABLED         = True
+    WEBULL_ENABLED         = False  # endpoint returns 417; disabled until a working source is found
     WEBULL_ALERT_THRESHOLD = 5.0  # minimum intraday gain % to flag as crowded
 
     # Diagnostic / verbose logging flags

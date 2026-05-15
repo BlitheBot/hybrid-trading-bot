@@ -43,6 +43,8 @@ async def _post_to_slack(webhook_url, payload):
     masked = webhook_url[:35] + "..." if len(webhook_url) > 35 else webhook_url
 
     def _do_post():
+        import time
+        time.sleep(1)  # avoid Slack 429 rate limiting between consecutive webhook calls
         try:
             resp = requests.post(webhook_url, json=payload, timeout=10)
             if resp.status_code == 200:

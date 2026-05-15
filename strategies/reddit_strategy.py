@@ -29,7 +29,7 @@ _WORD_BLOCKLIST = {
 _TICKER_RE = re.compile(r'\b([A-Z]{2,5})\b')
 
 _SUBREDDITS = ["wallstreetbets", "stocks"]
-_USER_AGENT = "hybrid-trading-bot/1.0 (automated research; contact: trading-bot)"
+_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 
 class RedditStrategy:
