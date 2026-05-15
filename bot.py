@@ -19,8 +19,8 @@ from alpaca.trading.enums import QueryOrderStatus
 os.environ.pop("ALPACA_OAUTH_TOKEN", None)
 os.environ.pop("GITHUB_TOKEN", None)
 
-import anthropic
 import requests as _requests
+from llm_client import call_llm
 
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
@@ -371,7 +371,6 @@ class TradingBot:
         self._trade_ids_lock = asyncio.Lock() # guards all _open_trade_ids mutations
         self._db_engine = self._init_db_engine()
         self._regime_cache = None             # (regime_str, timestamp)
-        self._claude = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
         self.daily_pnl = 0.0
         self.start_of_day_equity = 0.0
         self.last_pnl_reset_date = datetime.now(pytz.timezone('America/New_York')).date()
@@ -718,27 +717,23 @@ class TradingBot:
                 f"Signal detail: {signal.get('reasoning', '')}"
             )
 
-            def _call(prompt):
-                return self._claude.messages.create(
-                    model="claude-sonnet-4-6",
-                    max_tokens=150,
-                    messages=[{"role": "user", "content": prompt}],
-                ).content[0].text.strip()
-
             bull, bear = await asyncio.gather(
-                asyncio.to_thread(_call,
+                call_llm(
                     f"You are a bullish stock analyst. Make the strongest case FOR buying {symbol} right now. "
-                    f"Data: {shared_data}  Respond in 2 sentences only."
+                    f"Data: {shared_data}  Respond in 2 sentences only.",
+                    max_tokens=150,
                 ),
-                asyncio.to_thread(_call,
+                call_llm(
                     f"You are a bearish stock analyst. Make the strongest case AGAINST buying {symbol} right now. "
-                    f"Data: {shared_data}  Respond in 2 sentences only."
+                    f"Data: {shared_data}  Respond in 2 sentences only.",
+                    max_tokens=150,
                 ),
             )
-            decision = await asyncio.to_thread(_call,
+            decision = await call_llm(
                 f"Bull case: {bull}\nBear case: {bear}\n"
                 f"Should we buy {symbol} right now? "
-                f"Start your response with BUY or SKIP, then give one sentence reason."
+                f"Start your response with BUY or SKIP, then give one sentence reason.",
+                max_tokens=150,
             )
 
             proceed = decision.upper().startswith("BUY")

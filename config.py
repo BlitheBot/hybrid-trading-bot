@@ -46,6 +46,12 @@ class Config:
     # Anthropic API credentials
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+    # LLM provider — 'anthropic' (default) or 'kimi' / 'openai_compatible'
+    LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
+    OPENAI_COMPATIBLE_API_KEY = os.getenv("OPENAI_COMPATIBLE_API_KEY")
+    OPENAI_COMPATIBLE_BASE_URL = os.getenv("OPENAI_COMPATIBLE_BASE_URL", "https://api.moonshot.cn/v1")
+    OPENAI_COMPATIBLE_MODEL = os.getenv("OPENAI_COMPATIBLE_MODEL", "moonshot-v1-8k")
+
     # Quiver Quantitative API (congressional trading)
     QUIVER_API_KEY = os.getenv("QUIVER_API_KEY")
 

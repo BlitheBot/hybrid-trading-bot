@@ -18,3 +18,4 @@ pyarrow
 sentry-sdk
 notion-client
 scikit-learn
+httpx

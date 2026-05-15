@@ -4,11 +4,11 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 import pytz
 import requests
-import anthropic
 
 from config import Config
 from data.sp500_tickers import SP500_TICKERS
 from strategies.base_strategy import BaseStrategy
+from llm_client import call_llm
 
 # Include crypto pairs alongside equities
 VALID_TICKERS = set(SP500_TICKERS) | {"BTC/USD", "ETH/USD"}
@@ -25,7 +25,6 @@ class TruthSocialStrategy(BaseStrategy):
 
     def __init__(self, name: str = "Truth Social Sentiment"):
         super().__init__(name)
-        self._claude = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
         self._seen_posts: set = set()
         self._baseline_prices: dict[str, float] = {}
         self._disabled_logged: bool = False
@@ -65,7 +64,7 @@ class TruthSocialStrategy(BaseStrategy):
 
     # ── Claude analysis ──────────────────────────────────────────────────────
 
-    def _analyse_post(self, post_text: str) -> dict:
+    async def _analyse_post(self, post_text: str) -> dict:
         """
         Score a Truth Social post for market relevance.
         Returns dict with keys: is_market_relevant, tickers, sentiment, score,
@@ -95,12 +94,7 @@ Rules:
 - score: 10=extremely bullish (tariff removed, huge deal), 0=extremely bearish, 5=neutral."""
 
         try:
-            message = self._claude.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=512,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = message.content[0].text.strip()
+            raw = await call_llm(prompt, max_tokens=512)
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
@@ -202,7 +196,7 @@ Rules:
             self._seen_posts.add(guid)
             post_text = f"{post['title']} {post['description']}".strip()
 
-            result = await asyncio.to_thread(self._analyse_post, post_text)
+            result = await self._analyse_post(post_text)
 
             if not result.get("is_market_relevant", False):
                 continue

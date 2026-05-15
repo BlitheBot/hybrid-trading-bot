@@ -2,7 +2,6 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 import pytz
-import anthropic
 
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import NewsRequest
@@ -10,6 +9,7 @@ from alpaca.data.requests import NewsRequest
 from config import Config
 from data.sp500_tickers import SP500_TICKERS
 from strategies.base_strategy import BaseStrategy
+from llm_client import call_llm
 
 # ── Trusted source multipliers ──────────────────────────────────────────────
 HIGH_TRUST_SOURCES = {"bloomberg", "reuters", "wsj", "cnbc", "wall street journal", "financial times", "ft.com"}
@@ -96,7 +96,6 @@ class NewsStrategy(BaseStrategy):
             api_key=Config.ALPACA_API_KEY,
             secret_key=Config.ALPACA_SECRET_KEY,
         )
-        self._claude = anthropic.Anthropic(api_key=Config.ANTHROPIC_API_KEY)
         self._last_seen: dict[str, datetime] = {}
         self._last_articles_scanned: int = 0
         self._claude_calls_today: int = 0
@@ -128,7 +127,7 @@ class NewsStrategy(BaseStrategy):
 
     # ── Batch Claude scoring ─────────────────────────────────────────────────
 
-    def _score_batch_with_claude(self, items: list[dict]) -> list[dict]:
+    async def _score_batch_with_claude(self, items: list[dict]) -> list[dict]:
         """
         Score up to _CLAUDE_BATCH_SIZE headlines in a single Claude API call.
         Returns one result dict per item in the same order.
@@ -156,12 +155,7 @@ class NewsStrategy(BaseStrategy):
             '  }\n]'
         )
         try:
-            message = self._claude.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=512,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = message.content[0].text.strip()
+            raw = await call_llm(prompt, max_tokens=512)
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
@@ -297,7 +291,7 @@ class NewsStrategy(BaseStrategy):
                             f"[NewsStrategy] Claude batch call #{self._claude_calls_today} "
                             f"({len(batch)} headlines, limit={Config.CLAUDE_DAILY_CALL_LIMIT})"
                         )
-                        results = await asyncio.to_thread(self._score_batch_with_claude, batch)
+                        results = await self._score_batch_with_claude(batch)
                         for item, result in zip(batch, results):
                             item["result"] = result
 
