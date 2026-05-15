@@ -1836,16 +1836,25 @@ class TradingBot:
             print(f"📈 Swing evaluation complete for {len(Config.SWING_SYMBOLS)} symbols.")
 
     async def health_report_loop(self):
-        print("🏥 Starting Daily Health Report Loop (9:00 AM EST)...")
+        import datetime as _dt_module
+        print(f"🏥 Starting Daily Health Report Loop (9:00 AM EST)...")
+        print(f"[HealthLoop] System clock: {_dt_module.datetime.now()} | "
+              f"UTC: {_dt_module.datetime.now(_dt_module.timezone.utc)} | "
+              f"EST: {datetime.now(pytz.timezone('America/New_York'))}")
         while True:
             now = datetime.now(pytz.timezone('America/New_York'))
             target = now.replace(hour=9, minute=0, second=0, microsecond=0)
             if now >= target:
                 target += timedelta(days=1)
-            
+
             sleep_seconds = (target - now).total_seconds()
+            print(f"[HealthLoop] Sleeping {sleep_seconds/3600:.2f}h | "
+                  f"now={now.strftime('%Y-%m-%d %H:%M:%S %Z')} | "
+                  f"next_fire={target.strftime('%Y-%m-%d %H:%M:%S %Z')}")
             await asyncio.sleep(sleep_seconds)
-            
+
+            wake_est = datetime.now(pytz.timezone('America/New_York'))
+            print(f"[HealthLoop] Woke up at {wake_est.strftime('%Y-%m-%d %H:%M:%S %Z')} — fetching account")
             await self._check_account_status()
             account = await asyncio.to_thread(self.trading_client.get_account)
             if account:
@@ -1855,6 +1864,8 @@ class TradingBot:
                 buying_power = float(account.buying_power)
                 asyncio.create_task(notifications.notify_daily_health(uptime_str, equity, buying_power, self.daily_pnl))
                 _health_state["last_health_report_utc"] = datetime.now(pytz.utc).isoformat()
+            else:
+                print("[HealthLoop] account fetch returned None — health report skipped this cycle")
 
     async def performance_report_loop(self):
         print("📊 Starting Weekly Performance Report Loop (Sunday 6:00 PM EST)...")

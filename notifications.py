@@ -143,11 +143,14 @@ async def notify_alert(message, level="ERROR"):
         await asyncio.to_thread(_pagerduty_trigger, message)
 
 async def notify_daily_health(uptime_str, equity, buying_power, daily_pnl):
-    """Sends the daily health report to the #trading-health channel."""
+    """Sends the daily health report to the #trading-health channel.
+    Always fires regardless of SLACK_VERBOSE — this is a critical operational signal."""
     pnl_emoji = "🟢" if daily_pnl >= 0 else "🔴"
+    print(f"[HealthReport] notify_daily_health firing — equity=${equity:,.0f} pnl={daily_pnl:+,.2f} uptime={uptime_str}")
+    # Always send condensed one-liner; SLACK_VERBOSE does not suppress this report
+    payload = {"text": f"🏥 Health: uptime {uptime_str} | equity ${equity:,.0f} | {pnl_emoji} P&L ${daily_pnl:+,.2f} | buying power ${buying_power:,.0f}"}
+    await _post_to_slack(Config.SLACK_HEALTH_WEBHOOK, payload)
     if not Config.SLACK_VERBOSE:
-        payload = {"text": f"🏥 Health: uptime {uptime_str} | equity ${equity:,.0f} | {pnl_emoji} P&L ${daily_pnl:+,.2f}"}
-        await _post_to_slack(Config.SLACK_HEALTH_WEBHOOK, payload)
         return
     payload = {
         "text": f"🏥 *Daily Bot Health Report*",
