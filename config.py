@@ -52,6 +52,10 @@ class Config:
     OPENAI_COMPATIBLE_BASE_URL = os.getenv("OPENAI_COMPATIBLE_BASE_URL", "https://api.moonshot.cn/v1")
     OPENAI_COMPATIBLE_MODEL = os.getenv("OPENAI_COMPATIBLE_MODEL", "moonshot-v1-8k")
 
+    # OpenRouter (used by call_llm_with_model for task-specific model routing)
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
     # Quiver Quantitative API (congressional trading)
     QUIVER_API_KEY = os.getenv("QUIVER_API_KEY")
 
@@ -67,7 +71,7 @@ class Config:
     NEWS_SIGNAL_ALERT_THRESHOLD = 7
     NEWS_SIGNAL_AUTO_TRADE_THRESHOLD = 13
     CLAUDE_DAILY_CALL_LIMIT = 100        # fall back to keyword scoring once exceeded
-    NEWS_CLAUDE_SCORING_ENABLED = False  # set True to re-enable Claude NLP (costs API credits)
+    NEWS_CLAUDE_SCORING_ENABLED = True   # DeepSeek Flash free tier via OpenRouter
     TRUTH_SOCIAL_ENABLED = False  # Disabled: Truth Social blocks automated access; re-enable with Quiver API
     CONGRESSIONAL_ENABLED = False  # Disabled: free data sources unavailable; re-enable with QUIVER_API_KEY ($30/mo at quiverquant.com)
     FRED_ENABLED = True            # Free public FRED CSV endpoints — no API key required
@@ -120,7 +124,7 @@ class Config:
 
     # Diagnostic / verbose logging flags
     SWING_VERBOSE_LOGGING = True   # log EMA/RSI/MACD values + exact hold reason each evaluation
-    BULL_BEAR_DEBATE_ENABLED = False     # live trading debate gate — keep False to save API credits
+    BULL_BEAR_DEBATE_ENABLED = True      # DeepSeek Flash via OpenRouter with web search
     DISCOVERY_DEBATE_ENABLED = True      # Discovery Engine only — Claude reviews each validated strategy
     SLACK_VERBOSE = False                # False = critical/trade alerts only; True = all signals fire
 

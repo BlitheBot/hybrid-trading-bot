@@ -20,7 +20,7 @@ os.environ.pop("ALPACA_OAUTH_TOKEN", None)
 os.environ.pop("GITHUB_TOKEN", None)
 
 import requests as _requests
-from llm_client import call_llm
+from llm_client import call_llm, call_llm_with_model, LLMError, MODEL_FLASH
 
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
@@ -708,6 +708,7 @@ class TradingBot:
     # ── Bull/Bear debate (Task 2) ─────────────────────────────────────────────
 
     async def _debate_trade(self, symbol: str, signal: dict, strategy) -> tuple[bool, str]:
+        import json as _json
         try:
             shared_data = (
                 f"Symbol: {symbol}  Price: ${signal.get('entry_price', 0):.2f}  "
@@ -716,30 +717,70 @@ class TradingBot:
                 f"EMA{getattr(strategy, 'ema_short', 50)} crossed above EMA{getattr(strategy, 'ema_long', 200)}.  "
                 f"Signal detail: {signal.get('reasoning', '')}"
             )
+            web_plugin = [{"id": "web", "max_results": 1}]
 
-            bull, bear = await asyncio.gather(
-                call_llm(
-                    f"You are a bullish stock analyst. Make the strongest case FOR buying {symbol} right now. "
-                    f"Data: {shared_data}  Respond in 2 sentences only.",
-                    max_tokens=150,
+            bull_resp, bear_resp = await asyncio.gather(
+                call_llm_with_model(
+                    MODEL_FLASH,
+                    f"You are a bullish stock analyst. Search for the latest news on {symbol} "
+                    f"and make the strongest 2-sentence case FOR buying it now. Data: {shared_data}",
+                    max_tokens=200,
+                    plugins=web_plugin,
                 ),
-                call_llm(
-                    f"You are a bearish stock analyst. Make the strongest case AGAINST buying {symbol} right now. "
-                    f"Data: {shared_data}  Respond in 2 sentences only.",
-                    max_tokens=150,
+                call_llm_with_model(
+                    MODEL_FLASH,
+                    f"You are a bearish stock analyst. Search for the latest news on {symbol} "
+                    f"and make the strongest 2-sentence case AGAINST buying it now. Data: {shared_data}",
+                    max_tokens=200,
+                    plugins=web_plugin,
                 ),
             )
-            decision = await call_llm(
-                f"Bull case: {bull}\nBear case: {bear}\n"
-                f"Should we buy {symbol} right now? "
-                f"Start your response with BUY or SKIP, then give one sentence reason.",
+
+            synthesis_prompt = (
+                f"Bull case: {bull_resp.text}\nBear case: {bear_resp.text}\n\n"
+                f"Should we buy {symbol} right now?\n"
+                'Return JSON only: {"verdict":"proceed"|"skip"|"reduce_size",'
+                '"conviction":0.0-1.0,"reasoning":"one sentence"}'
+            )
+            verdict_resp = await call_llm_with_model(
+                MODEL_FLASH,
+                synthesis_prompt,
+                response_format={"type": "json_object"},
                 max_tokens=150,
             )
 
-            proceed = decision.upper().startswith("BUY")
-            summary = f"*Bull:* {bull}\n*Bear:* {bear}\n*Decision:* {decision}"
+            try:
+                parsed = _json.loads(verdict_resp.text)
+                verdict = parsed.get("verdict", "proceed").lower()
+                conviction = float(parsed.get("conviction", 0.7))
+                reasoning = parsed.get("reasoning", verdict_resp.text)
+            except Exception:
+                verdict = "proceed" if verdict_resp.text.upper().startswith("P") else "skip"
+                conviction = 0.5
+                reasoning = verdict_resp.text
+
+            # Collect citation URLs from both debate calls
+            all_citations = bull_resp.citations + bear_resp.citations
+            source_lines = "\n".join(
+                f"  • <{c['url']}|{c['title'] or c['url']}>" for c in all_citations[:4]
+            )
+
+            proceed = verdict in ("proceed", "reduce_size")
+            if verdict == "reduce_size":
+                strategy.debate_size_multiplier = 0.5
+                print(f"[Debate] {symbol} reduce_size verdict — setting 50% position size")
+
+            summary = (
+                f"*Bull:* {bull_resp.text}\n*Bear:* {bear_resp.text}\n"
+                f"*Verdict:* {verdict.upper()} (conviction {conviction:.0%}) — {reasoning}"
+            )
+            if source_lines:
+                summary += f"\n*Sources:* {source_lines}"
             return proceed, summary
 
+        except LLMError as e:
+            print(f"[Debate] {symbol} LLMError — proceeding without debate: {e}")
+            return True, "debate unavailable (LLM error)"
         except Exception as e:
             print(f"[Debate] {symbol} failed: {e}")
             return True, "debate unavailable"
@@ -971,10 +1012,11 @@ class TradingBot:
                 entry_time = datetime.now(pytz.utc)
                 try:
                     earnings_mult   = getattr(strategy, 'earnings_override_multiplier', 1.0)
+                    debate_mult     = getattr(strategy, 'debate_size_multiplier', 1.0)
                     confidence_mult = signal.get('confidence_multiplier', 1.0)
                     scaled_risk_percent = (
                         risk_percent * self.risk_multiplier
-                        * earnings_mult * vix_risk_mult * confidence_mult * perf_mult
+                        * earnings_mult * vix_risk_mult * confidence_mult * perf_mult * debate_mult
                     )
                     # Floor: no trade can go below 10% of normal size regardless of stacked multipliers
                     scaled_risk_percent = max(
@@ -2378,6 +2420,21 @@ class TradingBot:
             await asyncio.sleep((target - now).total_seconds())
 
             print("[Discovery] Starting Discovery Engine v2 subprocess")
+
+            # Friday macro brief before subprocess launch
+            try:
+                brief_resp = await call_llm_with_model(
+                    MODEL_FLASH,
+                    "Summarize the key macroeconomic themes and market-moving events from this week. "
+                    "Focus on: Fed policy signals, earnings surprises, sector rotation, and any geopolitical risks "
+                    "that could affect US equities next week. Write 3-4 concise bullet points.",
+                    plugins=[{"id": "web", "max_results": 3}],
+                    max_tokens=400,
+                )
+                asyncio.create_task(notifications.notify_weekly_macro_brief(brief_resp.text, brief_resp.citations))
+            except Exception as _macro_err:
+                print(f"[Discovery] Macro brief failed (non-fatal): {_macro_err}")
+
             asyncio.create_task(notifications.notify_alert(
                 ":mag: Discovery Engine v2 starting — weekly backtest run. "
                 "Results will arrive in #trading-decisions when complete (~2h).",

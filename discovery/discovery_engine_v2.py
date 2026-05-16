@@ -606,13 +606,13 @@ def _run_symbol(args: dict) -> list[dict]:
 
 def _debate_strategy_sync(result: dict) -> bool:
     """
-    Asks Claude to review a statistically validated strategy and return APPROVE/REJECT.
+    Asks DeepSeek Pro to review a statistically validated strategy and return APPROVE/REJECT.
     Runs synchronously in the main process (safe — no event loop is active here).
-    Fails open: returns True on any error so a Claude outage never blocks results.
+    Fails open: returns True on any error so an LLM outage never blocks results.
     Only called when Config.DISCOVERY_DEBATE_ENABLED=True.
     """
     import asyncio
-    from llm_client import call_llm
+    from llm_client import call_llm_with_model, get_llm_cost_estimate, LLMError, MODEL_PRO
 
     params_dict = json.loads(result["parameters"]) if isinstance(result["parameters"], str) else result["parameters"]
     params_str  = ", ".join(f"{k}={v}" for k, v in params_dict.items())
@@ -634,14 +634,23 @@ def _debate_strategy_sync(result: dict) -> bool:
         f"Bull Sharpe:     {bull_s}\n"
         f"Bear Sharpe:     {bear_s}\n\n"
         "Does this strategy show genuine edge worth live-testing? "
-        "Start your response with APPROVE or REJECT, then give one sentence reason."
+        "Write a detailed analysis (3-4 sentences), then end with APPROVE or REJECT."
     )
     try:
-        response = asyncio.run(call_llm(prompt, max_tokens=120))
-        approved = response.upper().startswith("APPROVE")
+        resp = asyncio.run(call_llm_with_model(MODEL_PRO, prompt, max_tokens=2000))
+        approved = "APPROVE" in resp.text.upper().split()[-1] or resp.text.upper().endswith("APPROVE")
+        # Also accept if APPROVE appears and REJECT does not (simpler check)
+        text_upper = resp.text.upper()
+        if "APPROVE" in text_upper and "REJECT" not in text_upper:
+            approved = True
+        elif "REJECT" in text_upper and "APPROVE" not in text_upper:
+            approved = False
         verdict  = "APPROVE" if approved else "REJECT"
-        print(f"[v2] Debate {verdict}: {result['symbol']} {result['strategy_type']} — {response[:100]}")
+        print(f"[v2] Debate {verdict}: {result['symbol']} {result['strategy_type']} — {resp.text[:120]}")
         return approved
+    except LLMError as e:
+        print(f"[v2] Debate LLMError for {result['symbol']} {result['strategy_type']}: {e} — defaulting APPROVE")
+        return True  # fail open
     except Exception as e:
         print(f"[v2] Debate error for {result['symbol']} {result['strategy_type']}: {e} — defaulting APPROVE")
         return True  # fail open

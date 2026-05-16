@@ -705,3 +705,27 @@ async def notify_truth_social_trade(ticker, post_text, direction, entry_price, p
         ]
     }
     await _post_to_slack(Config.SLACK_ALERTS_WEBHOOK, payload)
+
+
+async def notify_weekly_macro_brief(brief_text: str, citations: list):
+    """Sends the Friday AI-generated macro brief to #trading-health. Always fires (not SLACK_VERBOSE gated)."""
+    source_lines = "\n".join(
+        f"  • <{c['url']}|{c['title'] or c['url']}>" for c in citations[:4]
+    )
+    full_text = brief_text
+    if source_lines:
+        full_text += f"\n\n*Sources:*\n{source_lines}"
+    payload = {
+        "text": "🌐 *Friday Macro Brief (AI + Web Search)*",
+        "blocks": [
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": "🌐 Friday Macro Brief"},
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": full_text[:2800]},
+            },
+        ],
+    }
+    await _post_to_slack(Config.SLACK_HEALTH_WEBHOOK, payload)

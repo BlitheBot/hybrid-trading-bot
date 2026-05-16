@@ -9,7 +9,7 @@ from alpaca.data.requests import NewsRequest
 from config import Config
 from data.sp500_tickers import SP500_TICKERS
 from strategies.base_strategy import BaseStrategy
-from llm_client import call_llm
+from llm_client import call_llm, call_llm_with_model, LLMError, MODEL_FLASH_FREE, MODEL_FLASH
 
 # ── Trusted source multipliers ──────────────────────────────────────────────
 HIGH_TRUST_SOURCES = {"bloomberg", "reuters", "wsj", "cnbc", "wall street journal", "financial times", "ft.com"}
@@ -129,9 +129,10 @@ class NewsStrategy(BaseStrategy):
 
     async def _score_batch_with_claude(self, items: list[dict]) -> list[dict]:
         """
-        Score up to _CLAUDE_BATCH_SIZE headlines in a single Claude API call.
+        Score up to _CLAUDE_BATCH_SIZE headlines in a single LLM call.
+        Tries the free DeepSeek Flash tier first; falls back to paid tier on LLMError.
         Returns one result dict per item in the same order.
-        Falls back to keyword scoring per-item if the API call or JSON parse fails.
+        Falls back to keyword scoring if both LLM tiers fail.
         """
         numbered = []
         for i, item in enumerate(items, 1):
@@ -144,23 +145,32 @@ class NewsStrategy(BaseStrategy):
             "You are an expert stock market analyst. Score each of the following "
             "news items for their likely price impact on the named ticker.\n\n"
             + "\n".join(numbered)
-            + "\n\nRespond with ONLY a valid JSON array, one object per item:\n"
-            '[\n  {\n'
-            '    "index": <1-based integer>,\n'
-            '    "sentiment": "bullish" | "bearish" | "neutral",\n'
-            '    "score": <integer 0-10, 10=extremely bullish, 0=extremely bearish, 5=neutral>,\n'
-            '    "confidence": <integer 0-10>,\n'
-            '    "reasoning": "<one sentence>",\n'
-            '    "action": "buy" | "sell" | "hold"\n'
-            '  }\n]'
+            + '\n\nReturn JSON only: {"items":[{"index":<1-based int>,'
+            '"sentiment":"bullish"|"bearish"|"neutral","score":<0-10>,'
+            '"confidence":<0-10>,"reasoning":"<one sentence>",'
+            '"action":"buy"|"sell"|"hold"}]}'
         )
+
+        raw = None
+        for model_id, label in [(MODEL_FLASH_FREE, "free"), (MODEL_FLASH, "paid")]:
+            try:
+                resp = await call_llm_with_model(
+                    model_id, prompt,
+                    response_format={"type": "json_object"},
+                    max_tokens=400,
+                )
+                raw = resp.text
+                break
+            except LLMError as e:
+                print(f"[NewsStrategy] {label} tier failed: {e}" + (", trying paid tier" if label == "free" else ""))
+
+        if raw is None:
+            print(f"[NewsStrategy] Both LLM tiers failed. Keyword fallback for {len(items)} items.")
+            return [_keyword_result(item["headline"], "Keyword fallback (all LLM tiers failed).") for item in items]
+
         try:
-            raw = await call_llm(prompt, max_tokens=512)
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-            parsed = json.loads(raw)
+            parsed_root = json.loads(raw)
+            parsed = parsed_root.get("items", parsed_root) if isinstance(parsed_root, dict) else parsed_root
             result_map = {
                 r["index"]: r
                 for r in parsed
@@ -177,8 +187,8 @@ class NewsStrategy(BaseStrategy):
                     ))
             return results
         except Exception as e:
-            print(f"[NewsStrategy] Batch Claude call failed: {e}. Keyword fallback for {len(items)} items.")
-            return [_keyword_result(item["headline"], "Keyword fallback (batch call failed).") for item in items]
+            print(f"[NewsStrategy] JSON parse failed: {e}. Keyword fallback for {len(items)} items.")
+            return [_keyword_result(item["headline"], "Keyword fallback (JSON parse failed).") for item in items]
 
     # ── Main async scan ──────────────────────────────────────────────────────
 
