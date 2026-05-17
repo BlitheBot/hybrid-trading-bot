@@ -2634,6 +2634,60 @@ class TradingBot:
                 print(f"[WebullLoop] Unexpected error: {e}")
             await asyncio.sleep(15 * 60)
 
+    async def _log_startup_health(self):
+        """Runs once after strategy instantiation, before async loops start.
+
+        Prints one summary line per strategy showing live signal-module parameters,
+        then prints market open/closed status from the Alpaca clock.
+        """
+        print("[Startup] ===== Strategy Health Check =====")
+
+        for s in self.scalp_strategies:
+            parts = [f"{s.name} ({type(s).__name__}): OK"]
+            if hasattr(s, "_kalman"):
+                k = s._kalman
+                parts.append(f"Kalman Q={k.Q} R={k.R} noise_thresh={k.noise_thresh}")
+            if hasattr(s, "_avwap"):
+                a = s._avwap
+                parts.append(
+                    f"AVWAP window={a.window} "
+                    f"dist_pct={a.distance_threshold_pct}% "
+                    f"vol_ratio={a.volume_ratio_threshold}x"
+                )
+            if hasattr(s, "rr_ratio"):
+                parts.append(f"rr_ratio={s.rr_ratio}:1")
+            print("[Startup]  " + " | ".join(parts))
+
+        for s in self.swing_symbol_strategies.values():
+            parts = [f"{s.name} ({type(s).__name__}): OK"]
+            if hasattr(s, "ema_short"):
+                parts.append(
+                    f"ema={s.ema_short}/{s.ema_long} "
+                    f"rsi_period={s.rsi_period} "
+                    f"rsi_gate=[{s.rsi_entry_low},{s.rsi_entry_high}]"
+                )
+            if hasattr(s, "_kalman"):
+                k = s._kalman
+                parts.append(f"Kalman Q={k.Q} R={k.R} noise_thresh={k.noise_thresh}")
+            if hasattr(s, "_hurst"):
+                h = s._hurst
+                parts.append(f"Hurst window={h.rolling_window} trend_thresh={h.trending_threshold}")
+            print("[Startup]  " + " | ".join(parts))
+
+        try:
+            clock = await asyncio.to_thread(self.trading_client.get_clock)
+            est = pytz.timezone("America/New_York")
+            if clock.is_open:
+                closes = clock.next_close.astimezone(est).strftime("%Y-%m-%d %H:%M %Z")
+                print(f"[Startup] Market: OPEN  | closes {closes}")
+            else:
+                opens = clock.next_open.astimezone(est).strftime("%Y-%m-%d %H:%M %Z")
+                print(f"[Startup] Market: CLOSED | next open {opens}")
+        except Exception as e:
+            print(f"[Startup] Market clock unavailable: {e}")
+
+        print("[Startup] ===================================")
+
     async def start_dual_engine(self):
         print("🚀 Hybrid Trading Bot starting...")
 
@@ -2704,6 +2758,7 @@ class TradingBot:
             "JPM":   SwingStrategy("JPM Swing"),
             "PG":    SwingStrategy("PG Swing"),
         }
+        await self._log_startup_health()
         await asyncio.gather(
             self.scalp_loop(),
             self.swing_loop(),
