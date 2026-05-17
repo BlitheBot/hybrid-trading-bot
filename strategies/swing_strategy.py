@@ -4,6 +4,7 @@ from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopL
 from alpaca.trading.enums import OrderSide, TimeInForce
 from .base_strategy import BaseStrategy
 from .kalman_signal import KalmanTrendSignal
+from .hurst_signal import HurstSignal
 from config import Config
 
 import pandas_ta as ta
@@ -27,6 +28,9 @@ class SwingStrategy(BaseStrategy):
             measurement_variance=0.1,
             signal_noise_threshold=0.4,
         )
+        # Hurst regime gate — only trades when H > 0.6 (statistically trending market).
+        # 60-bar warmup: first 60 rows default to H=0.5 (random walk → gate blocks).
+        self._hurst = HurstSignal(rolling_window=60)
 
     def _check_candlestick_patterns(self, df: pd.DataFrame) -> tuple:
         """
@@ -113,9 +117,11 @@ class SwingStrategy(BaseStrategy):
                 f"RSI({self.rsi_period})={last_rsi:.2f} (gate [{self.rsi_entry_low},{self.rsi_entry_high}])"
             )
 
-        # Kalman noise gate — compute once, gate the entry condition
+        # Adaptive signal gates — compute once per evaluation
         k = self._kalman.compute_latest(df['close'])
+        h = self._hurst.compute_latest(df['close'])
         noise_ok = k["noise_ratio"] < 0.4
+        hurst_ok = h["regime_code"] == 1  # H > 0.6 → statistically trending
 
         # Decompose entry conditions for clean logging
         ema_ok   = last_ema_short > last_ema_long
@@ -126,15 +132,21 @@ class SwingStrategy(BaseStrategy):
         signal = None
         confidence = 0.0
 
-        # Entry conditions: EMA_short > EMA_long + MACD crossover + RSI in range + Kalman noise gate
-        if ema_ok and macd_ok and rsi_ok and noise_ok:
+        # Entry: EMA crossover + MACD + RSI + Kalman noise gate + Hurst regime gate
+        if ema_ok and macd_ok and rsi_ok and noise_ok and hurst_ok:
             signal = "buy"
             confidence = 0.7
             reasoning = (
                 f"EMA{self.ema_short}({last_ema_short:.2f}) > EMA{self.ema_long}({last_ema_long:.2f}), "
                 f"MACD Cross Up, RSI({last_rsi:.2f}) in [{self.rsi_entry_low},{self.rsi_entry_high}], "
-                f"Kalman noise={k['noise_ratio']:.2f}"
+                f"Kalman noise={k['noise_ratio']:.2f}, Hurst H={h['hurst']:.3f}"
             )
+        elif ema_ok and macd_ok and rsi_ok and noise_ok and not hurst_ok:
+            if Config.SWING_VERBOSE_LOGGING:
+                print(
+                    f"[SwingVerbose] {self.name}: BUY suppressed by Hurst regime gate "
+                    f"(H={h['hurst']:.3f} regime={h['regime']} — not trending)"
+                )
         elif ema_ok and macd_ok and rsi_ok and not noise_ok:
             if Config.SWING_VERBOSE_LOGGING:
                 print(
