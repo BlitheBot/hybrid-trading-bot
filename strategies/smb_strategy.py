@@ -6,6 +6,7 @@ from .base_strategy import BaseStrategy
 from .kalman_signal import KalmanTrendSignal
 from .vwap_signal import AnchoredVWAPSignal
 from utils import get_spy_data
+from config import Config
 
 import pandas_ta as ta
 
