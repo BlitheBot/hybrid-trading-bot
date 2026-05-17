@@ -4,6 +4,7 @@ from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopL
 from alpaca.trading.enums import OrderSide, TimeInForce
 from .base_strategy import BaseStrategy
 from .kalman_signal import KalmanTrendSignal
+from .vwap_signal import AnchoredVWAPSignal
 from utils import get_spy_data
 
 import pandas_ta as ta
@@ -18,6 +19,19 @@ class SMBStrategy(BaseStrategy):
         # If crypto scalp is ever re-enabled on intraday data, raise Q to ~5e-3
         # so the filter reacts faster to the shorter bar duration.
         self._kalman = KalmanTrendSignal(process_variance=1e-3, measurement_variance=0.1)
+        # AnchoredVWAPSignal: entry filter requiring price to be on the correct
+        # side of VWAP with above-average volume before executing a crossover signal.
+        # distance_threshold_pct=0.3: tighter than the 0.5 equity default — crypto
+        #   sits near VWAP longer during consolidation so 0.3% separates real
+        #   directional moves from indecision at the crossover point.
+        # volume_ratio_threshold=1.2: 20% above-average volume as a floor for
+        #   institutional participation confirmation.
+        self._avwap = AnchoredVWAPSignal(
+            window=20,
+            anchor="rolling",
+            distance_threshold_pct=0.3,
+            volume_ratio_threshold=1.2,
+        )
 
     def calculate_relative_strength(self, stock_data, spy_data):
         if stock_data is None or spy_data is None or len(stock_data) < 2 or len(spy_data) < 2:
@@ -64,11 +78,29 @@ class SMBStrategy(BaseStrategy):
         current_price = df["close"].iloc[-1]
         atr = df["ATR"].iloc[-1]
 
-        signal = None
+        vwap_latest = self._avwap.compute_latest(df)
+
+        raw_signal = None
         if curr_trend > curr_vwap and prev_trend <= prev_vwap and k_signal == 1:
-            signal = "buy"
+            raw_signal = "buy"
         elif curr_trend < curr_vwap and prev_trend >= prev_vwap and k_signal == -1:
+            raw_signal = "sell"
+
+        # AnchoredVWAP gate: signal +1/-1 requires price >= 0.3% from VWAP
+        # AND volume_ratio >= 1.2x — confirms institutional activity in the
+        # same direction as the Kalman/VWAP crossover.
+        signal = None
+        if raw_signal == "buy" and vwap_latest["signal"] == 1:
+            signal = "buy"
+        elif raw_signal == "sell" and vwap_latest["signal"] == -1:
             signal = "sell"
+        elif raw_signal is not None and Config.SWING_VERBOSE_LOGGING:
+            print(
+                f"[SMBVerbose] {self.name}: {raw_signal.upper()} suppressed by VWAP "
+                f"confirmation gate (distance_pct={vwap_latest['distance_pct']:.2f}% "
+                f"volume_ratio={vwap_latest['volume_ratio']:.2f}x — "
+                f"need ±0.3% and >=1.2x)"
+            )
 
         if signal and not np.isnan(atr):
             if signal == "buy":
@@ -82,7 +114,13 @@ class SMBStrategy(BaseStrategy):
             return {
                 "symbol": symbol, "signal": signal, "confidence": 0.8,
                 "entry_price": current_price, "stop_price": stop_price, "target_price": target_price,
-                "reasoning": f"Kalman/VWAP Crossover. noise_ratio={noise_ratio:.2f} ATR(14): {atr:.4f}",
+                "reasoning": (
+                    f"Kalman/VWAP Crossover + AVWAP confirm. "
+                    f"noise_ratio={noise_ratio:.2f} "
+                    f"dist={vwap_latest['distance_pct']:.2f}% "
+                    f"vol={vwap_latest['volume_ratio']:.2f}x "
+                    f"ATR(14): {atr:.4f}"
+                ),
             }
         return None
 
