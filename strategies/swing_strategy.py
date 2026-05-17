@@ -3,6 +3,7 @@ import numpy as np
 from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from .base_strategy import BaseStrategy
+from .kalman_signal import KalmanTrendSignal
 from config import Config
 
 import pandas_ta as ta
@@ -19,6 +20,13 @@ class SwingStrategy(BaseStrategy):
         self.rsi_period = rsi_period
         self.rsi_entry_low = rsi_entry_low
         self.rsi_entry_high = rsi_entry_high
+        # Kalman noise gate — suppresses entries when noise_ratio >= 0.4 (40% of price
+        # movement is unexplained noise). Q/R tuned for daily equity bars.
+        self._kalman = KalmanTrendSignal(
+            process_variance=1e-3,
+            measurement_variance=0.1,
+            signal_noise_threshold=0.4,
+        )
 
     def _check_candlestick_patterns(self, df: pd.DataFrame) -> tuple:
         """
@@ -105,6 +113,10 @@ class SwingStrategy(BaseStrategy):
                 f"RSI({self.rsi_period})={last_rsi:.2f} (gate [{self.rsi_entry_low},{self.rsi_entry_high}])"
             )
 
+        # Kalman noise gate — compute once, gate the entry condition
+        k = self._kalman.compute_latest(df['close'])
+        noise_ok = k["noise_ratio"] < 0.4
+
         # Decompose entry conditions for clean logging
         ema_ok   = last_ema_short > last_ema_long
         macd_ok  = (last_macd > last_macd_signal and
@@ -114,11 +126,21 @@ class SwingStrategy(BaseStrategy):
         signal = None
         confidence = 0.0
 
-        # Entry conditions: EMA_short > EMA_long + MACD crossover + RSI in configured range
-        if ema_ok and macd_ok and rsi_ok:
+        # Entry conditions: EMA_short > EMA_long + MACD crossover + RSI in range + Kalman noise gate
+        if ema_ok and macd_ok and rsi_ok and noise_ok:
             signal = "buy"
             confidence = 0.7
-            reasoning = f"EMA{self.ema_short}({last_ema_short:.2f}) > EMA{self.ema_long}({last_ema_long:.2f}), MACD Cross Up, RSI({last_rsi:.2f}) in [{self.rsi_entry_low},{self.rsi_entry_high}]"
+            reasoning = (
+                f"EMA{self.ema_short}({last_ema_short:.2f}) > EMA{self.ema_long}({last_ema_long:.2f}), "
+                f"MACD Cross Up, RSI({last_rsi:.2f}) in [{self.rsi_entry_low},{self.rsi_entry_high}], "
+                f"Kalman noise={k['noise_ratio']:.2f}"
+            )
+        elif ema_ok and macd_ok and rsi_ok and not noise_ok:
+            if Config.SWING_VERBOSE_LOGGING:
+                print(
+                    f"[SwingVerbose] {self.name}: BUY suppressed by Kalman noise gate "
+                    f"(noise_ratio={k['noise_ratio']:.2f} >= 0.4)"
+                )
 
         # Exit conditions (for existing positions)
         # RSI above 70 or MACD reversal
@@ -128,7 +150,7 @@ class SwingStrategy(BaseStrategy):
             confidence = 0.9
             reasoning = f"Exit Condition Met: RSI({last_rsi:.2f}) > 70 OR MACD Reversal Down"
 
-        elif Config.SWING_VERBOSE_LOGGING:
+        elif Config.SWING_VERBOSE_LOGGING and not (ema_ok and macd_ok and rsi_ok):
             # Log which specific entry condition(s) failed
             failed = []
             if not ema_ok:
