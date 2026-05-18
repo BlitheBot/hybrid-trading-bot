@@ -12,10 +12,13 @@ from config import Config
 import pandas_ta as ta
 
 class SMBStrategy(BaseStrategy):
-    def __init__(self, name, ema_window=9, rr_ratio=3, db_engine=None, base_capital: float = 0.0):
+    def __init__(self, name, ema_window=9, rr_ratio=3, db_engine=None, base_capital: float = 0.0,
+                 drawdown_threshold_pct: float = 10.0, drawdown_window_days: int = 14):
         super().__init__(name)
         self.ema_window = ema_window  # kept for API compatibility; no longer used in signal generation
         self.rr_ratio = rr_ratio
+        self.drawdown_threshold_pct = drawdown_threshold_pct
+        self.drawdown_window_days = drawdown_window_days
         self._kelly = KellySizer(db_engine=db_engine, base_capital=base_capital) if db_engine else None
         # Kalman replaces EMA-9 as the trend line for VWAP crossover detection.
         # Q=1e-3 / R=0.1 are calibrated for daily bars (current use).
@@ -117,6 +120,8 @@ class SMBStrategy(BaseStrategy):
             return {
                 "symbol": symbol, "signal": signal, "confidence": 0.8,
                 "entry_price": current_price, "stop_price": stop_price, "target_price": target_price,
+                "noise_ratio": round(float(noise_ratio), 3),
+                "distance_pct": round(float(vwap_latest["distance_pct"]), 2),
                 "reasoning": (
                     f"Kalman/VWAP Crossover + AVWAP confirm. "
                     f"noise_ratio={noise_ratio:.2f} "

@@ -517,6 +517,13 @@ class TradingBot:
                         discovered_at TIMESTAMP DEFAULT NOW()
                     )
                 """))
+                conn.execute(sql_text("""
+                    CREATE TABLE IF NOT EXISTS strategy_circuit_breakers (
+                        strategy_name  TEXT PRIMARY KEY,
+                        tripped_at     TIMESTAMP DEFAULT NOW(),
+                        reason         TEXT
+                    )
+                """))
                 count = conn.execute(sql_text("SELECT COUNT(*) FROM signal_outcomes")).scalar()
             _health_state["db_connected"] = True
             print(f"[DB] signal_outcomes table verified — {count} existing rows")
@@ -570,6 +577,72 @@ class TradingBot:
             print(f"[DB] Exit logged row={row_id}: {exit_reason} @ {exit_price:.2f} ({pnl_pct:+.2f}%)")
         except Exception as e:
             print(f"[DB] Exit update failed row={row_id}: {e}")
+
+    def _check_strategy_circuit_breaker(
+        self,
+        strategy_name: str,
+        signal_type: str,
+        threshold_pct: float,
+        window_days: int,
+    ) -> tuple[bool, str, bool]:
+        """
+        Returns (is_paused, reason, is_newly_tripped). Sync — call via asyncio.to_thread.
+
+        Queries rolling net pnl_pct over window_days for signal_type. If net loss
+        exceeds threshold_pct the strategy is paused (CB record inserted). When
+        the window recovers above the threshold the record is deleted and trading resumes.
+        No fixed resume timestamp — re-evaluated on every buy signal.
+        """
+        if not self._db_engine:
+            return False, "", False
+        try:
+            with self._db_engine.connect() as conn:
+                pnl_row = conn.execute(sql_text("""
+                    SELECT COALESCE(SUM(pnl_pct), 0) AS net_pnl,
+                           COUNT(*)                   AS trade_count
+                    FROM signal_outcomes
+                    WHERE signal_type = :st
+                      AND exit_time >= NOW() - (:days * INTERVAL '1 day')
+                      AND exit_time IS NOT NULL
+                      AND pnl_pct   IS NOT NULL
+                """), {"st": signal_type, "days": window_days}).mappings().fetchone()
+                cb_row = conn.execute(sql_text(
+                    "SELECT strategy_name FROM strategy_circuit_breakers WHERE strategy_name = :name"
+                ), {"name": strategy_name}).mappings().fetchone()
+
+            net_pnl         = float(pnl_row["net_pnl"])   if pnl_row else 0.0
+            trade_count     = int(pnl_row["trade_count"]) if pnl_row else 0
+            currently_paused = cb_row is not None
+            threshold_neg   = -abs(threshold_pct)
+
+            if trade_count > 0 and net_pnl <= threshold_neg:
+                reason = (
+                    f"net_pnl={net_pnl:+.1f}% over last {window_days}d "
+                    f"({trade_count} closed trades) ≤ −{abs(threshold_pct):.0f}%"
+                )
+                if not currently_paused:
+                    with self._db_engine.begin() as conn:
+                        conn.execute(sql_text("""
+                            INSERT INTO strategy_circuit_breakers (strategy_name, reason)
+                            VALUES (:name, :reason)
+                            ON CONFLICT (strategy_name) DO UPDATE
+                                SET tripped_at = NOW(), reason = EXCLUDED.reason
+                        """), {"name": strategy_name, "reason": reason})
+                    print(f"[CB] {strategy_name} TRIPPED — {reason}")
+                    return True, reason, True
+                return True, reason, False
+            else:
+                if currently_paused:
+                    with self._db_engine.begin() as conn:
+                        conn.execute(sql_text(
+                            "DELETE FROM strategy_circuit_breakers WHERE strategy_name = :name"
+                        ), {"name": strategy_name})
+                    print(f"[CB] {strategy_name} RESUMED — net_pnl recovered to {net_pnl:+.1f}%")
+                return False, "", False
+
+        except Exception as e:
+            print(f"[CircuitBreaker] DB check failed for {strategy_name}: {e}")
+            return False, "", False
 
     # ── Market regime (Task 1) ────────────────────────────────────────────────
 
@@ -996,6 +1069,22 @@ class TradingBot:
                     else:
                         signal_type = 'scalp_long'
 
+                # Circuit breaker: block new entries if strategy has recent drawdown
+                if signal.get('signal') == 'buy' and signal_type:
+                    cb_threshold = getattr(strategy, 'drawdown_threshold_pct', 10.0)
+                    cb_window    = getattr(strategy, 'drawdown_window_days', 14)
+                    cb_paused, cb_reason, cb_new_trip = await asyncio.to_thread(
+                        self._check_strategy_circuit_breaker,
+                        strategy.name, signal_type, cb_threshold, cb_window,
+                    )
+                    if cb_paused:
+                        cb_msg = f"Circuit breaker active — {cb_reason}"
+                        print(f"[CB] {symbol}/{strategy.name}: trade blocked — {cb_reason}")
+                        asyncio.create_task(notifications.notify_trade_skipped(
+                            symbol, strategy.name, cb_msg, critical=cb_new_trip
+                        ))
+                        continue
+
                 # Performance Brain: adjust size based on last 20-trade win rate
                 perf_mult = 1.0
                 perf_note = None
@@ -1023,6 +1112,7 @@ class TradingBot:
                             _kr = _kelly.get_position_size(signal_type, _ep)
                             if _kr['shares'] > 0:
                                 signal['kelly_qty'] = _kr['shares']
+                                signal['half_kelly_f'] = _kr['half_kelly_f']
                                 kelly_note = (
                                     f"Kelly ({_kr['half_kelly_f']:.1%} of capital): {_kr['note']}"
                                 )
@@ -2720,6 +2810,24 @@ class TradingBot:
                 print(f"[Startup] Market: CLOSED | next open {opens}")
         except Exception as e:
             print(f"[Startup] Market clock unavailable: {e}")
+
+        if self._db_engine:
+            try:
+                with self._db_engine.connect() as conn:
+                    cb_rows = conn.execute(sql_text(
+                        "SELECT strategy_name, reason, tripped_at "
+                        "FROM strategy_circuit_breakers ORDER BY tripped_at"
+                    )).mappings().fetchall()
+                if cb_rows:
+                    for cb in cb_rows:
+                        print(
+                            f"[Startup] CB ACTIVE: {cb['strategy_name']} — "
+                            f"{cb['reason']} (since {str(cb['tripped_at'])[:19]})"
+                        )
+                else:
+                    print("[Startup] Circuit breakers: none active")
+            except Exception:
+                print("[Startup] Circuit breakers: table not yet created (will be on next startup)")
 
         print("[Startup] ===================================")
 

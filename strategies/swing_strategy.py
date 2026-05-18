@@ -13,7 +13,8 @@ import pandas_ta as ta
 class SwingStrategy(BaseStrategy):
     def __init__(self, name, ema_short=50, ema_long=200, macd_fast=12, macd_slow=26, macd_signal=9,
                  rsi_period=14, rsi_entry_low=40, rsi_entry_high=60,
-                 db_engine=None, base_capital: float = 0.0):
+                 db_engine=None, base_capital: float = 0.0,
+                 drawdown_threshold_pct: float = 10.0, drawdown_window_days: int = 14):
         super().__init__(name)
         self.ema_short = ema_short
         self.ema_long = ema_long
@@ -23,6 +24,8 @@ class SwingStrategy(BaseStrategy):
         self.rsi_period = rsi_period
         self.rsi_entry_low = rsi_entry_low
         self.rsi_entry_high = rsi_entry_high
+        self.drawdown_threshold_pct = drawdown_threshold_pct
+        self.drawdown_window_days = drawdown_window_days
         self._kelly = KellySizer(db_engine=db_engine, base_capital=base_capital) if db_engine else None
         # Kalman noise gate — suppresses entries when noise_ratio >= 0.4 (40% of price
         # movement is unexplained noise). Q/R tuned for daily equity bars.
@@ -231,6 +234,8 @@ class SwingStrategy(BaseStrategy):
                 "target_price": take_profit_price,
                 "rsi_at_entry": float(last_rsi),
                 "macd_at_entry": float(last_macd),
+                "noise_ratio": round(float(k["noise_ratio"]), 3),
+                "hurst": round(float(h["hurst"]), 3),
                 "reasoning": reasoning
             }
         elif signal == "sell":

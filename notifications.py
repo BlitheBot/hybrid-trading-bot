@@ -116,6 +116,21 @@ async def notify_trade_decision(symbol, strategy_name, signal_data, discovery_no
             "elements": [{"type": "mrkdwn", "text": f":information_source: {discovery_note}"}]
         })
 
+    _metrics = []
+    if signal_data.get("noise_ratio") is not None:
+        _metrics.append(f"noise={signal_data['noise_ratio']:.2f}")
+    if signal_data.get("hurst") is not None:
+        _metrics.append(f"H={signal_data['hurst']:.3f}")
+    if signal_data.get("distance_pct") is not None:
+        _metrics.append(f"VWAP dist={signal_data['distance_pct']:.1f}%")
+    if signal_data.get("half_kelly_f") is not None:
+        _metrics.append(f"Kelly f={signal_data['half_kelly_f']:.1%}")
+    if _metrics:
+        payload["blocks"].append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": " | ".join(_metrics)}]
+        })
+
     await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
 
 async def notify_trade_skipped(symbol, strategy_name, reason, critical=False):
