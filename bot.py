@@ -1,7 +1,70 @@
-import hashlib
-import hmac
 import os
 import sys
+
+# ── Order-submission diagnostic — fires before any other imports ──────────────
+# Set TEST_ORDER_SUBMISSION=true in Railway Variables, redeploy, read the logs,
+# then remove the variable and redeploy again to resume normal bot operation.
+if os.getenv("TEST_ORDER_SUBMISSION", "").lower() == "true":
+    import traceback as _tb
+    from dotenv import load_dotenv as _lde
+    _lde()
+    from config import Config as _Cfg
+    from alpaca.trading.client import TradingClient as _TC
+    from alpaca.trading.requests import MarketOrderRequest as _MOR
+    from alpaca.trading.enums import OrderSide as _OS, TimeInForce as _TIF
+
+    print("=" * 60)
+    print("[TEST] ORDER SUBMISSION DIAGNOSTIC")
+    print("=" * 60)
+    _key    = _Cfg.ALPACA_API_KEY or ""
+    _secret = _Cfg.ALPACA_SECRET_KEY or ""
+    _url    = _Cfg.ALPACA_BASE_URL
+    _mode   = "PAPER" if _Cfg.PAPER_TRADING else "LIVE"
+    print(f"[TEST] Mode:       {_mode}")
+    print(f"[TEST] Key prefix: {_key[:6] if len(_key) >= 6 else repr(_key)}")
+    print(f"[TEST] Endpoint:   {_url}")
+    if not _key or not _secret:
+        print("[TEST] FATAL: ALPACA_API_KEY or ALPACA_SECRET_KEY is empty")
+        sys.exit(1)
+    _client = _TC(api_key=_key, secret_key=_secret,
+                  paper=_Cfg.PAPER_TRADING, url_override=_url)
+    try:
+        _acct = _client.get_account()
+        print(f"[TEST] Account:    {_acct.account_number}")
+        print(f"[TEST] Status:     {_acct.status}")
+        print(f"[TEST] Equity:     ${float(_acct.equity):,.2f}")
+        print(f"[TEST] BuyingPwr:  ${float(_acct.buying_power):,.2f}")
+    except Exception:
+        print(f"[TEST] get_account() FAILED:\n{_tb.format_exc()}")
+        sys.exit(1)
+    print("[TEST] Submitting 1-share SPY BUY DAY market order...")
+    _order = None
+    try:
+        _order = _client.submit_order(_MOR(
+            symbol="SPY", qty=1, side=_OS.BUY, time_in_force=_TIF.DAY,
+        ))
+        print(f"[TEST] submit_order SUCCESS:")
+        print(f"[TEST]   id           = {_order.id}")
+        print(f"[TEST]   status       = {_order.status.value}")
+        print(f"[TEST]   symbol       = {_order.symbol}")
+        print(f"[TEST]   qty          = {_order.qty}")
+        print(f"[TEST]   side         = {_order.side.value}")
+        print(f"[TEST]   submitted_at = {_order.submitted_at}")
+    except Exception:
+        print(f"[TEST] submit_order() FAILED:\n{_tb.format_exc()}")
+        sys.exit(1)
+    try:
+        _client.cancel_order_by_id(_order.id)
+        print(f"[TEST] Order {str(_order.id)[:8]}... canceled.")
+    except Exception:
+        print(f"[TEST] cancel_order_by_id() failed (may have filled):\n{_tb.format_exc()}")
+    print("[TEST] Diagnostic complete.")
+    print("=" * 60)
+    sys.exit(0)
+# ── End diagnostic ────────────────────────────────────────────────────────────
+
+import hashlib
+import hmac
 import time
 import asyncio
 import threading
