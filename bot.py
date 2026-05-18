@@ -40,6 +40,7 @@ from strategies.truth_social_strategy import TruthSocialStrategy
 from strategies.sec_edgar_strategy import SECEdgarStrategy
 from strategies.congressional_trading_strategy import CongressionalTradingStrategy
 from strategies.fred_strategy import FREDStrategy, get_conviction_multiplier, MACRO_SNAPSHOT
+from strategies.correlation_guard import CorrelationGuard
 from strategies.grok_strategy import GrokStrategy
 from strategies.webull_strategy import WebullStrategy
 from discovery.regime_adapter import apply_to_swing_strategy
@@ -394,6 +395,12 @@ class TradingBot:
         self._daily_signals: dict[str, set] = {}  # ticker → set of source names that fired today
         self._confluence_alerted: set[str] = set()  # tickers already alerted today (dedup)
         self._last_daily_signals_date = datetime.now(pytz.timezone('America/New_York')).date()
+        self._correlation_guard = CorrelationGuard(
+            price_lookback_days=60,
+            max_portfolio_correlation=0.7,
+            max_correlated_positions=2,
+            correlation_threshold=0.75,
+        )
 
     def add_scalp_strategy(self, strategy: BaseStrategy):
         if not isinstance(strategy, BaseStrategy):
@@ -976,6 +983,7 @@ class TradingBot:
                             continue  # Don't trade on unexpected API errors
 
                     # Portfolio heat cap: block new trades if aggregate open-position risk ≥ cap
+                    _all_pos = []  # populated below; reused by correlation guard
                     _equity_ref = _health_state.get("equity_usd") or self.start_of_day_equity
                     if _equity_ref > 0:
                         try:
@@ -996,6 +1004,32 @@ class TradingBot:
                                 continue
                         except Exception as _heat_err:
                             print(f"[HeatCap] Position check failed for {symbol}: {_heat_err}")
+
+                    # Correlation guard: block if new position would concentrate the portfolio
+                    _open_symbols = [p.symbol for p in _all_pos]
+                    _corr_result = await asyncio.to_thread(
+                        self._correlation_guard.check,
+                        symbol,
+                        _open_symbols,
+                        lambda sym: get_historical_bars(
+                            sym, TimeFrame.Day, 60, self.stock_data_client
+                        ),
+                    )
+                    if not _corr_result["allowed"]:
+                        _corr_msg = _corr_result["reason"]
+                        print(
+                            f"[CORRELATION] Trade blocked: {_corr_msg} | "
+                            f"correlation_map={_corr_result['correlation_map']}"
+                        )
+                        asyncio.create_task(notifications.notify_trade_skipped(
+                            symbol, strategy.name, _corr_msg
+                        ))
+                        continue
+                    elif _corr_result["avg_correlation"] > 0.5 and _open_symbols:
+                        print(
+                            f"[CORRELATION] Proceeding with elevated correlation "
+                            f"{_corr_result['avg_correlation']:.2f} to open positions"
+                        )
 
                     # Pre-execute hook: fundamentals check + bull/bear debate (swing only)
                     if pre_execute_hook:
@@ -2829,6 +2863,13 @@ class TradingBot:
             except Exception:
                 print("[Startup] Circuit breakers: table not yet created (will be on next startup)")
 
+        _cg = self._correlation_guard
+        print(
+            f"[Startup] CorrelationGuard: max_corr={_cg.max_portfolio_correlation:.2f} "
+            f"max_correlated_pos={_cg.max_correlated_positions} "
+            f"sector_map={len(CorrelationGuard.SECTOR_MAP)} symbols "
+            f"lookback={_cg.price_lookback_days}d"
+        )
         print("[Startup] ===================================")
 
     async def start_dual_engine(self):
