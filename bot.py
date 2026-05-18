@@ -435,6 +435,16 @@ class TradingBot:
                 self.daily_pnl = current_daily_pnl
                 _health_state["alpaca_connected"] = True
                 _health_state["equity_usd"] = float(account.equity)
+
+                # Keep KellySizer base_capital in sync as equity changes daily
+                _current_equity = float(account.equity)
+                for _s in (
+                    getattr(self, 'scalp_strategies', [])
+                    + list(getattr(self, 'swing_symbol_strategies', {}).values())
+                ):
+                    _k = getattr(_s, '_kelly', None)
+                    if _k:
+                        _k.update_capital(_current_equity)
                 if self.start_of_day_equity > 0:
                     _health_state["daily_pnl_pct"] = round(
                         (self.daily_pnl / self.start_of_day_equity) * 100, 4
@@ -997,12 +1007,30 @@ class TradingBot:
                             f"→ size {int((perf_mult - 1) * 100)}%"
                         )
 
+                kelly_note = None
+                if signal.get('signal') == 'buy':
+                    _kelly = getattr(strategy, '_kelly', None)
+                    if _kelly and _kelly.engine and _kelly.base_capital > 0 and signal_type:
+                        _ep = float(signal.get('entry_price') or 0)
+                        if _ep > 0:
+                            _kr = _kelly.get_position_size(signal_type, _ep)
+                            if _kr['shares'] > 0:
+                                signal['kelly_qty'] = _kr['shares']
+                                kelly_note = (
+                                    f"Kelly ({_kr['half_kelly_f']:.1%} of capital): {_kr['note']}"
+                                )
+                                print(
+                                    f"[Kelly] {symbol} {signal_type}: "
+                                    f"{_kr['shares']} shares | {_kr['note']}"
+                                )
+
                 _notes = [n for n in [
                     getattr(strategy, 'discovery_size_note', None),
                     getattr(strategy, 'earnings_size_note', None),
                     getattr(strategy, 'bear_market_note', None),
                     vix_note,
                     perf_note,
+                    kelly_note,
                 ] if n]
                 asyncio.create_task(notifications.notify_trade_decision(
                     symbol, strategy.name, signal,
@@ -2742,21 +2770,26 @@ class TradingBot:
         # Ensure signal_outcomes table exists (creates if missing on Railway PostgreSQL)
         await asyncio.to_thread(self._ensure_signal_outcomes_table)
 
-        self.add_scalp_strategy(SMBStrategy("SMB Late Scalp", ema_window=9, rr_ratio=3))
+        _initial_capital = self.start_of_day_equity or 0.0
+
+        self.add_scalp_strategy(SMBStrategy("SMB Late Scalp", ema_window=9, rr_ratio=3,
+                                             db_engine=self._db_engine, base_capital=_initial_capital))
 
         # Per-symbol swing strategies — parameters from Discovery Engine walk-forward validation
         self.swing_symbol_strategies = {
             # 125/243 combos validated, best test Sharpe 0.87 — short EMA crossover dominates
-            "COST":  SwingStrategy("COST Swing",  ema_short=20, ema_long=100, rsi_period=10, rsi_entry_low=35, rsi_entry_high=65),
+            "COST":  SwingStrategy("COST Swing",  ema_short=20, ema_long=100, rsi_period=10, rsi_entry_low=35, rsi_entry_high=65,
+                                   db_engine=self._db_engine, base_capital=_initial_capital),
             # 24/243 combos validated, best test Sharpe 0.90 — RSI21 + wide upper band required
-            "BRK.B": SwingStrategy("BRK.B Swing", rsi_period=21, rsi_entry_low=40, rsi_entry_high=65),
+            "BRK.B": SwingStrategy("BRK.B Swing", rsi_period=21, rsi_entry_low=40, rsi_entry_high=65,
+                                   db_engine=self._db_engine, base_capital=_initial_capital),
             # 9/243 combos validated — EMA50/200 with RSI upper=60 already matches defaults
-            "SPY":   SwingStrategy("SPY Swing"),
+            "SPY":   SwingStrategy("SPY Swing",   db_engine=self._db_engine, base_capital=_initial_capital),
             # 0/243 combos validated — defaults until further data
-            "V":     SwingStrategy("V Swing"),
+            "V":     SwingStrategy("V Swing",     db_engine=self._db_engine, base_capital=_initial_capital),
             # 0/243 combos validated — monitoring only (see swing_loop warning)
-            "JPM":   SwingStrategy("JPM Swing"),
-            "PG":    SwingStrategy("PG Swing"),
+            "JPM":   SwingStrategy("JPM Swing",   db_engine=self._db_engine, base_capital=_initial_capital),
+            "PG":    SwingStrategy("PG Swing",    db_engine=self._db_engine, base_capital=_initial_capital),
         }
         await self._log_startup_health()
         await asyncio.gather(

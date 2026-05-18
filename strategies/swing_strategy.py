@@ -5,13 +5,15 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from .base_strategy import BaseStrategy
 from .kalman_signal import KalmanTrendSignal
 from .hurst_signal import HurstSignal
+from .kelly_sizer import KellySizer
 from config import Config
 
 import pandas_ta as ta
 
 class SwingStrategy(BaseStrategy):
     def __init__(self, name, ema_short=50, ema_long=200, macd_fast=12, macd_slow=26, macd_signal=9,
-                 rsi_period=14, rsi_entry_low=40, rsi_entry_high=60):
+                 rsi_period=14, rsi_entry_low=40, rsi_entry_high=60,
+                 db_engine=None, base_capital: float = 0.0):
         super().__init__(name)
         self.ema_short = ema_short
         self.ema_long = ema_long
@@ -21,6 +23,7 @@ class SwingStrategy(BaseStrategy):
         self.rsi_period = rsi_period
         self.rsi_entry_low = rsi_entry_low
         self.rsi_entry_high = rsi_entry_high
+        self._kelly = KellySizer(db_engine=db_engine, base_capital=base_capital) if db_engine else None
         # Kalman noise gate — suppresses entries when noise_ratio >= 0.4 (40% of price
         # movement is unexplained noise). Q/R tuned for daily equity bars.
         self._kalman = KalmanTrendSignal(
@@ -267,11 +270,18 @@ class SwingStrategy(BaseStrategy):
             print("Could not retrieve account details for trade execution.")
             return
 
-        # 2. SAFETY LOCK: Calculate Safe Quantity
-        qty = self.calculate_safe_quantity(
-            symbol, entry_price, signal["stop_price"], account, 
-            equity_risk_percent, max_buying_power_utilization_percent
-        )
+        # 2. SAFETY LOCK: Calculate Quantity
+        # Kelly pre-computed in _process_symbol when sufficient history exists;
+        # falls back to risk-based sizing when below MIN_SAMPLE_SIZE.
+        kelly_qty = signal.get('kelly_qty')
+        if kelly_qty and kelly_qty > 0:
+            max_cash = float(account.buying_power) * (max_buying_power_utilization_percent / 100)
+            qty = min(kelly_qty, int(max_cash / entry_price) if entry_price > 0 else kelly_qty)
+        else:
+            qty = self.calculate_safe_quantity(
+                symbol, entry_price, signal["stop_price"], account,
+                equity_risk_percent, max_buying_power_utilization_percent
+            )
 
         if qty <= 0:
             print(f"Calculated quantity for {symbol} is zero or negative. Not placing order.")

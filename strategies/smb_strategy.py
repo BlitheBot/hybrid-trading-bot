@@ -5,16 +5,18 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from .base_strategy import BaseStrategy
 from .kalman_signal import KalmanTrendSignal
 from .vwap_signal import AnchoredVWAPSignal
+from .kelly_sizer import KellySizer
 from utils import get_spy_data
 from config import Config
 
 import pandas_ta as ta
 
 class SMBStrategy(BaseStrategy):
-    def __init__(self, name, ema_window=9, rr_ratio=3):
+    def __init__(self, name, ema_window=9, rr_ratio=3, db_engine=None, base_capital: float = 0.0):
         super().__init__(name)
         self.ema_window = ema_window  # kept for API compatibility; no longer used in signal generation
         self.rr_ratio = rr_ratio
+        self._kelly = KellySizer(db_engine=db_engine, base_capital=base_capital) if db_engine else None
         # Kalman replaces EMA-9 as the trend line for VWAP crossover detection.
         # Q=1e-3 / R=0.1 are calibrated for daily bars (current use).
         # If crypto scalp is ever re-enabled on intraday data, raise Q to ~5e-3
@@ -141,12 +143,19 @@ class SMBStrategy(BaseStrategy):
         if not account:
             return
             
-        # 2. SAFETY LOCK: Calculate Safe Quantity
-        qty = self.calculate_safe_quantity(
-            symbol, entry_price, stop_price, account, 
-            equity_risk_percent, max_buying_power_utilization_percent
-        )
-        
+        # 2. SAFETY LOCK: Calculate Quantity
+        # Kelly pre-computed in _process_symbol when sufficient history exists;
+        # falls back to risk-based sizing when below MIN_SAMPLE_SIZE.
+        kelly_qty = signal.get('kelly_qty')
+        if kelly_qty and kelly_qty > 0:
+            max_cash = float(account.buying_power) * (max_buying_power_utilization_percent / 100)
+            qty = min(kelly_qty, int(max_cash / entry_price) if entry_price > 0 else kelly_qty)
+        else:
+            qty = self.calculate_safe_quantity(
+                symbol, entry_price, stop_price, account,
+                equity_risk_percent, max_buying_power_utilization_percent
+            )
+
         if qty <= 0:
             return
 
