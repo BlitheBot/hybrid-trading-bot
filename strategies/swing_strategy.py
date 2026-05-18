@@ -298,9 +298,10 @@ class SwingStrategy(BaseStrategy):
         )
         
         try:
-            trading_client.submit_order(order_data=order_data)
+            order = trading_client.submit_order(order_data=order_data)
             sl_price = signal["stop_price"]
             tp_price = signal["target_price"]
-            print(f"✅ Swing Order Placed: {side} {symbol} (Qty: {qty}) @ {entry_price}. SL: {sl_price}, TP: {tp_price}")
+            order_id = str(order.id)[:8] if order and order.id else "unknown"
+            print(f"✅ Swing Order Placed: {side} {symbol} (Qty: {qty}) @ {entry_price}. SL: {sl_price}, TP: {tp_price} | order_id={order_id} status={order.status.value if order else '?'}")
         except Exception as e:
             print(f"❌ Swing Order Failed for {symbol}: {e}")

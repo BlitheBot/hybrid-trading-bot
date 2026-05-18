@@ -340,12 +340,18 @@ class TradingBot:
         
         # Determine Base URL
         base_url = "https://paper-api.alpaca.markets" if Config.PAPER_TRADING else "https://api.alpaca.markets"
-        print(f"DEBUG: Using Base URL: {base_url}")
+        _key = Config.ALPACA_API_KEY or ""
+        _key_prefix = _key[:6] if len(_key) >= 6 else repr(_key)
+        _mode = "PAPER" if Config.PAPER_TRADING else "LIVE"
+        print(f"DEBUG: Alpaca {_mode} | key prefix={_key_prefix} | url={base_url}")
+        if not _key.startswith("PK") and Config.PAPER_TRADING:
+            print("WARNING: PAPER_TRADING=True but key does not start with 'PK' — orders may route incorrectly")
+        if not _key.startswith("AK") and not Config.PAPER_TRADING:
+            print("WARNING: PAPER_TRADING=False but key does not start with 'AK' — you may be using a paper key on live")
 
-        # Explicitly passing None for oauth_token to ensure no conflict
         self.trading_client = TradingClient(
-            api_key=Config.ALPACA_API_KEY, 
-            secret_key=Config.ALPACA_SECRET_KEY, 
+            api_key=Config.ALPACA_API_KEY,
+            secret_key=Config.ALPACA_SECRET_KEY,
             paper=Config.PAPER_TRADING,
             url_override=base_url
         )
@@ -404,7 +410,8 @@ class TradingBot:
         try:
             account = await asyncio.to_thread(self.trading_client.get_account)
             if account:
-                print(f"Account Status: {account.status}, Equity: ${float(account.equity):,.2f}, Buying Power: ${float(account.buying_power):,.2f}")
+                acct_num = getattr(account, 'account_number', 'unknown')
+                print(f"Account ID={acct_num} Status={account.status} Equity=${float(account.equity):,.2f} BuyingPower=${float(account.buying_power):,.2f}")
                 
                 current_date = datetime.now(pytz.timezone('America/New_York')).date()
                 if current_date != self.last_pnl_reset_date:

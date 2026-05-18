@@ -166,7 +166,8 @@ class SMBStrategy(BaseStrategy):
         )
         
         try:
-            trading_client.submit_order(order_data=order_data)
-            print(f"✅ SMB Order Placed: {side} {symbol} (Qty: {qty}) @ {entry_price}. Target: {target_price}, Stop: {stop_price}")
+            order = trading_client.submit_order(order_data=order_data)
+            order_id = str(order.id)[:8] if order and order.id else "unknown"
+            print(f"✅ SMB Order Placed: {side} {symbol} (Qty: {qty}) @ {entry_price}. Target: {target_price}, Stop: {stop_price} | order_id={order_id} status={order.status.value if order else '?'}")
         except Exception as e:
             print(f"❌ SMB Order Failed for {symbol}: {e}")
