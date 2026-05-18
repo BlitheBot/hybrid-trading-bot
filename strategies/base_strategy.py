@@ -33,7 +33,7 @@ class BaseStrategy(ABC):
             
             # 2. Check pending orders
             order_filter = GetOrdersRequest(status=OrderStatus.OPEN, symbols=[symbol])
-            orders = trading_client.get_orders(filter_data=order_filter)
+            orders = trading_client.get_orders(order_filter)
             if orders:
                 return True
                 

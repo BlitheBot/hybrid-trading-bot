@@ -1,3 +1,4 @@
+import traceback
 import pandas as pd
 import numpy as np
 from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
@@ -170,9 +171,13 @@ class SMBStrategy(BaseStrategy):
             stop_loss=StopLossRequest(stop_price=stop_price)
         )
         
+        _base = getattr(getattr(trading_client, '_base_url', None), 'host', None) \
+                or getattr(trading_client, '_base_url', 'unknown')
+        print(f"[ORDER] Submitting SMB order → {symbol} {qty} {side.value} | endpoint={_base}")
         try:
             order = trading_client.submit_order(order_data=order_data)
             order_id = str(order.id)[:8] if order and order.id else "unknown"
+            print(f"[ORDER] Alpaca response: id={order.id} status={order.status.value if order else '?'} symbol={getattr(order,'symbol','?')} qty={getattr(order,'qty','?')}")
             print(f"✅ SMB Order Placed: {side} {symbol} (Qty: {qty}) @ {entry_price}. Target: {target_price}, Stop: {stop_price} | order_id={order_id} status={order.status.value if order else '?'}")
-        except Exception as e:
-            print(f"❌ SMB Order Failed for {symbol}: {e}")
+        except Exception:
+            print(f"❌ SMB Order Failed for {symbol}:\n{traceback.format_exc()}")
