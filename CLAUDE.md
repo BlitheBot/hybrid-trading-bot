@@ -262,6 +262,7 @@ Set these in Railway → Project → Variables:
 |---|---|---|
 | `ALPACA_API_KEY` | Yes | Alpaca paper or live API key |
 | `ALPACA_SECRET_KEY` | Yes | Alpaca secret key |
+| `ALPACA_BASE_URL` | Yes | `https://paper-api.alpaca.markets` for paper; `https://api.alpaca.markets` for live |
 | `ANTHROPIC_API_KEY` | Yes | Claude API key — bot degrades gracefully if missing but debate/NLP features disabled |
 | `FINNHUB_API_KEY` | Yes | Free tier is sufficient; bot continues without it but fundamentals gate always passes |
 | `SLACK_ALERTS_WEBHOOK` | Yes | Incoming webhook URL for #trading-alerts |

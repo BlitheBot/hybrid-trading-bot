@@ -338,8 +338,8 @@ class TradingBot:
         _bot_instance = self
         print("DEBUG: Initializing TradingBot...")
         
-        # Determine Base URL
-        base_url = "https://paper-api.alpaca.markets" if Config.PAPER_TRADING else "https://api.alpaca.markets"
+        # Determine Base URL — env-driven so Railway can override without a code deploy
+        base_url = Config.ALPACA_BASE_URL
         _key = Config.ALPACA_API_KEY or ""
         _key_prefix = _key[:6] if len(_key) >= 6 else repr(_key)
         _mode = "PAPER" if Config.PAPER_TRADING else "LIVE"
