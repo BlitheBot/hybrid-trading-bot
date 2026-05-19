@@ -231,6 +231,7 @@ class SwingStrategy(BaseStrategy):
                 "confidence": confidence * confidence_multiplier,
                 "confidence_multiplier": confidence_multiplier,
                 "entry_price": current_price,
+                "prev_close": float(df["close"].iloc[-2]),
                 "stop_price": stop_loss_price,
                 "target_price": take_profit_price,
                 "rsi_at_entry": float(last_rsi),

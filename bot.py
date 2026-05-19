@@ -41,6 +41,7 @@ from strategies.sec_edgar_strategy import SECEdgarStrategy
 from strategies.congressional_trading_strategy import CongressionalTradingStrategy
 from strategies.fred_strategy import FREDStrategy, get_conviction_multiplier, MACRO_SNAPSHOT
 from strategies.correlation_guard import CorrelationGuard
+from strategies.short_interest_signal import ShortInterestSignal
 from strategies.grok_strategy import GrokStrategy
 from strategies.webull_strategy import WebullStrategy
 from discovery.regime_adapter import apply_to_swing_strategy
@@ -400,6 +401,12 @@ class TradingBot:
             max_portfolio_correlation=0.7,
             max_correlated_positions=2,
             correlation_threshold=0.75,
+        )
+        self._si_signal = ShortInterestSignal(
+            quiver_api_key=Config.QUIVER_API_KEY,
+            high_short_interest_threshold=0.65,
+            squeeze_price_change_threshold=0.02,
+            cache_ttl_hours=12.0,
         )
 
     def add_scalp_strategy(self, strategy: BaseStrategy):
@@ -1031,6 +1038,27 @@ class TradingBot:
                             f"{_corr_result['avg_correlation']:.2f} to open positions"
                         )
 
+                    # Short interest signal: enrichment for swing buy signals only
+                    if isinstance(strategy, SwingStrategy):
+                        _si = await asyncio.to_thread(
+                            self._si_signal.get,
+                            symbol,
+                            float(signal.get("entry_price", 0)),
+                            float(signal.get("prev_close", signal.get("entry_price", 0))),
+                        )
+                        print(
+                            f"[SI] {symbol}: short_vol_ratio={_si['short_interest_pct']:.1%} "
+                            f"squeeze_score={_si['squeeze_score']:.2f} signal={_si['signal']:+d}"
+                        )
+                        if _si["signal"] == -1:
+                            _si_msg = f"Short interest veto: {_si['note']}"
+                            asyncio.create_task(notifications.notify_trade_skipped(
+                                symbol, strategy.name, _si_msg
+                            ))
+                            continue
+                        elif _si["signal"] == 1:
+                            signal["si_boost_note"] = _si["note"]
+
                     # Pre-execute hook: fundamentals check + bull/bear debate (swing only)
                     if pre_execute_hook:
                         hook_proceed, hook_reason = await pre_execute_hook(symbol, signal, strategy)
@@ -1159,6 +1187,7 @@ class TradingBot:
                     getattr(strategy, 'discovery_size_note', None),
                     getattr(strategy, 'earnings_size_note', None),
                     getattr(strategy, 'bear_market_note', None),
+                    signal.get('si_boost_note'),
                     vix_note,
                     perf_note,
                     kelly_note,
@@ -2869,6 +2898,13 @@ class TradingBot:
             f"max_correlated_pos={_cg.max_correlated_positions} "
             f"sector_map={len(CorrelationGuard.SECTOR_MAP)} symbols "
             f"lookback={_cg.price_lookback_days}d"
+        )
+        _si = self._si_signal
+        print(
+            f"[Startup] ShortInterestSignal: source=FINRA-CNMSshvol "
+            f"threshold={_si.high_short_interest_threshold:.0%} "
+            f"squeeze_price_chg={_si.squeeze_price_change_threshold:.0%} "
+            f"cache_ttl={int(_si._cache_ttl // 3600)}h"
         )
         print("[Startup] ===================================")
 
