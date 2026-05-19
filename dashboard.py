@@ -763,6 +763,184 @@ def fetch_best_time_windows(min_trades: int = 5, top_n: int = 5) -> pd.DataFrame
         return None
 
 
+@st.cache_data(ttl=60)
+def fetch_recent_signals(n: int = 20) -> "pd.DataFrame | None":
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.connect() as conn:
+            return pd.read_sql(
+                text("""
+                    SELECT symbol, signal_type,
+                           entry_time AT TIME ZONE 'America/New_York' AS entry_time,
+                           entry_price, market_regime, exit_reason, pnl_pct
+                    FROM signal_outcomes
+                    ORDER BY entry_time DESC
+                    LIMIT :n
+                """),
+                conn,
+                params={"n": n},
+            )
+    except Exception as e:
+        st.error(f"Recent signals query failed: {e}")
+        return None
+
+
+@st.cache_data(ttl=300)
+def _fetch_bars_60d(symbol: str) -> "pd.DataFrame | None":
+    if not stock_data_client:
+        return None
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+
+    end   = datetime.now(pytz.utc) - timedelta(minutes=20)
+    start = end - timedelta(days=90)
+    try:
+        req  = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day,
+                                start=start, end=end, feed="iex")
+        bars = stock_data_client.get_stock_bars(req)
+        if not hasattr(bars, "df") or bars.df is None or bars.df.empty:
+            return None
+        df = bars.df.copy()
+        if isinstance(df.index, pd.MultiIndex):
+            df = df.reset_index(level=0, drop=True)
+        df.columns = [c.lower() for c in df.columns]
+        return df.tail(60)
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=300)
+def fetch_live_signal_state() -> dict:
+    try:
+        from strategies.kalman_signal import KalmanTrendSignal
+        from strategies.hurst_signal import HurstSignal
+        from strategies.vwap_signal import AnchoredVWAPSignal
+        _have_mods = True
+    except ImportError:
+        _have_mods = False
+
+    result: dict = {}
+    for sym in Config.SWING_SYMBOLS:
+        bars  = _fetch_bars_60d(sym)
+        entry: dict = {}
+        if bars is None or bars.empty or not _have_mods:
+            result[sym] = entry
+            continue
+        try:
+            k = KalmanTrendSignal().compute(bars["close"])
+            entry["kalman_slope"]       = round(float(k["slope"].iloc[-1]), 4)
+            entry["kalman_noise_ratio"] = round(float(k["noise_ratio"].iloc[-1]), 4)
+        except Exception:
+            entry["kalman_slope"] = entry["kalman_noise_ratio"] = None
+        try:
+            h = HurstSignal().compute(bars["close"])
+            entry["hurst_h"]      = round(float(h["hurst"].iloc[-1]), 3)
+            entry["hurst_regime"] = str(h["regime"].iloc[-1])
+        except Exception:
+            entry["hurst_h"] = entry["hurst_regime"] = None
+        try:
+            v = AnchoredVWAPSignal().compute(bars)
+            entry["vwap_dist_pct"] = round(float(v["distance_pct"].iloc[-1]), 3)
+        except Exception:
+            entry["vwap_dist_pct"] = None
+        result[sym] = entry
+    return result
+
+
+@st.cache_data(ttl=120)
+def fetch_gate_chain_health() -> "pd.DataFrame | None":
+    engine = _get_engine()
+    live   = fetch_live_signal_state()
+    rows: list[dict] = []
+    for sym in Config.SWING_SYMBOLS:
+        row: dict = {"Symbol": sym}
+
+        cb_active, cb_since = False, ""
+        if engine:
+            try:
+                with engine.connect() as conn:
+                    cb = conn.execute(text("""
+                        SELECT reason, tripped_at
+                        FROM strategy_circuit_breakers
+                        WHERE strategy_name ILIKE :pat
+                        ORDER BY tripped_at DESC LIMIT 1
+                    """), {"pat": f"%{sym}%"}).mappings().fetchone()
+                if cb:
+                    cb_active = True
+                    cb_since  = str(cb["tripped_at"])[:16]
+            except Exception:
+                pass
+
+        row["CB"]       = "ACTIVE" if cb_active else "CLEAR"
+        row["CB Since"] = cb_since
+
+        s = live.get(sym, {})
+        row["Hurst Regime"] = s.get("hurst_regime", "—")
+        row["Hurst H"]      = s.get("hurst_h")
+        row["Kalman Noise"] = s.get("kalman_noise_ratio")
+        row["VWAP Dist%"]   = s.get("vwap_dist_pct")
+        row["Half-Kelly f"] = None
+        row["Trades 7d"]    = 0
+        row["Win Rate 7d"]  = "—"
+
+        if engine:
+            try:
+                with engine.connect() as conn:
+                    kr = conn.execute(text("""
+                        SELECT COUNT(*) AS n,
+                               COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::float
+                                   / NULLIF(COUNT(*), 0) AS wr,
+                               AVG(CASE WHEN pnl_pct > 0  THEN pnl_pct      END) AS avg_win,
+                               AVG(CASE WHEN pnl_pct <= 0 THEN ABS(pnl_pct) END) AS avg_loss
+                        FROM signal_outcomes
+                        WHERE symbol = :sym
+                          AND exit_time IS NOT NULL
+                          AND pnl_pct IS NOT NULL
+                    """), {"sym": sym}).mappings().fetchone()
+                if (kr and kr["n"] and int(kr["n"]) >= 10
+                        and kr["avg_win"] and kr["avg_loss"]):
+                    wr = float(kr["wr"])
+                    b  = float(kr["avg_win"]) / float(kr["avg_loss"])
+                    row["Half-Kelly f"] = round(max(0.0, wr - (1.0 - wr) / b) / 2, 4)
+            except Exception:
+                pass
+            try:
+                with engine.connect() as conn:
+                    r7 = conn.execute(text("""
+                        SELECT COUNT(*) AS n,
+                               ROUND(100.0 * COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)
+                                   / NULLIF(COUNT(*), 0), 1) AS wr
+                        FROM signal_outcomes
+                        WHERE symbol = :sym
+                          AND exit_time IS NOT NULL
+                          AND pnl_pct IS NOT NULL
+                          AND exit_time >= NOW() - INTERVAL '7 days'
+                    """), {"sym": sym}).mappings().fetchone()
+                row["Trades 7d"]   = int(r7["n"]) if r7 and r7["n"] else 0
+                row["Win Rate 7d"] = (
+                    f"{float(r7['wr']):.1f}%" if r7 and r7["wr"] else "—"
+                )
+            except Exception:
+                pass
+
+        rows.append(row)
+    return pd.DataFrame(rows) if rows else None
+
+
+@st.cache_data(ttl=300)
+def fetch_swing_correlation() -> "pd.DataFrame | None":
+    closes: dict = {}
+    for sym in Config.SWING_SYMBOLS:
+        bars = _fetch_bars_60d(sym)
+        if bars is not None and not bars.empty and "close" in bars.columns:
+            closes[sym] = bars["close"].reset_index(drop=True)
+    if len(closes) < 2:
+        return None
+    return pd.DataFrame(closes).corr(method="pearson")
+
+
 # ── Sidebar data fetchers ──────────────────────────────────────────────────────
 
 @st.cache_data(ttl=30)
@@ -948,13 +1126,14 @@ st.sidebar.caption(f"Prices 30s · FRED 1h · Refreshed {now_est.strftime('%H:%M
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
 
-tab_account, tab_positions, tab_tradelog, tab_discovery, tab_analytics, tab_perf = st.tabs([
+tab_account, tab_positions, tab_tradelog, tab_discovery, tab_analytics, tab_perf, tab_intel = st.tabs([
     "💰 Account",
     "📊 Positions",
     "📋 Trade Log",
     "🔬 Discovery",
     "📈 Analytics",
     "🧠 Performance",
+    "📡 Signal Intel",
 ])
 
 # ── Tab 1: Account ─────────────────────────────────────────────────────────────
@@ -1750,3 +1929,144 @@ with tab_perf:
                 st.info("No win/loss data yet — needs at least one winning and one losing trade.")
         else:
             st.info("No closed trade data yet.")
+
+# ── Tab 7: Signal Intel ────────────────────────────────────────────────────────
+
+with tab_intel:
+    st.header("Signal Intelligence")
+
+    # ── Section 1: Recent Trade Signals ──────────────────────────────────────
+
+    st.subheader("Recent Trade Signals")
+    df_sig = fetch_recent_signals(20)
+
+    if df_sig is not None and not df_sig.empty:
+        live_state = fetch_live_signal_state()
+
+        df_sig = df_sig.copy()
+        df_sig["Kalman Slope"]  = df_sig["symbol"].map(
+            lambda s: live_state.get(s, {}).get("kalman_slope")
+        )
+        df_sig["Hurst H"]       = df_sig["symbol"].map(
+            lambda s: live_state.get(s, {}).get("hurst_h")
+        )
+        df_sig["VWAP Dist%"]    = df_sig["symbol"].map(
+            lambda s: live_state.get(s, {}).get("vwap_dist_pct")
+        )
+        df_sig["Status"] = df_sig["pnl_pct"].apply(
+            lambda v: "OPEN" if pd.isna(v) else ("WIN" if float(v) > 0 else "LOSS")
+        )
+
+        def _sig_row_style(row):
+            status = row.get("Status", "")
+            if status == "WIN":
+                bg = "background-color: #1a3a1a"
+            elif status == "LOSS":
+                bg = "background-color: #3a1a1a"
+            elif status == "OPEN":
+                bg = "background-color: #2a2a1a"
+            else:
+                bg = ""
+            return [bg] * len(row)
+
+        cols_show = [
+            "symbol", "signal_type", "entry_time", "entry_price",
+            "market_regime", "Kalman Slope", "Hurst H", "VWAP Dist%",
+            "pnl_pct", "exit_reason", "Status",
+        ]
+        df_display = df_sig[[c for c in cols_show if c in df_sig.columns]]
+        styled_sig = (
+            df_display.style
+            .apply(_sig_row_style, axis=1)
+            .format({"entry_price": "{:.2f}", "pnl_pct": "{:+.2f}%",
+                     "Kalman Slope": "{:.4f}", "Hurst H": "{:.3f}",
+                     "VWAP Dist%": "{:+.3f}%"}, na_rep="—")
+        )
+        st.dataframe(styled_sig, width="stretch", hide_index=True)
+        st.caption(
+            "Kalman/Hurst/VWAP values reflect current live state (60-day bars), "
+            "not at-signal-time values — those are not stored in the DB."
+        )
+    else:
+        st.info("No trade signals in signal_outcomes yet.")
+
+    st.divider()
+
+    # ── Section 2: Gate Chain Health ─────────────────────────────────────────
+
+    st.subheader("Gate Chain Health")
+    df_gate = fetch_gate_chain_health()
+
+    if df_gate is not None and not df_gate.empty:
+        def _cb_color(val):
+            if val == "ACTIVE":
+                return "color: #ff4444; font-weight: bold"
+            if val == "CLEAR":
+                return "color: #00c851"
+            return ""
+
+        def _hurst_regime_color(val):
+            v = str(val).lower()
+            if "trending" in v:
+                return "color: #00c851"
+            if "mean" in v or "revert" in v:
+                return "color: #7d8590"
+            return ""
+
+        styled_gate = (
+            df_gate.style
+            .map(_cb_color, subset=["CB"])
+            .map(_hurst_regime_color, subset=["Hurst Regime"])
+            .format({
+                "Hurst H":      "{:.3f}",
+                "Kalman Noise": "{:.4f}",
+                "VWAP Dist%":   "{:+.3f}%",
+                "Half-Kelly f": "{:.4f}",
+            }, na_rep="—")
+        )
+        st.dataframe(styled_gate, width="stretch", hide_index=True)
+        st.caption(
+            "Half-Kelly f requires >= 10 closed trades per symbol to compute. "
+            "CB = strategy_circuit_breakers table. Live indicators from 60-day daily bars."
+        )
+    else:
+        st.info("Gate chain health unavailable — check DB connection.")
+
+    st.divider()
+
+    # ── Section 3: Correlation Matrix ─────────────────────────────────────────
+
+    st.subheader("Swing Symbol Correlation (60-day)")
+    df_corr = fetch_swing_correlation()
+
+    if df_corr is not None and not df_corr.empty:
+        def _corr_cell_style(val):
+            try:
+                r = float(val)
+            except (TypeError, ValueError):
+                return ""
+            if abs(r) >= 0.999:
+                return "background-color: #1a1a2e; color: #7d8590"
+            if r >= 0.75:
+                return "background-color: #3a1a1a; color: #ff4444"
+            if r >= 0.50:
+                return "background-color: #3a2a1a; color: #ffbb33"
+            if r >= 0.25:
+                return "background-color: #1e2a1e; color: #aaaaaa"
+            return "background-color: #1a1a1a; color: #555555"
+
+        styled_corr = (
+            df_corr.style
+            .map(_corr_cell_style)
+            .format("{:.2f}")
+        )
+        st.dataframe(styled_corr, width="stretch")
+        st.markdown(
+            '<span style="color:#ff4444">&#9632;</span> r &gt;= 0.75 — CorrelationGuard blocks trade &nbsp;|&nbsp; '
+            '<span style="color:#ffbb33">&#9632;</span> r &gt;= 0.50 — elevated correlation &nbsp;|&nbsp; '
+            '<span style="color:#aaaaaa">&#9632;</span> r &gt;= 0.25 — moderate &nbsp;|&nbsp; '
+            '<span style="color:#555555">&#9632;</span> low / diagonal',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info("Correlation data unavailable — needs Alpaca bars for at least 2 symbols.")
