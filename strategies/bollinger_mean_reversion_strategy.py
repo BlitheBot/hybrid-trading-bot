@@ -6,6 +6,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 
 from .base_strategy import BaseStrategy
 from config import Config
+from .halflife_signal import HalfLifeSignal
 
 
 class BollingerMeanReversionStrategy(BaseStrategy):
@@ -28,6 +29,8 @@ class BollingerMeanReversionStrategy(BaseStrategy):
         # Expose ema_short/ema_long as 0 so _log_trade_entry doesn't crash on getattr
         self.ema_short  = 0
         self.ema_long   = 0
+        self._halflife         = HalfLifeSignal(min_bars=30, max_halflife=30, min_halflife=1)
+        self._current_halflife = None
 
     def generate_signals(self, market_data: pd.DataFrame):
         min_bars = self.bb_period + self.rsi_period + 5
@@ -50,6 +53,19 @@ class BollingerMeanReversionStrategy(BaseStrategy):
         if any(pd.isna([last["bb_lower"], last["bb_middle"], last["rsi"],
                         prev["bb_lower"], prev["rsi"]])):
             return None
+
+        # Half-life gate: only fade moves in statistically mean-reverting markets
+        _sym = market_data["symbol"].iloc[-1] if "symbol" in market_data.columns else "UNKNOWN"
+        _hl  = self._halflife.compute_latest(df["close"])
+        if not _hl["is_mean_reverting"]:
+            if Config.SWING_VERBOSE_LOGGING:
+                print(
+                    f"[HL] {_sym}: not mean-reverting "
+                    f"(halflife outside [{self._halflife.min_halflife}, "
+                    f"{self._halflife.max_halflife}] bars) — skipping BB fade entry"
+                )
+            return None
+        self._current_halflife = _hl
 
         current_price = float(last["close"])
         signal        = None
@@ -83,6 +99,11 @@ class BollingerMeanReversionStrategy(BaseStrategy):
                   if "symbol" in market_data.columns else "UNKNOWN")
 
         if signal == "buy":
+            print(
+                f"[HL] {_sym}: halflife={_hl['halflife']:.1f} bars "
+                f"suggested_hold={_hl['suggested_holding_period']} bars "
+                f"confidence={_hl['confidence']:.2f}"
+            )
             stop_loss_price = current_price * (1 - Config.STOP_LOSS_PERCENT / 100)
             # Target: mean reversion to middle band; fall back to config TP if unreachable
             take_profit_price = float(last["bb_middle"])
@@ -113,6 +134,9 @@ class BollingerMeanReversionStrategy(BaseStrategy):
                 "rsi_at_entry":         float(last["rsi"]),
                 "macd_at_entry":        0.0,
                 "reasoning":            reasoning,
+                "halflife":                 _hl["halflife"],
+                "suggested_holding_period": _hl["suggested_holding_period"],
+                "hl_confidence":            _hl["confidence"],
             }
 
         elif signal == "sell":
