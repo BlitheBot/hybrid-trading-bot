@@ -2822,6 +2822,62 @@ class TradingBot:
                 print(f"[WebullLoop] Unexpected error: {e}")
             await asyncio.sleep(15 * 60)
 
+    async def indicator_discovery_loop(self):
+        """
+        Loop 19 — fires every Saturday at 11 PM EST.
+
+        Runs discovery.discovery_scheduler as a subprocess (CPU-heavy GP work never
+        blocks the trading event loop). Requires the Friday discovery_engine_v2 run
+        to have populated the discovery/data/ parquet cache first.
+        """
+        est = pytz.timezone("America/New_York")
+        print("[IndicatorDiscovery] Loop started — fires every Saturday at 11:00 PM EST")
+        while True:
+            now                  = datetime.now(est)
+            days_until_saturday  = (5 - now.weekday()) % 7
+            target               = now.replace(hour=23, minute=0, second=0, microsecond=0)
+            if days_until_saturday > 0:
+                target += timedelta(days=days_until_saturday)
+            elif now >= target:
+                target += timedelta(days=7)
+
+            await asyncio.sleep((target - now).total_seconds())
+
+            asyncio.create_task(notifications.notify_alert(
+                ":dna: Indicator Discovery Engine starting — overnight GP run. "
+                "Results in #trading-decisions when complete (~1h).",
+                level="INFO",
+            ))
+
+            try:
+                start_time = asyncio.get_event_loop().time()
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "-m", "discovery.discovery_scheduler",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+
+                async def _drain():
+                    async for line in proc.stdout:
+                        print(f"[IndicatorDiscovery] {line.decode('utf-8', errors='replace').rstrip()}")
+
+                drain_task = asyncio.create_task(_drain())
+                await drain_task
+                returncode = await proc.wait()
+                elapsed_min = int((asyncio.get_event_loop().time() - start_time) / 60)
+                if returncode != 0:
+                    asyncio.create_task(notifications.notify_alert(
+                        f":x: Indicator Discovery subprocess exited with code {returncode}",
+                        level="ERROR",
+                    ))
+                else:
+                    print(f"[IndicatorDiscovery] Completed in {elapsed_min}m")
+            except Exception as e:
+                print(f"[IndicatorDiscovery] Subprocess error: {e}")
+                asyncio.create_task(notifications.notify_alert(
+                    f":x: Indicator Discovery loop error: {e}", level="ERROR"
+                ))
+
     async def _log_startup_health(self):
         """Runs once after strategy instantiation, before async loops start.
 
@@ -2905,6 +2961,10 @@ class TradingBot:
             f"threshold={_si.high_short_interest_threshold:.0%} "
             f"squeeze_price_chg={_si.squeeze_price_change_threshold:.0%} "
             f"cache_ttl={int(_si._cache_ttl // 3600)}h"
+        )
+        print(
+            "[Startup] IndicatorDiscovery: population=50 generations=20 "
+            f"symbols={len(Config.SWING_SYMBOLS)} IC_threshold=0.05 schedule=Sat_23:00_EST"
         )
         print("[Startup] ===================================")
 
@@ -3003,6 +3063,7 @@ class TradingBot:
             self.market_close_digest_loop(),
             self.grok_loop(),
             self.webull_loop(),
+            self.indicator_discovery_loop(),
         )
 
 if __name__ == "__main__":
