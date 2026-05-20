@@ -538,6 +538,40 @@ class TradingBot:
                         reason         TEXT
                     )
                 """))
+                conn.execute(sql_text("""
+                    CREATE TABLE IF NOT EXISTS discovered_indicators (
+                        id            SERIAL PRIMARY KEY,
+                        formula       TEXT,
+                        mean_ic       FLOAT,
+                        std_ic        FLOAT,
+                        n_folds       INT,
+                        discovered_at TIMESTAMP DEFAULT NOW(),
+                        symbol        TEXT,
+                        regime        TEXT,
+                        status        TEXT DEFAULT 'candidate'
+                    )
+                """))
+                conn.execute(sql_text("""
+                    CREATE TABLE IF NOT EXISTS discovery_results (
+                        id              SERIAL PRIMARY KEY,
+                        symbol          VARCHAR(10),
+                        strategy_type   VARCHAR(50),
+                        parameters      JSONB,
+                        train_sharpe    FLOAT,
+                        test_sharpe     FLOAT,
+                        degradation     FLOAT,
+                        p_value         FLOAT,
+                        total_trades    INTEGER,
+                        win_rate        FLOAT,
+                        bull_sharpe     FLOAT,
+                        bear_sharpe     FLOAT,
+                        high_vol_sharpe FLOAT,
+                        best_regime     VARCHAR(20),
+                        status          VARCHAR(20) DEFAULT 'pending_approval',
+                        discovered_at   TIMESTAMP DEFAULT NOW(),
+                        UNIQUE (symbol, strategy_type, parameters)
+                    )
+                """))
                 count = conn.execute(sql_text("SELECT COUNT(*) FROM signal_outcomes")).scalar()
             _health_state["db_connected"] = True
             print(f"[DB] signal_outcomes table verified — {count} existing rows")

@@ -632,6 +632,9 @@ _exit_monitor_loop() [every 10 min, concurrent]
 
 ## Architecture Notes
 
+### Signal module imports
+- `KalmanTrendSignal`, `HurstSignal`, and `KellySizer` are imported inside `strategies/swing_strategy.py`, not directly in `bot.py`. `AnchoredVWAPSignal` is imported inside `strategies/smb_strategy.py`. `bot.py` imports `CorrelationGuard` and `ShortInterestSignal` directly because it calls them inline in the gate chain. The signal modules attached to strategy objects (`_kalman`, `_hurst`, `_kelly`, `_avwap`) are accessed only through those strategy instances.
+
 ### Async safety
 - All `trading_client.*` SDK calls are wrapped in `asyncio.to_thread()` — no blocking calls on the event loop
 - `_open_trade_ids` is protected by `self._trade_ids_lock = asyncio.Lock()` — all reads and writes acquire the lock
@@ -689,7 +692,7 @@ _exit_monitor_loop() [every 10 min, concurrent]
 
 ## Known Issues and Tech Debt
 
-1. **`bot.py` is ~3100 lines** — monolithic. The DB methods, regime check, fundamentals gate, debate, gate chain, and signal-stack tracking could be extracted into modules, but low priority until the next major feature phase.
+1. **`bot.py` is ~2764 lines** — monolithic. The DB methods, regime check, fundamentals gate, debate, gate chain, and signal-stack tracking could be extracted into modules, but low priority until the next major feature phase.
 
 2. **V, JPM, PG have no validated edge** — they remain in `SWING_SYMBOLS` to accumulate live `signal_outcomes` data. Consider removing after 6 months if they don't signal (or are consistently blocked by the fundamentals gate).
 
