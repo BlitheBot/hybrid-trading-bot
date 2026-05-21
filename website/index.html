@@ -12,395 +12,339 @@
 </head>
 <body>
 
-  <!-- Dot grid canvas -->
-  <canvas id="dot-grid"></canvas>
+  <!-- ── CANVAS LAYERS (fixed, stacked) ────────────────────────────────────── -->
+  <canvas id="canvas-grid"></canvas>
+  <canvas id="canvas-crt"></canvas>
+  <canvas id="canvas-dots"></canvas>
 
-  <!-- ── NAV ──────────────────────────────────────────────────────────────── -->
+  <!-- ── NAV ───────────────────────────────────────────────────────────────── -->
   <nav class="nav">
     <div class="nav-inner">
       <div class="nav-left">
         <span class="nav-dot"></span>
-        <a class="nav-logo" data-page="home" href="#">BLITHEBOT</a>
+        <a class="nav-logo" href="#" data-page="home">BLITHEBOT</a>
       </div>
       <div class="nav-center">
-        <a href="#" data-page="strategy">Strategy</a>
-        <a href="#" data-page="performance">Performance</a>
-        <a href="#" data-page="research">Research</a>
-        <a href="#" data-page="dashboard">Dashboard</a>
+        <a href="#" data-page="strategy">STRATEGY</a>
+        <span class="nav-sep">·</span>
+        <a href="#" data-page="performance">PERFORMANCE</a>
+        <span class="nav-sep">·</span>
+        <a href="#" data-page="research">RESEARCH</a>
+        <span class="nav-sep">·</span>
+        <a href="#" data-page="dashboard">DASHBOARD</a>
       </div>
       <div class="nav-right">
-        <a href="#contact" class="btn-access">Request Access</a>
+        <a href="#contact" class="btn-access">REQUEST ACCESS</a>
       </div>
     </div>
+    <div class="eng-bar">BB@railway:~$ ./blithebot --mode=paper --loops=19 --gates=15</div>
   </nav>
 
+  <!-- ── PAGE CONTENT (SPA wrapper) ────────────────────────────────────────── -->
   <div id="page-content">
 
-  <!-- ── HERO ─────────────────────────────────────────────────────────────── -->
-  <section class="hero">
-    <div class="hero-inner">
+    <!-- SECTION 1 — HERO -->
+    <section class="hero" id="hero">
+      <div class="hero-corner-annotation">DOC NO: BB-001 · REV A · SYSTEMATIC TRADING ENGINE</div>
 
-      <!-- Left column -->
-      <div class="hero-text">
-        <div class="pill pill-live">
-          <span class="pill-dot"></span>
-          Live paper trading
-        </div>
-        <h1>
-          <span class="h1-primary">Algorithmic edge,</span>
-          <span class="h1-accent">systematically executed</span>
-        </h1>
-        <p class="hero-subtitle">
-          A systematic trading engine combining adaptive signal processing, alternative data,
-          and walk-forward validated strategies — running 24/7 on live markets.
-        </p>
-        <div class="hero-buttons">
-          <a href="#contact" class="btn-primary">View Dashboard</a>
-          <a href="#research" class="btn-ghost">Read the research →</a>
-        </div>
-        <div class="buy-sell-legend">
-          <span class="pill-buy">↑ BUY</span>
-          <span class="pill-sell">↓ SELL</span>
-        </div>
+      <div class="hero-headline">
+        <span class="hero-line hero-line--dim">ALGORITHMIC</span>
+        <span class="hero-line hero-line--mid">EDGE,</span>
+        <span class="hero-line hero-line--mid">SYSTEMATICALLY</span>
+        <span class="hero-line hero-line--accent">EXECUTED</span>
       </div>
 
-      <!-- Right column — hero terminal -->
-      <div class="hero-terminal terminal-block">
-        <div class="terminal-header">
-          <span class="dot-dark"></span>
-          <span class="dot-dark"></span>
-          <span class="dot-dark"></span>
-        </div>
-        <div class="terminal-body">
-          <p><span class="bracket">[Startup]</span> <span class="log-body">Market: OPEN 09:30 EST</span></p>
-          <p><span class="bracket">[Startup]</span> <span class="log-body">HurstRegime: H=0.74 trending</span></p>
-          <p><span class="bracket">[Startup]</span> <span class="log-body">KalmanSignal: Q=0.001 noise=0.31</span></p>
-          <p><span class="bracket">[Startup]</span> <span class="log-body">CorrelationGuard: max_corr=0.70</span></p>
-          <p><span class="bracket">[Startup]</span> <span class="log-body">ShortInterest: threshold=65%</span></p>
-          <div class="term-divider"></div>
-          <p><span class="bracket">[SWING]</span>&nbsp;&nbsp;<span class="ticker">COST</span>&nbsp;&nbsp;<span class="log-body">15 gates passed</span></p>
-          <p><span class="bracket">[ORDER]</span>&nbsp;&nbsp;<span class="log-buy">↑ BUY</span>&nbsp;&nbsp;<span class="log-body">12 shares @ $95.40</span></p>
-          <p><span class="bracket">[EXIT]</span>&nbsp;&nbsp;&nbsp;<span class="log-sell">↓ SELL</span>&nbsp;&nbsp;<span class="log-body">12 shares @ $98.80</span></p>
-          <p><span class="bracket">[P&amp;L]</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="log-body">Kelly=4.9%&nbsp;&nbsp;</span><span class="log-buy">+$40.80</span></p>
-          <div class="term-divider"></div>
-          <p><span class="bracket">[SWING]</span>&nbsp;&nbsp;<span class="ticker">JPM</span>&nbsp;&nbsp;&nbsp;<span class="log-body">15 gates passed</span></p>
-          <p><span class="bracket">[ORDER]</span>&nbsp;&nbsp;<span class="log-buy">↑ BUY</span>&nbsp;&nbsp;<span class="log-body">8 shares @ $212.30</span></p>
-          <p><span class="bracket">[EXIT]</span>&nbsp;&nbsp;&nbsp;<span class="log-sell">↓ SELL</span>&nbsp;&nbsp;<span class="log-body">8 shares @ $209.10</span></p>
-          <p><span class="bracket">[P&amp;L]</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="log-body">Kelly=3.8%&nbsp;&nbsp;</span><span class="log-sell">-$25.60</span></p>
-        </div>
+      <div class="hero-sub">
+        <p>A systematic trading engine combining adaptive signal processing, alternative data, and walk-forward validated strategies.</p>
       </div>
 
-    </div>
-  </section>
+      <div class="hero-actions">
+        <a href="#" data-page="dashboard" class="btn-primary">VIEW DASHBOARD</a>
+        <a href="#" data-page="research" class="btn-ghost">READ THE RESEARCH →</a>
+      </div>
 
-  <!-- ── STATS BAR ─────────────────────────────────────────────────────────── -->
-  <div class="stats-bar animate-in" id="stats">
-    <div class="stats-inner">
-      <div class="stat-item">
-        <span class="stat-number">19</span>
-        <span class="stat-label">Concurrent async loops</span>
+      <div class="scroll-indicator" id="scroll-indicator">
+        <span>SCROLL</span>
+        <svg width="12" height="16" viewBox="0 0 12 16" fill="none">
+          <path d="M6 0v12M1 8l5 5 5-5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+        </svg>
       </div>
-      <div class="stat-item">
-        <span class="stat-number">15</span>
-        <span class="stat-label">Independent trade gates</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-number">11</span>
-        <span class="stat-label">Signal sources active</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-number">1,215</span>
-        <span class="stat-label">Parameter combos tested</span>
-      </div>
-    </div>
-  </div>
+    </section>
 
-  <!-- ── THE EDGE ──────────────────────────────────────────────────────────── -->
-  <section class="edge-section animate-in" id="research">
-    <div class="section-inner">
-      <div class="section-tag">Signal architecture</div>
-      <h2>Built on signals most bots never see</h2>
-      <div class="edge-grid">
-        <div class="edge-card">
-          <h3>Alternative Data</h3>
-          <p>SEC insider filings, congressional trades, and FINRA short interest surface institutional activity before price moves.</p>
+    <!-- SECTION 2 — STATS -->
+    <section class="stats-section" id="stats">
+      <div class="stat-col">
+        <span class="stat-ref">REF: BB-S01</span>
+        <div class="stat-numrow">
+          <span class="stat-number" data-target="19">0</span>
         </div>
-        <div class="edge-card">
-          <h3>Adaptive Signal Processing</h3>
-          <p>Kalman filtering replaces static moving averages. Hurst exponent detects market regime in real time.</p>
+        <span class="stat-label">ASYNC LOOPS</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-col">
+        <span class="stat-ref">REF: BB-S02</span>
+        <div class="stat-numrow">
+          <span class="stat-number" data-target="15">0</span>
         </div>
-        <div class="edge-card">
-          <h3>Genetic Indicator Discovery</h3>
-          <p>Overnight GP engine evolves novel indicators and walk-forward validates them before they trade live.</p>
+        <span class="stat-label">TRADE GATES</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-col">
+        <span class="stat-ref">REF: BB-S03</span>
+        <div class="stat-numrow">
+          <span class="stat-number" data-target="11">0</span>
         </div>
-        <div class="edge-card">
-          <h3>Walk-Forward Validation</h3>
-          <p>No curve fitting. Every parameter tested on unseen data before deployment. Runs every Friday night.</p>
+        <span class="stat-label">SIGNAL SOURCES</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-col">
+        <span class="stat-ref">REF: BB-S04</span>
+        <div class="stat-numrow">
+          <span class="stat-number" data-target="1215">0</span>
+          <span class="stat-unit">+</span>
         </div>
-        <div class="edge-card">
-          <h3>Risk Architecture</h3>
-          <p>Circuit breakers, Kelly sizing, correlation limits, and portfolio heat cap gate every single trade signal.</p>
-        </div>
-        <div class="edge-card">
-          <h3>Institutional Infrastructure</h3>
-          <p>PostgreSQL, Railway, Slack, Streamlit, Prometheus metrics, 19 concurrent async loops.</p>
+        <span class="stat-label">COMBOS TESTED</span>
+      </div>
+    </section>
+
+    <!-- SECTION 3 — EDGE STATEMENT (pinned scroll) -->
+    <section class="edge-section" id="edge">
+      <div class="edge-left">
+        <div class="edge-label">BUILT ON</div>
+        <div class="edge-headline">
+          <span class="edge-line edge-line--1">SIGNALS</span>
+          <span class="edge-line edge-line--2">MOST BOTS</span>
+          <span class="edge-line edge-line--3">NEVER SEE</span>
         </div>
       </div>
-    </div>
-  </section>
-
-  <!-- ── GATE CHAIN ────────────────────────────────────────────────────────── -->
-  <section class="gate-section animate-in">
-    <div class="section-inner gate-inner">
-      <div class="gate-desc">
-        <div class="section-tag">Trade execution</div>
-        <h2>Every trade passes 15 independent gates</h2>
-        <p class="gate-body">Each gate runs in order, cheapest first. A single failure blocks the trade. No exceptions.</p>
-      </div>
-      <div class="gate-list">
-        <div class="gate-row">
-          <span class="gate-num">GATE 01</span>
-          <span class="gate-name">Daily halt check</span>
-          <span class="gate-check">✓</span>
+      <div class="edge-right">
+        <div class="edge-card" data-edge-card="1">
+          <div class="edge-card-label">§ ALT DATA</div>
+          <p>SEC insider filings, congressional trades, FINRA short interest surface institutional activity.</p>
         </div>
-        <div class="gate-row">
-          <span class="gate-num">GATE 02</span>
-          <span class="gate-name">Portfolio heat cap</span>
-          <span class="gate-check">✓</span>
+        <div class="edge-card" data-edge-card="2">
+          <div class="edge-card-label">§ KALMAN FILTER</div>
+          <p>Adaptive trend estimation replaces static moving averages. Noise ratio gates low-quality setups.</p>
         </div>
-        <div class="gate-row">
-          <span class="gate-num">GATE 03</span>
-          <span class="gate-name">Correlation guard</span>
-          <span class="gate-check">✓</span>
+        <div class="edge-card" data-edge-card="3">
+          <div class="edge-card-label">§ HURST EXPONENT</div>
+          <p>R/S analysis detects regime. H &gt; 0.6 = trending. SwingStrategy only fires in trending markets.</p>
         </div>
-        <div class="gate-row">
-          <span class="gate-num">GATE 04</span>
-          <span class="gate-name">Short interest signal</span>
-          <span class="gate-check">✓</span>
+        <div class="edge-card" data-edge-card="4">
+          <div class="edge-card-label">§ KELLY CRITERION</div>
+          <p>Half-Kelly position sizing from historical win rate and payoff ratio. Hard cap at 10% per trade.</p>
         </div>
-        <div class="gate-row">
-          <span class="gate-num">GATE 05</span>
-          <span class="gate-name">Kalman noise gate</span>
-          <span class="gate-check">✓</span>
-        </div>
-        <div class="gate-row">
-          <span class="gate-num">GATE 06</span>
-          <span class="gate-name">Hurst regime gate</span>
-          <span class="gate-check">✓</span>
-        </div>
-        <div class="gate-row">
-          <span class="gate-num">GATE 07</span>
-          <span class="gate-name">Pre-execute hook</span>
-          <span class="gate-check">✓</span>
-        </div>
-        <div class="gate-row">
-          <span class="gate-num">GATE 08</span>
-          <span class="gate-name">Circuit breaker</span>
-          <span class="gate-check">✓</span>
-        </div>
-        <div class="gate-row">
-          <span class="gate-num">GATE 09</span>
-          <span class="gate-name">Performance brain</span>
-          <span class="gate-check">✓</span>
-        </div>
-        <div class="gate-row">
-          <span class="gate-num">GATE 10</span>
-          <span class="gate-name">Kelly sizing</span>
-          <span class="gate-check">✓</span>
-        </div>
-        <div class="gate-row gate-execute">
-          <span class="gate-num">EXECUTE</span>
-          <span class="gate-name">↑ BUY 12 shares @ $95.40</span>
-          <span class="gate-check">✓</span>
+        <div class="edge-card" data-edge-card="5">
+          <div class="edge-card-label">§ GENETIC ENGINE</div>
+          <p>Overnight GP engine evolves novel indicators. Walk-forward IC &gt; 0.05 required to graduate.</p>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- ── STRATEGY ──────────────────────────────────────────────────────────── -->
-  <section class="strategy-section animate-in" id="strategy">
-    <div class="section-inner">
-      <div class="section-tag">Strategy classes</div>
-      <h2>Three strategies, one unified engine</h2>
-      <div class="strategy-grid">
+    <!-- SECTION 4 — GATE CHAIN -->
+    <section class="gate-section" id="gates">
+      <div class="gate-inner">
+        <div class="gate-header">
+          <span class="section-tag-mono">§ 01.00</span>
+          <h2 class="section-title">Trade execution specification</h2>
+        </div>
+        <table class="gate-table">
+          <thead>
+            <tr>
+              <th>GATE ID</th>
+              <th>DESCRIPTION</th>
+              <th>TYPE</th>
+              <th>STATUS</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="gate-row"><td class="gate-id">GATE-01</td><td>Daily halt check</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-02</td><td>Portfolio heat cap ≥ 15%</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-03</td><td>Correlation guard — Pearson ρ &gt; 0.70</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-04</td><td>Short interest — FINRA vol &gt; 65%</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-05</td><td>Kalman noise gate — noise_ratio &lt; 0.40</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-06</td><td>Hurst regime gate — H &gt; 0.60</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-07</td><td>Pre-execute hook — LLM bull/bear debate</td><td class="gate-type">SOFT GATE</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-08</td><td>Circuit breaker — &lt;5% / 10 day window</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-09</td><td>Kelly sizing — half-Kelly, 10% hard cap</td><td class="gate-type">SIZE</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row gate-row--execute">
+              <td class="gate-id gate-id--execute">EXECUTE</td>
+              <td class="gate-execute-text">↑ BUY 12 shares COST @ $95.40</td>
+              <td class="gate-type gate-type--execute">EXECUTE</td>
+              <td class="gate-pass">✓ FILLED</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
-        <div class="strategy-card">
-          <h3>Swing Strategy</h3>
-          <div class="strategy-meta">
-            <div>
-              <span class="meta-label">Regime</span>
-              <span class="meta-value">Trending markets (Hurst H &gt; 0.6)</span>
-            </div>
-            <div>
-              <span class="meta-label">Signals</span>
-              <span class="meta-value">EMA crossover, MACD, RSI, Kalman noise gate, Hurst regime</span>
-            </div>
-            <div>
-              <span class="meta-label">Symbols</span>
-              <span class="meta-value">JPM, SPY, COST, BRK.B, PG, V</span>
-            </div>
+    <!-- SECTION 5 — TERMINAL -->
+    <section class="terminal-section" id="terminal">
+      <div class="terminal-left">
+        <div class="section-tag-mono">§ 02.00 LIVE SYSTEM OUTPUT</div>
+        <h2 class="terminal-title">The bot doesn't sleep.</h2>
+        <p class="terminal-body">19 concurrent async loops monitor markets, process alternative data, and execute walk-forward validated strategies around the clock.</p>
+      </div>
+      <div class="terminal-right">
+        <div class="terminal-window">
+          <div class="terminal-header">
+            <span class="terminal-header-label">LIVE SYSTEM OUTPUT</span>
+            <span class="terminal-status"><span class="terminal-dot"></span>ACTIVE</span>
           </div>
+          <div class="terminal-body-lines" id="terminal-lines"></div>
+          <div class="terminal-cursor">█</div>
         </div>
+      </div>
+    </section>
 
-        <div class="strategy-card">
-          <h3>SMB Strategy</h3>
-          <div class="strategy-meta">
-            <div>
-              <span class="meta-label">Regime</span>
-              <span class="meta-value">Intraday mean reversion</span>
+    <!-- SECTION 6 — STRATEGY OVERVIEW -->
+    <section class="strategy-section" id="strategies">
+      <div class="strat-panel" data-strat="1">
+        <div class="strat-top-border"></div>
+        <div class="strat-code">STRAT-01</div>
+        <div class="strat-name">SWING</div>
+        <div class="strat-rows">
+          <div class="strat-row"><span class="strat-label">REGIME</span><span class="strat-val">Trending (H &gt; 0.60)</span></div>
+          <div class="strat-row"><span class="strat-label">SIGNALS</span><span class="strat-val">EMA · MACD · RSI · Kalman · Hurst</span></div>
+          <div class="strat-row"><span class="strat-label">SYMBOLS</span><span class="strat-val">JPM SPY COST BRK.B PG V</span></div>
+          <div class="strat-row"><span class="strat-label">EXIT</span><span class="strat-val">ATR trailing stop · 3:1 TP</span></div>
+          <div class="strat-row"><span class="strat-label">SIZING</span><span class="strat-val">Half-Kelly, 10% cap</span></div>
+        </div>
+      </div>
+      <div class="strat-divider"></div>
+      <div class="strat-panel" data-strat="2">
+        <div class="strat-top-border"></div>
+        <div class="strat-code">STRAT-02</div>
+        <div class="strat-name">SMB</div>
+        <div class="strat-rows">
+          <div class="strat-row"><span class="strat-label">REGIME</span><span class="strat-val">Mean reversion</span></div>
+          <div class="strat-row"><span class="strat-label">SIGNALS</span><span class="strat-val">Kalman/VWAP crossover · AnchoredVWAP</span></div>
+          <div class="strat-row"><span class="strat-label">SYMBOLS</span><span class="strat-val">BTC/USD ETH/USD</span></div>
+          <div class="strat-row"><span class="strat-label">EXIT</span><span class="strat-val">VWAP reversion · half-life holding</span></div>
+          <div class="strat-row"><span class="strat-label">SIZING</span><span class="strat-val">Fixed 2% (Kelly pending)</span></div>
+        </div>
+      </div>
+      <div class="strat-divider"></div>
+      <div class="strat-panel" data-strat="3">
+        <div class="strat-top-border"></div>
+        <div class="strat-code">STRAT-03</div>
+        <div class="strat-name">DISCOVERY</div>
+        <div class="strat-rows">
+          <div class="strat-row"><span class="strat-label">REGIME</span><span class="strat-val">Adaptive — best per regime</span></div>
+          <div class="strat-row"><span class="strat-label">SIGNALS</span><span class="strat-val">GP-evolved · walk-forward validated</span></div>
+          <div class="strat-row"><span class="strat-label">SYMBOLS</span><span class="strat-val">JPM SPY COST BRK.B PG</span></div>
+          <div class="strat-row"><span class="strat-label">UPDATES</span><span class="strat-val">Weekly · Friday 4:30 PM EST</span></div>
+          <div class="strat-row"><span class="strat-label">COMBOS</span><span class="strat-val">1,215+ tested per symbol</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 7 — ROADMAP -->
+    <section class="roadmap-section" id="roadmap">
+      <div class="roadmap-inner">
+        <div class="roadmap-header">
+          <span class="section-tag-mono">§ 03.00</span>
+          <h2 class="section-title">Development timeline</h2>
+        </div>
+        <div class="roadmap-timeline" id="roadmap-timeline">
+          <svg class="timeline-svg" id="timeline-svg" preserveAspectRatio="none">
+            <line id="timeline-line" x1="50%" y1="0" x2="50%" y2="100%"
+              stroke="rgba(20,184,166,0.3)" stroke-width="1"/>
+          </svg>
+
+          <div class="milestone milestone--left milestone--done">
+            <div class="milestone-content">
+              <div class="milestone-date">Q4 2024</div>
+              <div class="milestone-title">Foundation</div>
+              <div class="milestone-desc">Bot architecture, Alpaca integration, first strategies deployed.</div>
             </div>
-            <div>
-              <span class="meta-label">Signals</span>
-              <span class="meta-value">Kalman/VWAP crossover, AnchoredVWAP confirmation</span>
-            </div>
-            <div>
-              <span class="meta-label">Style</span>
-              <span class="meta-value">Short-duration fade trades</span>
-            </div>
+            <div class="milestone-dot milestone-dot--done"></div>
           </div>
-        </div>
 
-        <div class="strategy-card">
-          <h3>Discovery Strategy</h3>
-          <div class="strategy-meta">
-            <div>
-              <span class="meta-label">Regime</span>
-              <span class="meta-value">Regime-adaptive (auto-detected)</span>
-            </div>
-            <div>
-              <span class="meta-label">Signals</span>
-              <span class="meta-value">Walk-forward optimized parameters</span>
-            </div>
-            <div>
-              <span class="meta-label">Updates</span>
-              <span class="meta-value">Weekly via discovery engine</span>
+          <div class="milestone milestone--right milestone--done">
+            <div class="milestone-dot milestone-dot--done"></div>
+            <div class="milestone-content">
+              <div class="milestone-date">Q1 2025</div>
+              <div class="milestone-title">Signal Layer</div>
+              <div class="milestone-desc">Kalman, Hurst, Kelly, Correlation Guard, Short Interest added.</div>
             </div>
           </div>
-        </div>
 
-      </div>
-    </div>
-  </section>
-
-  <!-- ── ROADMAP ───────────────────────────────────────────────────────────── -->
-  <section class="roadmap-section animate-in">
-    <div class="section-inner">
-      <div class="section-tag">Roadmap</div>
-      <h2>Where this is going</h2>
-      <div class="timeline">
-
-        <div class="timeline-item">
-          <div class="timeline-marker">
-            <span class="timeline-dot active-dot"></span>
-          </div>
-          <div class="timeline-content">
-            <div class="timeline-date">
-              Q2 2026
-              <span class="status-badge">ACTIVE</span>
+          <div class="milestone milestone--left milestone--done">
+            <div class="milestone-content">
+              <div class="milestone-date">Q4 2025</div>
+              <div class="milestone-title">Discovery Engine</div>
+              <div class="milestone-desc">Walk-forward backtester, genetic programming, 1,215 combos tested.</div>
             </div>
-            <h3>Paper Trading Validation</h3>
-            <p>Signal stack complete. 15-gate filter chain live. Seeking prop firm partnership or seed capital.</p>
+            <div class="milestone-dot milestone-dot--done"></div>
           </div>
-        </div>
 
-        <div class="timeline-item">
-          <div class="timeline-marker">
-            <span class="timeline-dot dim-dot"></span>
+          <div class="milestone milestone--right milestone--active">
+            <div class="milestone-dot milestone-dot--active"></div>
+            <div class="milestone-content">
+              <div class="milestone-date">Q2 2026 <span class="milestone-badge">ACTIVE</span></div>
+              <div class="milestone-title">Paper Trading</div>
+              <div class="milestone-desc">All 19 loops live on Railway. Full gate chain active. Accumulating performance data.</div>
+            </div>
           </div>
-          <div class="timeline-content">
-            <div class="timeline-date">Summer 2026</div>
-            <h3>Live Launch</h3>
-            <p>Transition to live capital after paper trading validates performance.</p>
+
+          <div class="milestone milestone--left milestone--future">
+            <div class="milestone-content">
+              <div class="milestone-date">Summer 2026</div>
+              <div class="milestone-title">Live Trading</div>
+              <div class="milestone-desc">Capital deployment pending prop firm partnership or seed capital.</div>
+            </div>
+            <div class="milestone-dot milestone-dot--future"></div>
           </div>
-        </div>
-
-        <div class="timeline-item">
-          <div class="timeline-marker">
-            <span class="timeline-dot dim-dot"></span>
-          </div>
-          <div class="timeline-content">
-            <div class="timeline-date">Fall 2026</div>
-            <h3>Indicator Discovery Engine</h3>
-            <p>Genetic programming engine graduates novel indicators from overnight walk-forward validation runs.</p>
-          </div>
-        </div>
-
-        <div class="timeline-item">
-          <div class="timeline-marker">
-            <span class="timeline-dot dim-dot"></span>
-          </div>
-          <div class="timeline-content">
-            <div class="timeline-date">2027</div>
-            <h3>Machine Learning Layer</h3>
-            <p>XGBoost trained on graduated custom indicators. Regime-conditional models.</p>
-          </div>
-        </div>
-
-      </div>
-    </div>
-  </section>
-
-  <!-- ── ABOUT ─────────────────────────────────────────────────────────────── -->
-  <section class="about-section">
-    <div class="section-inner about-inner">
-
-      <div class="about-text animate-in">
-        <div class="section-tag">About</div>
-        <h2>Built with conviction</h2>
-        <p>BlitheBot is a systematic trading engine built by a high school junior with a deep interest in quantitative finance and algorithmic systems.</p>
-        <p>What started as a project to understand markets became a production-grade trading system — combining adaptive signal processing, alternative data, genetic indicator discovery, and institutional risk architecture.</p>
-        <p>The goal: financial independence through systematic, data-driven trading. Not tips, not speculation — edge.</p>
-      </div>
-
-      <div class="terminal-block animate-in" style="transition-delay: 0.15s;">
-        <div class="terminal-header">
-          <span class="dot-dark"></span>
-          <span class="dot-dark"></span>
-          <span class="dot-dark"></span>
-        </div>
-        <div class="terminal-body">
-          <p><span class="bracket">[GATE 01]</span>&nbsp;&nbsp;<span class="log-body">daily halt check</span>&nbsp;&nbsp;<span class="gate-check">✓</span></p>
-          <p><span class="bracket">[GATE 02]</span>&nbsp;&nbsp;<span class="log-body">heat cap check</span>&nbsp;&nbsp;<span class="gate-check">✓</span></p>
-          <p><span class="bracket">[GATE 03]</span>&nbsp;&nbsp;<span class="log-body">correlation guard</span>&nbsp;&nbsp;<span class="gate-check">✓</span></p>
-          <p><span class="bracket">[GATE 04]</span>&nbsp;&nbsp;<span class="log-body">short interest</span>&nbsp;&nbsp;<span class="gate-check">✓</span></p>
-          <p><span class="bracket">[GATE 05]</span>&nbsp;&nbsp;<span class="log-body">kalman noise gate</span>&nbsp;&nbsp;<span class="gate-check">✓</span></p>
-          <p><span class="bracket">[GATE 06]</span>&nbsp;&nbsp;<span class="log-body">hurst regime gate</span>&nbsp;&nbsp;<span class="gate-check">✓</span></p>
-          <p><span class="bracket">[GATE 07]</span>&nbsp;&nbsp;<span class="log-body">pre-execute hook</span>&nbsp;&nbsp;<span class="gate-check">✓</span></p>
-          <p><span class="bracket">[GATE 08]</span>&nbsp;&nbsp;<span class="log-body">circuit breaker</span>&nbsp;&nbsp;<span class="gate-check">✓</span></p>
-          <p><span class="bracket">[GATE 09]</span>&nbsp;&nbsp;<span class="log-body">kelly sizing</span>&nbsp;&nbsp;<span class="gate-check">✓</span></p>
-          <p><span class="bracket">[EXECUTE]</span>&nbsp;&nbsp;<span class="log-buy">↑ BUY 12 shares @ $95.40</span>&nbsp;&nbsp;<span class="gate-check">✓</span></p>
         </div>
       </div>
+    </section>
 
-    </div>
-  </section>
-
-  <!-- ── CONTACT ───────────────────────────────────────────────────────────── -->
-  <section class="contact-section animate-in" id="contact">
-    <div class="contact-inner">
-      <h2>Interested in partnering?</h2>
-      <p>BlitheBot is seeking prop firm partnership or seed capital for live launch in summer 2026. If you're interested in systematic trading with real infrastructure behind it, let's talk.</p>
-      <a href="mailto:gamerdiamondknight@gmail.com" class="btn-primary">Get in Touch</a>
-      <div class="contact-email">gamerdiamondknight@gmail.com</div>
-    </div>
-  </section>
-
-  <!-- ── FOOTER ────────────────────────────────────────────────────────────── -->
-  <footer>
-    <div class="footer-inner">
-      <span class="footer-logo">BLITHEBOT</span>
-      <div class="footer-links">
-        <a href="#strategy">Strategy</a>
-        <a href="#research">Research</a>
-        <a href="#contact">Contact</a>
+    <!-- SECTION 8 — ABOUT -->
+    <section class="about-section" id="about">
+      <div class="about-left">
+        <span class="about-line about-line--1">BUILT</span>
+        <span class="about-line about-line--2">WITH</span>
+        <span class="about-line about-line--3">CONVICTION</span>
       </div>
-      <span class="footer-note">Paper trading · Summer 2026 live launch</span>
-    </div>
-  </footer>
+      <div class="about-right">
+        <p class="about-text">BlitheBot is a systematic trading engine built by a high school junior with a deep interest in quantitative finance and algorithmic systems.</p>
+        <p class="about-text">What started as a project to understand markets became a production-grade trading system — combining adaptive signal processing, alternative data, genetic indicator discovery, and institutional risk architecture.</p>
+        <p class="about-text about-text--accent">The goal: financial independence through systematic, data-driven trading. Not tips, not speculation — edge.</p>
+      </div>
+    </section>
+
+    <!-- SECTION 9 — CONTACT -->
+    <section class="contact-section" id="contact">
+      <div class="contact-inner">
+        <div class="contact-label">INTERESTED IN PARTNERING?</div>
+        <p class="contact-body">BlitheBot is seeking prop firm partnership or seed capital for live launch in summer 2026.</p>
+        <a href="mailto:gamerdiamondknight@gmail.com" class="btn-contact">GET IN TOUCH</a>
+        <div class="contact-email">gamerdiamondknight@gmail.com</div>
+      </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer class="footer">
+      <div class="footer-main">
+        <span class="footer-logo">BLITHEBOT</span>
+        <div class="footer-links">
+          <a href="#" data-page="strategy">STRATEGY</a>
+          <a href="#" data-page="research">RESEARCH</a>
+          <a href="#contact">CONTACT</a>
+        </div>
+        <span class="footer-doc">DOC NO: BB-001 · REV A · PAPER TRADING · 2026</span>
+      </div>
+      <div class="footer-strip">
+        <span>SCALE 1:1 · THIRD ANGLE PROJECTION</span>
+        <span>APPROVED: SYSTEMATIC · CHECKED: WALK-FORWARD · DRAWN: BB-ENG</span>
+      </div>
+    </footer>
 
   </div><!-- #page-content -->
 
-  <script src="pages.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
   <script src="script.js"></script>
 </body>
 </html>
