@@ -159,19 +159,24 @@
           </thead>
           <tbody>
             <tr class="gate-row"><td class="gate-id">GATE-01</td><td>Daily halt check</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-02</td><td>Portfolio heat cap ≥ 15%</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-03</td><td>Correlation guard — Pearson ρ &gt; 0.70</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-04</td><td>Short interest — FINRA vol &gt; 65%</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-05</td><td>Kalman noise gate — noise_ratio &lt; 0.40</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-06</td><td>Hurst regime gate — H &gt; 0.60</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-02</td><td>Hold signal filter</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-03</td><td>One position per symbol (Alpaca)</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-04</td><td>Portfolio heat cap</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-05</td><td>Correlation guard — Pearson r &gt; 0.70</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-06</td><td>Short interest — FINRA vol &gt; 65%</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
             <tr class="gate-row"><td class="gate-id">GATE-07</td><td>Pre-execute hook — LLM bull/bear debate</td><td class="gate-type">SOFT GATE</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-08</td><td>Circuit breaker — &lt;5% / 10 day window</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-09</td><td>Kelly sizing — half-Kelly, 10% hard cap</td><td class="gate-type">SIZE</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-08</td><td>Confluence / sector alert cooldown</td><td class="gate-type">SOFT GATE</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-09</td><td>Signal type determination</td><td class="gate-type">CLASSIFICATION</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-10</td><td>Circuit breaker — &lt;5% drawdown / 10d</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-11</td><td>Performance brain multiplier</td><td class="gate-type">SIZE</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-12</td><td>Kelly sizing — half-Kelly 10% cap</td><td class="gate-type">SIZE</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-13</td><td>Buying power confirmation</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
+            <tr class="gate-row"><td class="gate-id">GATE-14</td><td>Order submission (Alpaca API)</td><td class="gate-type">EXECUTE</td><td class="gate-pass">✓ PASS</td></tr>
             <tr class="gate-row gate-row--execute">
-              <td class="gate-id gate-id--execute">EXECUTE</td>
-              <td class="gate-execute-text">↑ BUY 12 shares COST @ $95.40</td>
-              <td class="gate-type gate-type--execute">EXECUTE</td>
-              <td class="gate-pass">✓ FILLED</td>
+              <td class="gate-id gate-id--execute" style="color:#14b8a6;">EXECUTE</td>
+              <td class="gate-execute-text" style="color:#ffffff;">↑ BUY 12 shares COST @ $95.40</td>
+              <td class="gate-type gate-type--execute" style="color:#ffffff;">FILLED</td>
+              <td class="gate-pass" style="color:#ffffff;">✓ FILLED</td>
             </tr>
           </tbody>
         </table>
@@ -200,7 +205,6 @@
     <!-- SECTION 6 — STRATEGY OVERVIEW -->
     <section class="strategy-section" id="strategies">
       <div class="strat-panel" data-strat="1">
-        <div class="strat-top-border"></div>
         <div class="strat-code">STRAT-01</div>
         <div class="strat-name">SWING</div>
         <div class="strat-rows">
@@ -213,7 +217,6 @@
       </div>
       <div class="strat-divider"></div>
       <div class="strat-panel" data-strat="2">
-        <div class="strat-top-border"></div>
         <div class="strat-code">STRAT-02</div>
         <div class="strat-name">SMB</div>
         <div class="strat-rows">
@@ -226,7 +229,6 @@
       </div>
       <div class="strat-divider"></div>
       <div class="strat-panel" data-strat="3">
-        <div class="strat-top-border"></div>
         <div class="strat-code">STRAT-03</div>
         <div class="strat-name">DISCOVERY</div>
         <div class="strat-rows">
@@ -247,11 +249,6 @@
           <h2 class="section-title">Development timeline</h2>
         </div>
         <div class="roadmap-timeline" id="roadmap-timeline">
-          <svg class="timeline-svg" id="timeline-svg" preserveAspectRatio="none">
-            <line id="timeline-line" x1="50%" y1="0" x2="50%" y2="100%"
-              stroke="rgba(20,184,166,0.3)" stroke-width="1"/>
-          </svg>
-
           <div class="milestone milestone--left milestone--done">
             <div class="milestone-content">
               <div class="milestone-date">Q4 2024</div>
