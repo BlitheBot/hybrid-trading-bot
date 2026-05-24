@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500;700&amp;family=Lexend:wght@600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                "primary-fixed-dim": "#d7baff",
+                "surface-variant": "#353438",
+                "on-primary-container": "#4e2484",
+                "secondary": "#b5c5fc",
+                "background": "#131316",
+                "surface-container-low": "#1b1b1e",
+                "surface-container-lowest": "#0e0e11",
+                "primary": "#d7baff",
+                "secondary-fixed-dim": "#b5c5fc",
+                "tertiary": "#c6c4da",
+                "on-error-container": "#ffdad6",
+                "surface-container-high": "#2a2a2d",
+                "on-surface-variant": "#ccc3d3",
+                "on-tertiary-container": "#3b3b4c",
+                "on-secondary": "#1d2e5c",
+                "surface-tint": "#d7baff",
+                "primary-container": "#bd93f9",
+                "on-surface": "#e4e1e6",
+                "caution-amber": "#FFB86C",
+                "success-green": "#50FA7B",
+                "inverse-primary": "#714aaa",
+                "primary-fixed": "#eddcff",
+                "tertiary-fixed-dim": "#c6c4da",
+                "on-primary-fixed-variant": "#593090",
+                "terminal-black": "#0a0a0f",
+                "secondary-fixed": "#dbe1ff",
+                "on-tertiary-fixed": "#1a1a2a",
+                "surface-bright": "#39393c",
+                "on-error": "#690005",
+                "error": "#ffb4ab",
+                "on-background": "#e4e1e6",
+                "on-secondary-container": "#a7b7ed",
+                "surface-container": "#1f1f22",
+                "on-secondary-fixed": "#041846",
+                "inverse-on-surface": "#303033",
+                "tertiary-container": "#a7a5ba",
+                "surface-dim": "#131316",
+                "tertiary-fixed": "#e3e0f7",
+                "on-secondary-fixed-variant": "#354574",
+                "surface-container-highest": "#353438",
+                "on-primary": "#411478",
+                "surface-charcoal": "#16161A",
+                "error-container": "#93000a",
+                "outline": "#968e9c",
+                "on-primary-fixed": "#290055",
+                "on-tertiary": "#2f2f40",
+                "inverse-surface": "#e4e1e6",
+                "stroke-soft": "rgba(255, 255, 255, 0.08)",
+                "on-tertiary-fixed-variant": "#464557",
+                "outline-variant": "#4a4451",
+                "secondary-container": "#374776",
+                "surface": "#131316"
+            },
+            "borderRadius": {
+                "DEFAULT": "0.125rem",
+                "lg": "0.25rem",
+                "xl": "0.5rem",
+                "full": "0.75rem"
+            },
+            "spacing": {
+                "stack-sm": "8px",
+                "stack-lg": "64px",
+                "margin-mobile": "16px",
+                "stack-md": "24px",
+                "gutter": "24px",
+                "container-max": "1280px"
+            },
+            "fontFamily": {
+                "label-caps": ["JetBrains Mono"],
+                "data-mono": ["JetBrains Mono"],
+                "body-md": ["Inter"],
+                "headline-lg": ["Lexend"],
+                "headline-lg-mobile": ["Lexend"],
+                "display-lg": ["Lexend"]
+            },
+            "fontSize": {
+                "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700"}],
+                "data-mono": ["14px", {"lineHeight": "20px", "fontWeight": "500"}],
+                "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                "headline-lg": ["32px", {"lineHeight": "40px", "fontWeight": "600"}],
+                "headline-lg-mobile": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                "display-lg": ["64px", {"lineHeight": "72px", "letterSpacing": "-0.02em", "fontWeight": "700"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #131316; }
+        ::-webkit-scrollbar-thumb { background: #353438; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: #d7baff; }
+
+        .liquid-glass {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 100%);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        .terminal-bg { background-color: #0a0a0f; }
+        .terminal-bracket { color: #9d7dea; }
+        .terminal-ticker { color: #c4b5fd; font-weight: 700; }
+        .terminal-log-text { color: #6b7280; }
+        .terminal-positive { color: #ffffff; }
+        .terminal-negative { color: #ec4899; }
+        .terminal-status { color: #4ade80; }
+        .terminal-gate { color: #7c3aed; }
+        
+        .blinking-cursor {
+            animation: blink 1s step-end infinite;
+            background-color: #a78bfa;
+        }
+        @keyframes blink {
+            from, to { opacity: 0 }
+            50% { opacity: 1 }
+        }
+
+        .scanline {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom, transparent 50%, rgba(189, 147, 249, 0.02) 50%);
+            background-size: 100% 4px;
+            pointer-events: none;
+            position: absolute;
+            top: 0; left: 0;
+            z-index: 10;
+        }
+
+        .glow-border {
+            box-shadow: 0 0 15px rgba(215, 186, 255, 0.1);
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body-md h-screen flex flex-col overflow-hidden selection:bg-primary/30">
+<!-- Institutional Header -->
+<header class="h-16 border-b border-stroke-soft liquid-glass sticky top-0 z-50 flex items-center shrink-0">
+<div class="max-w-[1920px] w-full mx-auto px-6 flex justify-between items-center">
+<div class="flex items-center gap-12">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 bg-primary rounded-sm flex items-center justify-center">
+<span class="material-symbols-outlined text-on-primary text-xl">query_stats</span>
+</div>
+<span class="font-headline-lg-mobile tracking-tighter uppercase text-on-surface">BlitheBot</span>
+</div>
+<nav class="hidden lg:flex items-center gap-8">
+<a class="text-primary font-label-caps text-label-caps border-b-2 border-primary pb-1" href="#">Strategy</a>
+<a class="text-on-surface-variant hover:text-on-surface transition-colors font-label-caps text-label-caps" href="#">Performance</a>
+<a class="text-on-surface-variant hover:text-on-surface transition-colors font-label-caps text-label-caps" href="#">Timeline</a>
+<a class="text-on-surface-variant hover:text-on-surface transition-colors font-label-caps text-label-caps" href="#">Contact</a>
+</nav>
+</div>
+<div class="flex items-center gap-6">
+<button class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface">Docs</button>
+<button class="bg-primary text-on-primary font-label-caps text-label-caps px-6 py-2 rounded-sm hover:brightness-110 active:scale-95 transition-all shadow-lg shadow-primary/20">Institutional Access</button>
+</div>
+</div>
+</header>
+<main class="flex-1 flex overflow-hidden">
+<!-- Sidebar: Entropy & Signals -->
+<aside class="w-64 border-r border-stroke-soft bg-surface-container-lowest flex flex-col shrink-0 overflow-y-auto">
+<div class="p-4 border-b border-stroke-soft liquid-glass">
+<div class="flex justify-between items-center mb-3">
+<span class="font-label-caps text-[10px] text-on-surface-variant">§ 01.00 ENTROPY</span>
+<span class="terminal-status font-data-mono text-[10px]">STABLE</span>
+</div>
+<div class="h-1 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-primary w-2/3 shadow-[0_0_10px_rgba(215,186,255,0.5)]"></div>
+</div>
+</div>
+<div class="flex-1 p-4 space-y-8">
+<section>
+<h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 flex items-center gap-2">
+<span class="w-1.5 h-1.5 bg-primary rounded-full"></span>
+                    ACTIVE SIGNALS
+                </h3>
+<div class="space-y-1">
+<div class="liquid-glass p-2.5 flex justify-between items-center">
+<span class="terminal-ticker text-[11px]">JPM</span>
+<span class="terminal-status text-[11px] font-bold">BULL</span>
+</div>
+<div class="liquid-glass p-2.5 flex justify-between items-center">
+<span class="terminal-ticker text-[11px]">SPY</span>
+<span class="terminal-status text-[11px] font-bold">TREND</span>
+</div>
+<div class="liquid-glass p-2.5 flex justify-between items-center border-primary/20 bg-primary/5">
+<span class="terminal-ticker text-[11px]">COST</span>
+<span class="terminal-positive text-[11px] font-bold">0.87 Sharpe</span>
+</div>
+<div class="liquid-glass p-2.5 flex justify-between items-center opacity-70">
+<span class="terminal-ticker text-[11px]">BRK.B</span>
+<span class="terminal-log-text text-[11px]">WIDE</span>
+</div>
+<div class="liquid-glass p-2.5 flex justify-between items-center opacity-50">
+<span class="terminal-ticker text-[11px]">PG</span>
+<span class="terminal-negative text-[11px]">WAIT</span>
+</div>
+<div class="liquid-glass p-2.5 flex justify-between items-center">
+<span class="terminal-ticker text-[11px]">BTC/USD</span>
+<span class="terminal-status text-[11px]">ACTIVE</span>
+</div>
+<div class="liquid-glass p-2.5 flex justify-between items-center">
+<span class="terminal-ticker text-[11px]">ETH/USD</span>
+<span class="terminal-status text-[11px]">ACTIVE</span>
+</div>
+</div>
+</section>
+<section>
+<h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 flex items-center gap-2">
+<span class="w-1.5 h-1.5 bg-primary rounded-full"></span>
+                    TELEMETRY
+                </h3>
+<div class="font-data-mono text-[10px] space-y-2 terminal-log-text">
+<div class="flex justify-between border-b border-stroke-soft pb-1">
+<span>VIX CONVICTION</span>
+<span class="terminal-positive">HI</span>
+</div>
+<div class="flex justify-between border-b border-stroke-soft pb-1">
+<span>HURST EXP</span>
+<span class="terminal-status">0.62</span>
+</div>
+<div class="flex justify-between border-b border-stroke-soft pb-1">
+<span>KELLY F*</span>
+<span class="terminal-positive">0.082</span>
+</div>
+</div>
+</section>
+</div>
+<div class="p-4 border-t border-stroke-soft liquid-glass">
+<div class="flex items-center gap-3 mb-2">
+<div class="w-2 h-2 rounded-full bg-terminal-status animate-pulse shadow-[0_0_8px_#4ade80]"></div>
+<span class="font-data-mono text-[10px] terminal-status uppercase tracking-widest">Live Sync: Mainnet-V4</span>
+</div>
+<div class="font-data-mono text-[10px] terminal-log-text">
+                Latency: 12.4ms • PING: 42
+            </div>
+</div>
+</aside>
+<!-- Main Workspace: Chart & Terminal -->
+<section class="flex-1 flex flex-col bg-terminal-black relative">
+<div class="scanline"></div>
+<!-- Workspace Header -->
+<div class="p-5 border-b border-stroke-soft flex justify-between items-end liquid-glass">
+<div class="flex flex-col gap-1">
+<div class="flex items-center gap-3">
+<h2 class="font-headline-lg text-primary uppercase">BTC / USD</h2>
+<div class="flex gap-1">
+<span class="bg-surface-variant/50 px-2 py-0.5 text-[10px] font-label-caps text-on-surface border border-stroke-soft">1M</span>
+<span class="bg-primary/20 px-2 py-0.5 text-[10px] font-label-caps text-primary border border-primary/40">5M</span>
+<span class="bg-surface-variant/50 px-2 py-0.5 text-[10px] font-label-caps text-on-surface border border-stroke-soft">15M</span>
+<span class="bg-surface-variant/50 px-2 py-0.5 text-[10px] font-label-caps text-on-surface border border-stroke-soft">1H</span>
+</div>
+</div>
+<div class="font-data-mono text-[12px] terminal-log-text">BITSTAMP • VOL: 4.2k • 24H: +1.24%</div>
+</div>
+<div class="text-right">
+<div class="font-data-mono text-3xl terminal-status tabular-nums" id="price-ticker">$64,281.13</div>
+<div class="font-data-mono text-sm terminal-status">+1.24% (+$784.00)</div>
+</div>
+</div>
+<!-- Visualizer -->
+<div class="flex-1 relative overflow-hidden bg-[radial-gradient(circle_at_50%_50%,_rgba(189,147,249,0.05)_0%,_transparent_70%)]">
+<div class="absolute inset-0 opacity-10" style="background-image: linear-gradient(var(--stroke-soft) 1px, transparent 1px), linear-gradient(90deg, var(--stroke-soft) 1px, transparent 1px); background-size: 60px 60px;"></div>
+<!-- Simulated Professional Chart -->
+<div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+<svg class="w-full h-[60%] opacity-80" preserveaspectratio="none" viewbox="0 0 1000 400">
+<defs>
+<lineargradient id="areaGrad" x1="0%" x2="0%" y1="0%" y2="100%">
+<stop offset="0%" style="stop-color:#bd93f9;stop-opacity:0.15"></stop>
+<stop offset="100%" style="stop-color:#bd93f9;stop-opacity:0"></stop>
+</lineargradient>
+</defs>
+<path d="M0,320 L100,300 L200,340 L300,280 L400,310 L500,220 L600,250 L700,160 L800,200 L900,120 L1000,100 L1000,400 L0,400 Z" fill="url(#areaGrad)"></path>
+<path d="M0,320 L100,300 L200,340 L300,280 L400,310 L500,220 L600,250 L700,160 L800,200 L900,120 L1000,100" fill="none" stroke="#bd93f9" stroke-width="2.5"></path>
+<!-- Order Marker -->
+<circle cx="500" cy="220" fill="#4ade80" r="4"></circle>
+<line stroke="#4ade80" stroke-dasharray="4,4" stroke-width="1" x1="500" x2="650" y1="220" y2="220"></line>
+<text class="font-data-mono text-[10px]" fill="#4ade80" x="660" y="225">[ORDER] BRACKET ENTRY @ 62,400</text>
+</svg>
+</div>
+<!-- Console Overlay (Institutional Terminal Style) -->
+<div class="absolute bottom-6 left-6 right-6">
+<div class="liquid-glass border-primary/20 rounded-sm p-4 glow-border">
+<div class="flex items-center gap-4 mb-3 border-b border-stroke-soft pb-2">
+<span class="material-symbols-outlined text-primary text-sm">terminal</span>
+<span class="font-label-caps text-[10px] text-on-surface-variant">CONSOLE OUTPUT</span>
+</div>
+<div class="font-data-mono text-[13px] leading-relaxed">
+<div class="flex items-center gap-2">
+<span class="terminal-log-text">blithebot@quant:~$</span>
+<span class="terminal-positive">exec --risk-profile institutional --focus-volatility</span>
+<span class="bg-primary/40 w-2 h-4 inline-block align-middle ml-1"></span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Right Panel: Order Book & Stats -->
+<aside class="w-80 border-l border-stroke-soft bg-surface-container-lowest flex flex-col shrink-0">
+<div class="p-4 border-b border-stroke-soft liquid-glass">
+<h3 class="font-label-caps text-[10px] text-on-surface-variant">§ 02.00 BRACKET ORDERS</h3>
+</div>
+<div class="flex-1 overflow-hidden flex flex-col">
+<!-- Orders Table -->
+<div class="flex-1 overflow-y-auto font-data-mono text-[11px] p-2">
+<table class="w-full text-left">
+<thead class="sticky top-0 bg-surface-container-lowest border-b border-stroke-soft z-10">
+<tr class="text-on-surface-variant/60 uppercase">
+<th class="p-2 font-label-caps text-[10px]">Symbol</th>
+<th class="p-2 font-label-caps text-[10px]">Entry/TP/SL</th>
+<th class="p-2 font-label-caps text-[10px] text-right">Time</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-stroke-soft">
+<tr class="hover:bg-primary/5 transition-colors group">
+<td class="p-2 terminal-ticker">BTC/USD</td>
+<td class="p-2 terminal-log-text">64.2k / 68.1k / 63.0k</td>
+<td class="p-2 text-right terminal-log-text">14:22:01</td>
+</tr>
+<tr class="hover:bg-primary/5 transition-colors group">
+<td class="p-2 terminal-ticker">COST</td>
+<td class="p-2 terminal-log-text">842.1 / 892.6 / 825.2</td>
+<td class="p-2 text-right terminal-log-text">14:22:00</td>
+</tr>
+<tr class="hover:bg-primary/5 transition-colors group">
+<td class="p-2 terminal-ticker">SPY</td>
+<td class="p-2 terminal-log-text">514.2 / 545.0 / 503.9</td>
+<td class="p-2 text-right terminal-log-text">14:21:58</td>
+</tr>
+<tr class="hover:bg-primary/5 transition-colors group">
+<td class="p-2 terminal-ticker">ETH/USD</td>
+<td class="p-2 terminal-log-text">3,421 / 3,626 / 3,352</td>
+<td class="p-2 text-right terminal-log-text">14:21:55</td>
+</tr>
+<tr class="hover:bg-primary/5 transition-colors group">
+<td class="p-2 terminal-ticker">JPM</td>
+<td class="p-2 terminal-log-text">192.3 / 203.8 / 188.4</td>
+<td class="p-2 text-right terminal-log-text">14:21:50</td>
+</tr>
+</tbody>
+</table>
+</div>
+<!-- Engine Logs -->
+<div class="h-48 border-t border-stroke-soft terminal-bg p-4 font-data-mono text-[10px] space-y-1.5 overflow-y-auto">
+<p class="text-on-surface-variant/40 mb-2 uppercase text-[9px]">Engine Output Log</p>
+<p><span class="terminal-bracket">[Startup]</span> &gt; <span class="terminal-gate">GATE-01</span>: Initializing...</p>
+<p>&gt; Genetic evolution cycle #882 started</p>
+<p class="terminal-status">&gt; SEC Form 4 RSS feed parsed</p>
+<p>&gt; checking_vix_conviction...</p>
+<p>&gt; VIX: 18.4 <span class="terminal-bracket">[CONVICTION: HI]</span></p>
+<p class="terminal-positive">&gt; Executing BUY order: <span class="terminal-ticker">COST</span> @ 842.10</p>
+<p class="terminal-negative">&gt; Recalibrating stop-loss thresholds...</p>
+<p>&gt; Routing to dark pool: <span class="terminal-gate">SIG-X</span></p>
+<p class="flex items-center gap-1">&gt; <span class="bg-primary/40 w-1.5 h-3 block"></span></p>
+</div>
+<!-- System Stats -->
+<div class="p-4 border-t border-stroke-soft liquid-glass">
+<h3 class="font-label-caps text-[10px] text-on-surface-variant mb-4">SYSTEM STATS</h3>
+<div class="grid grid-cols-2 gap-3">
+<div class="liquid-glass p-3 border-stroke-soft">
+<div class="text-[9px] text-on-surface-variant/60 font-label-caps mb-1">CPU LOAD</div>
+<div class="text-xl font-data-mono terminal-gate">12%</div>
+</div>
+<div class="liquid-glass p-3 border-stroke-soft">
+<div class="text-[9px] text-on-surface-variant/60 font-label-caps mb-1">POSITIONS</div>
+<div class="text-xl font-data-mono terminal-bracket">08</div>
+</div>
+</div>
+</div>
+</div>
+</aside>
+</main>
+<!-- Global Ticker Footer -->
+<footer class="h-10 border-t border-stroke-soft liquid-glass shrink-0 flex items-center overflow-hidden">
+<div class="flex items-center gap-12 whitespace-nowrap animate-[marquee_60s_linear_infinite] px-6">
+<span class="font-data-mono text-[10px] uppercase text-on-surface-variant/80">© 2026 BLITHEBOT QUANTITATIVE ENGINE. ALL RIGHTS RESERVED. REV/DOC: 882.Q4</span>
+<div class="flex gap-8 items-center">
+<a class="terminal-log-text hover:terminal-status transition-colors text-[10px] font-data-mono uppercase" href="#">System Logs</a>
+<a class="terminal-log-text hover:terminal-status transition-colors text-[10px] font-data-mono uppercase" href="#">Genetic Engine Docs</a>
+<a class="terminal-log-text hover:terminal-status transition-colors text-[10px] font-data-mono uppercase" href="#">Hurst Analysis</a>
+<a class="terminal-log-text hover:terminal-status transition-colors text-[10px] font-data-mono uppercase" href="#">Risk API</a>
+</div>
+</div>
+</footer>
+<style>
+    @keyframes marquee {
+        0% { transform: translateX(0); }
+        100% { transform: translateX(-50%); }
+    }
+</style>
+<script>
+    // Micro-price variation for "live" feel
+    const priceDisplay = document.getElementById('price-ticker');
+    let currentPrice = 64281.13;
+    
+    setInterval(() => {
+        const change = (Math.random() - 0.5) * 4;
+        currentPrice += change;
+        priceDisplay.textContent = '$' + currentPrice.toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        
+        // Flash effect
+        priceDisplay.classList.remove('terminal-status');
+        priceDisplay.classList.add('text-white');
+        setTimeout(() => {
+            priceDisplay.classList.remove('text-white');
+            priceDisplay.classList.add('terminal-status');
+        }, 80);
+    }, 1500);
+</script>
+</body></html>

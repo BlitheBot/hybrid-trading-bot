@@ -1,347 +1,746 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BlitheBot — Algorithmic Trading Engine</title>
-  <meta name="description" content="A systematic trading engine combining adaptive signal processing, alternative data, and walk-forward validated strategies — running 24/7 on live markets.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>BlitheBot | Hybrid Quantitative Trading System</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Lexend:wght@600;700&amp;family=JetBrains+Mono:wght@500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "terminal-black": "#0a0a0f",
+                    "on-tertiary-container": "#3b3b4c",
+                    "on-surface": "#e4e1e6",
+                    "on-secondary-fixed": "#041846",
+                    "success-green": "#4ade80",
+                    "surface-tint": "#d7baff",
+                    "on-background": "#e4e1e6",
+                    "on-tertiary-fixed": "#1a1a2a",
+                    "surface-bright": "#39393c",
+                    "on-primary-fixed": "#290055",
+                    "secondary-container": "#374776",
+                    "surface-variant": "#353438",
+                    "surface-container-lowest": "#0e0e11",
+                    "surface-container-highest": "#353438",
+                    "surface-container-high": "#2a2a2d",
+                    "surface-charcoal": "#16161A",
+                    "secondary": "#b5c5fc",
+                    "inverse-on-surface": "#303033",
+                    "surface": "#131316",
+                    "on-primary": "#411478",
+                    "on-primary-container": "#4e2484",
+                    "error": "#ec4899",
+                    "primary": "#d7baff",
+                    "on-secondary-container": "#a7b7ed",
+                    "outline": "#968e9c",
+                    "on-error-container": "#ffdad6",
+                    "outline-variant": "#4a4451",
+                    "primary-fixed": "#eddcff",
+                    "on-tertiary": "#2f2f40",
+                    "surface-container": "#1f1f22",
+                    "tertiary-container": "#a7a5ba",
+                    "secondary-fixed-dim": "#b5c5fc",
+                    "inverse-surface": "#e4e1e6",
+                    "background": "#131316",
+                    "on-tertiary-fixed-variant": "#464557",
+                    "error-container": "#93000a",
+                    "caution-amber": "#FFB86C",
+                    "surface-dim": "#131316",
+                    "on-primary-fixed-variant": "#593090",
+                    "on-secondary": "#1d2e5c",
+                    "on-error": "#690005",
+                    "on-surface-variant": "#ccc3d3",
+                    "tertiary": "#c6c4da",
+                    "tertiary-fixed": "#e3e0f7",
+                    "stroke-soft": "rgba(255, 255, 255, 0.08)",
+                    "secondary-fixed": "#dbe1ff",
+                    "tertiary-fixed-dim": "#c6c4da",
+                    "primary-container": "#bd93f9",
+                    "surface-container-low": "#1b1b1e",
+                    "on-secondary-fixed-variant": "#354574",
+                    "primary-fixed-dim": "#d7baff",
+                    "inverse-primary": "#714aaa"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "container-max": "1280px",
+                    "stack-lg": "64px",
+                    "stack-sm": "8px",
+                    "stack-md": "24px",
+                    "margin-mobile": "16px",
+                    "gutter": "24px"
+            },
+            "fontFamily": {
+                    "headline-lg-mobile": ["Lexend"],
+                    "headline-lg": ["Lexend"],
+                    "label-caps": ["JetBrains Mono"],
+                    "data-mono": ["JetBrains Mono"],
+                    "body-md": ["Inter"],
+                    "display-lg": ["Lexend"]
+            },
+            "fontSize": {
+                    "headline-lg-mobile": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                    "headline-lg": ["32px", {"lineHeight": "40px", "fontWeight": "600"}],
+                    "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700"}],
+                    "data-mono": ["14px", {"lineHeight": "20px", "fontWeight": "500"}],
+                    "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "display-lg": ["64px", {"lineHeight": "72px", "letterSpacing": "-0.02em", "fontWeight": "700"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        :root {
+            --bg-color: #0a0a0f;
+            --accent-glow: rgba(189, 147, 249, 0.08);
+            --grid-color: rgba(189, 147, 249, 0.03);
+            --quant-primary: #bd93f9;
+            --glass-lilac: rgba(189, 147, 249, 0.05);
+            --glass-highlight: rgba(255, 255, 255, 0.12);
+            /* Custom Log Colors */
+            --log-bracket: #9d7dea;
+            --log-ticker: #c4b5fd;
+            --log-profit: #ffffff;
+            --log-loss: #ec4899;
+            --log-gate: #7c3aed;
+            --log-status: #4ade80;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .scanline {
+            background: linear-gradient(to bottom, transparent 50%, rgba(189, 147, 249, 0.01) 50%);
+            background-size: 100% 4px;
+        }
+        @keyframes pulse-soft {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(0.95); }
+        }
+        .status-pulse {
+            animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        /* Liquid Glass Aesthetics */
+        .liquid-glass {
+            background: linear-gradient(135deg, var(--glass-lilac), rgba(255, 255, 255, 0.01));
+            backdrop-filter: blur(24px) saturate(180%);
+            -webkit-backdrop-filter: blur(24px) saturate(180%);
+            border: 1px solid var(--glass-highlight);
+            box-shadow: 
+                inset 0 1px 1px 0 rgba(255, 255, 255, 0.1),
+                0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        
+        .liquid-glass-button-primary {
+            background: linear-gradient(135deg, #bd93f9 0%, #a781e0 100%);
+            position: relative;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 
+                inset 0 1px 0 0 rgba(255, 255, 255, 0.3),
+                0 4px 15px rgba(189, 147, 249, 0.3);
+        }
+        .liquid-glass-button-primary::after {
+            content: '';
+            position: absolute;
+            top: 0; left: -100%; width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            transition: 0.5s;
+        }
+        .liquid-glass-button-primary:hover::after {
+            left: 100%;
+        }
+
+        .liquid-glass-button-outline {
+            background: rgba(189, 147, 249, 0.03);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(189, 147, 249, 0.4);
+            box-shadow: inset 0 0 10px rgba(189, 147, 249, 0.1);
+        }
+        .liquid-glass-button-outline:hover {
+            background: rgba(189, 147, 249, 0.08);
+            border-color: rgba(189, 147, 249, 0.8);
+            box-shadow: inset 0 0 15px rgba(189, 147, 249, 0.2);
+        }
+
+        .quant-bg-container {
+            position: absolute;
+            inset: 0;
+            overflow: hidden;
+            pointer-events: none;
+            z-index: 0;
+            background-color: var(--bg-color);
+        }
+        .quant-grid {
+            position: absolute;
+            inset: 0;
+            background-image: 
+                linear-gradient(to right, var(--grid-color) 1px, transparent 1px),
+                linear-gradient(to bottom, var(--grid-color) 1px, transparent 1px);
+            background-size: 80px 80px;
+            mask-image: radial-gradient(circle at center, black, transparent 90%);
+        }
+        .moving-gradient {
+            position: absolute;
+            width: 150%;
+            height: 150%;
+            top: -25%;
+            left: -25%;
+            background: radial-gradient(circle at 50% 50%, var(--accent-glow) 0%, transparent 60%);
+            filter: blur(120px);
+            opacity: 0.5;
+        }
+        .quant-engine-canvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.35;
+            mix-blend-mode: screen;
+        }
+
+        .heatmap-cell {
+            aspect-ratio: 1;
+            transition: all 0.3s ease;
+        }
+        .heatmap-cell:hover {
+            transform: scale(1.1);
+            z-index: 10;
+            box-shadow: 0 0 15px rgba(189, 147, 249, 0.4);
+        }
+
+        /* Log Styling */
+        .log-line {
+            display: block;
+            min-height: 20px;
+            white-space: pre-wrap;
+        }
+        .bracket { color: var(--log-bracket); }
+        .ticker { color: var(--log-ticker); font-weight: 700; }
+        .profit { color: var(--log-profit); }
+        .buy { color: var(--log-profit); }
+        .sell { color: var(--log-loss); }
+        .loss { color: var(--log-loss); }
+        .gate { color: var(--log-gate); }
+        .status { color: var(--log-status); }
+
+        @media (prefers-reduced-motion: reduce) {
+            .moving-gradient, canvas {
+                display: none !important;
+            }
+        }
+    </style>
 </head>
-<body>
+<body class="bg-terminal-black text-on-surface font-body-md selection:bg-primary selection:text-terminal-black overflow-x-hidden">
+<header class="bg-surface-charcoal/40 backdrop-blur-2xl border-b border-stroke-soft docked full-width top-0 sticky z-50">
+<div class="flex justify-between items-center w-full px-margin-mobile md:px-gutter max-w-container-max mx-auto h-16">
+<div class="font-display-lg text-headline-lg-mobile tracking-tighter text-on-surface uppercase flex items-center gap-2">
+            BlitheBot
+            <span class="w-2 h-2 rounded-full bg-success-green status-pulse"></span>
+</div>
+<nav class="hidden md:flex gap-gutter items-center">
+<a class="text-on-surface-variant font-label-caps text-label-caps hover:text-primary transition-colors duration-300" href="#strategy">Architecture</a>
+<a class="text-on-surface-variant font-label-caps text-label-caps hover:text-primary transition-colors duration-300" href="#performance">Performance</a>
+<a class="text-on-surface-variant font-label-caps text-label-caps hover:text-primary transition-colors duration-300" href="#research">Discovery</a>
+<a class="text-on-surface-variant font-label-caps text-label-caps hover:text-primary transition-colors duration-300" href="#dashboard">Live Dashboard</a>
+</nav>
+<div class="flex items-center gap-4">
+<a class="hidden lg:block text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps" href="#">Docs</a>
+<button class="liquid-glass-button-primary text-terminal-black px-4 py-2 font-label-caps text-label-caps rounded-lg hover:opacity-95 active:scale-95 transition-all">Institutional Access</button>
+</div>
+</div>
+</header>
+<main>
+<!-- Hero Section -->
+<section class="relative flex flex-col items-center justify-center pt-stack-lg overflow-hidden border-b border-stroke-soft bg-terminal-black pb-stack-lg">
+<div class="quant-bg-container">
+<div class="moving-gradient" id="hero-gradient"></div>
+<div class="quant-grid"></div>
+<canvas class="quant-engine-canvas" id="hero-quant-engine"></canvas>
+</div>
+<div class="absolute inset-0 scanline pointer-events-none opacity-20"></div>
+<div class="relative z-10 max-w-container-max mx-auto px-margin-mobile text-center">
+<div class="inline-flex items-center gap-2 mb-stack-md px-3 py-1 bg-surface-charcoal/30 backdrop-blur-md border border-white/5 rounded-full">
+<span class="text-success-green font-data-mono text-[10px]">19 ASYNC LOOPS ACTIVE</span>
+<span class="w-1 h-1 bg-success-green rounded-full"></span>
+<span class="text-on-surface-variant font-data-mono text-[10px]">GATE CHAIN: ARMED</span>
+</div>
+<h1 class="font-display-lg text-headline-lg-mobile md:text-display-lg text-on-surface leading-tight mb-stack-md max-w-4xl mx-auto uppercase tracking-tighter">
+                Hybrid Trading <br/>
+<span class="text-primary italic">Intelligence</span> Shell
+            </h1>
+<p class="text-on-surface-variant text-body-md max-w-2xl mx-auto mb-stack-lg">
+                Production-grade algorithmic trading running 24/7. 19 concurrent loops spanning crypto, equity swing, NLP news, and insider filings — funneling through a multi-stage deterministic gate chain.
+            </p>
+<div class="flex flex-col sm:flex-row gap-gutter justify-center items-center mb-stack-lg">
+<button class="liquid-glass-button-primary text-terminal-black px-8 py-4 font-label-caps text-label-caps rounded-xl w-full sm:w-auto hover:opacity-95 transition-all flex items-center justify-center gap-2 group">
+                    Institutional Access
+                    <span class="material-symbols-outlined text-[18px] group-hover:translate-x-1 transition-transform" data-icon="chevron_right">chevron_right</span>
+</button>
+<button class="liquid-glass-button-outline text-primary px-8 py-4 font-label-caps text-label-caps rounded-xl w-full sm:w-auto transition-all flex items-center justify-center gap-2">
+                    View Live Feed
+                </button>
+</div>
+</div>
+<div class="relative z-10 w-full max-w-4xl mx-auto px-margin-mobile">
+<div class="liquid-glass rounded-xl p-6 font-data-mono text-[11px] text-on-surface-variant overflow-hidden shadow-2xl backdrop-blur-3xl bg-terminal-black/80">
+<div class="flex gap-2 border-b border-white/5 pb-3 mb-4">
+<div class="w-3 h-3 rounded-full bg-error/20 border border-error/40"></div>
+<div class="w-3 h-3 rounded-full bg-caution-amber/20 border border-caution-amber/40"></div>
+<div class="w-3 h-3 rounded-full bg-success-green/20 border border-success-green/40"></div>
+<div class="ml-auto text-[10px] opacity-40 uppercase tracking-widest">gate_chain_execution_v1.log</div>
+</div>
+<div class="space-y-2" id="terminal-output">
+<div class="log-line"><span class="bracket">[</span>08:44:21<span class="bracket">]</span> <span class="gate">INFO:</span> 19 Asyncio Loops Primed... <span class="status">OK</span></div>
+<div class="log-line"><span class="bracket">[</span>08:44:22<span class="bracket">]</span> <span class="gate">INFO:</span> Evaluating Gate 01: Daily loss limits... <span class="status">PASS</span></div>
+<div class="log-line"><span class="bracket">[</span>08:44:23<span class="bracket">]</span> <span class="gate">INFO:</span> Evaluating Gate 07: FINRA short interest veto... <span class="status">PROCEED</span></div>
+<div class="log-line"><span class="bracket">[</span>08:44:24<span class="bracket">]</span> <span class="gate">INFO:</span> Evaluating Gate 10: Bull/Bear debate... <span class="status">PROCEED</span></div>
+<div class="log-line"><span class="bracket">[</span>08:44:25<span class="bracket">]</span> <span class="status">SUCCESS:</span> Gates 01-14 verified. Calculating Kelly sizing...</div>
+<div class="log-line"><span class="bracket">[</span>08:44:26<span class="bracket">]</span> <span class="gate">EXEC:</span> Submitting bracket order for <span class="ticker">BTC/USD</span> <span class="buy">BUY</span> @ $64,212.50</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Strategy Section -->
+<section class="py-stack-lg bg-surface border-b border-stroke-soft relative overflow-hidden" id="strategy">
+<div class="max-w-container-max mx-auto px-margin-mobile relative z-10">
+<div class="mb-stack-lg max-w-3xl">
+<p class="font-label-caps text-label-caps text-primary mb-4">SYSTEM ARCHITECTURE</p>
+<h2 class="font-display-lg text-headline-lg text-on-surface uppercase tracking-tight mb-stack-md">Multi-Stage Gate Chain</h2>
+<p class="text-on-surface-variant text-body-md leading-relaxed">
+                    Before any signal reaches Alpaca for execution, it must pass 15 deterministic "Hard Gates". This includes the <span class="text-primary font-medium">Correlation Guard</span> (Pearson ρ ≤ 0.75), a <span class="text-primary font-medium">Bull/Bear LLM Debate</span> (DeepSeek Flash synthesis), and a <span class="text-primary font-medium">FINRA Short Interest Veto</span> to protect against overcrowded trades.
+                </p>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-gutter">
+<div class="liquid-glass p-gutter rounded-xl">
+<div class="flex items-center gap-4 mb-4">
+<div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-primary" data-icon="security">security</span>
+</div>
+<h3 class="font-label-caps text-on-surface">Execution Safeguards</h3>
+</div>
+<p class="text-on-surface-variant text-[14px] leading-relaxed mb-4">Every trade is validated against live macro data and sector concentration limits.</p>
+<div class="space-y-3 font-data-mono text-[11px]">
+<div class="flex justify-between items-center border-b border-white/5 pb-2">
+<span class="opacity-60">CORRELATION_GUARD</span>
+<span class="text-success-green">ρ ≤ 0.75</span>
+</div>
+<div class="flex justify-between items-center border-b border-white/5 pb-2">
+<span class="opacity-60">FINRA_SHORT_VETO</span>
+<span class="text-error">VETO IF &gt; 65%</span>
+</div>
+<div class="flex justify-between items-center">
+<span class="opacity-60">LLM_DEBATE</span>
+<span class="text-primary">3-STAGE JSON</span>
+</div>
+</div>
+</div>
+<div class="liquid-glass p-gutter rounded-xl">
+<div class="flex items-center gap-4 mb-4">
+<div class="w-10 h-10 rounded-lg bg-success-green/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-success-green" data-icon="precision_manufacturing">precision_manufacturing</span>
+</div>
+<h3 class="font-label-caps text-on-surface">19 Concurrent Loops</h3>
+</div>
+<p class="text-on-surface-variant text-[14px] leading-relaxed mb-4">A unified asyncio gather system processes WebSocket crypto, SEC EDGAR filings, and Reddit/X sentiment in parallel.</p>
+<div class="grid grid-cols-2 gap-2">
+<div class="bg-terminal-black/40 p-3 rounded border border-white/5 text-[10px] font-data-mono">
+<span class="block text-on-surface mb-1 uppercase opacity-40">Active Threads</span>
+<span class="text-success-green">19 Async Loops</span>
+</div>
+<div class="bg-terminal-black/40 p-3 rounded border border-white/5 text-[10px] font-data-mono">
+<span class="block text-on-surface mb-1 uppercase opacity-40">Execution Path</span>
+<span class="text-primary">Alpaca REST/WS</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Performance Section -->
+<section class="py-stack-lg bg-terminal-black border-b border-stroke-soft relative overflow-hidden" id="performance">
+<div class="max-w-container-max mx-auto px-margin-mobile relative z-10">
+<div class="flex flex-col md:flex-row justify-between items-end mb-stack-lg gap-gutter">
+<div>
+<p class="font-label-caps text-label-caps text-primary mb-4">TRACK RECORD</p>
+<h2 class="font-display-lg text-headline-lg text-on-surface uppercase tracking-tight">Verified Live Performance</h2>
+</div>
+<div class="flex gap-gutter">
+<div class="text-right">
+<p class="text-[10px] font-label-caps text-on-surface-variant">SHARPE RATIO</p>
+<p class="text-headline-lg text-primary">2.1</p>
+</div>
+<div class="text-right border-l border-white/10 pl-gutter">
+<p class="text-[10px] font-label-caps text-on-surface-variant">WIN RATE</p>
+<p class="text-headline-lg text-success-green">68%</p>
+</div>
+</div>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
+<div class="lg:col-span-2 liquid-glass p-gutter rounded-xl">
+<div class="flex justify-between items-center mb-6">
+<h3 class="font-label-caps text-[12px]">Growth of $100k (24 Months)</h3>
+<div class="flex gap-2">
+<span class="w-3 h-3 rounded-full bg-primary"></span>
+<span class="text-[10px] text-on-surface-variant font-data-mono">BLITHE_v4.5</span>
+</div>
+</div>
+<div class="h-[300px] w-full relative">
+<svg class="w-full h-full" viewbox="0 0 800 300">
+<defs>
+<lineargradient id="chartGradient" x1="0" x2="0" y1="0" y2="1">
+<stop offset="0%" stop-color="#bd93f9" stop-opacity="0.3"></stop>
+<stop offset="100%" stop-color="#bd93f9" stop-opacity="0"></stop>
+</lineargradient>
+</defs>
+<path d="M0,280 Q100,270 150,230 T300,180 T450,150 T600,80 T800,20" fill="none" stroke="#bd93f9" stroke-width="3"></path>
+<path d="M0,280 Q100,270 150,230 T300,180 T450,150 T600,80 T800,20 V300 H0 Z" fill="url(#chartGradient)"></path>
+</svg>
+<div class="absolute top-0 right-0 p-4 font-data-mono text-headline-lg text-on-surface">$242,105</div>
+</div>
+</div>
+<div class="liquid-glass p-gutter rounded-xl">
+<h3 class="font-label-caps text-[12px] mb-6">Monthly Return Heatmap (%)</h3>
+<div class="grid grid-cols-4 gap-2">
+<div class="heatmap-cell bg-success-green/80 rounded flex items-center justify-center text-terminal-black font-bold text-[10px]">4.2</div>
+<div class="heatmap-cell bg-success-green/60 rounded flex items-center justify-center text-terminal-black font-bold text-[10px]">2.1</div>
+<div class="heatmap-cell bg-error/40 rounded flex items-center justify-center text-on-surface font-bold text-[10px]">-1.2</div>
+<div class="heatmap-cell bg-success-green/40 rounded flex items-center justify-center text-on-surface font-bold text-[10px]">0.8</div>
+<div class="heatmap-cell bg-success-green/90 rounded flex items-center justify-center text-terminal-black font-bold text-[10px]">5.5</div>
+<div class="heatmap-cell bg-success-green/30 rounded flex items-center justify-center text-on-surface font-bold text-[10px]">0.4</div>
+<div class="heatmap-cell bg-success-green/60 rounded flex items-center justify-center text-terminal-black font-bold text-[10px]">2.9</div>
+<div class="heatmap-cell bg-error/20 rounded flex items-center justify-center text-on-surface font-bold text-[10px]">-0.5</div>
+<div class="heatmap-cell bg-success-green/80 rounded flex items-center justify-center text-terminal-black font-bold text-[10px]">3.8</div>
+<div class="heatmap-cell bg-success-green/50 rounded flex items-center justify-center text-on-surface font-bold text-[10px]">1.2</div>
+<div class="heatmap-cell bg-success-green/70 rounded flex items-center justify-center text-terminal-black font-bold text-[10px]">3.1</div>
+<div class="heatmap-cell bg-success-green/90 rounded flex items-center justify-center text-terminal-black font-bold text-[10px]">4.9</div>
+</div>
+<div class="mt-6 pt-6 border-t border-white/5 space-y-2">
+<div class="flex justify-between text-[11px] font-data-mono">
+<span class="opacity-60 uppercase">Max Drawdown</span>
+<span class="text-error">-4.2%</span>
+</div>
+<div class="flex justify-between text-[11px] font-data-mono">
+<span class="opacity-60 uppercase">Portfolio Heat Cap</span>
+<span class="text-primary">15% MAX</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Research Section -->
+<section class="py-stack-lg bg-surface border-b border-stroke-soft relative overflow-hidden" id="research">
+<div class="max-w-container-max mx-auto px-margin-mobile relative z-10">
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-stack-lg items-center">
+<div>
+<p class="font-label-caps text-label-caps text-primary mb-4">DISCOVERY ENGINE</p>
+<h2 class="font-display-lg text-headline-lg text-on-surface uppercase tracking-tight mb-stack-md">Genetic Strategy Evolution</h2>
+<p class="text-on-surface-variant mb-stack-md leading-relaxed">
+                        Alpha is discovered, not written. Our overnight <span class="text-on-surface font-semibold">Genetic Indicator Engine</span> evolves novel indicator expressions, validating them through rigorous <span class="text-on-surface font-semibold">Walk-Forward Validation</span> across 24-month training windows.
+                    </p>
+<div class="space-y-4">
+<div class="flex gap-4 p-4 liquid-glass rounded-lg border-l-4 border-l-primary">
+<span class="material-symbols-outlined text-primary" data-icon="query_stats">query_stats</span>
+<div>
+<h4 class="font-label-caps text-[12px] text-on-surface">Walk-Forward Architecture</h4>
+<p class="text-[13px] text-on-surface-variant">3-month out-of-sample test windows with scipy t-test p&lt;0.05 verification ensures edge persistence.</p>
+</div>
+</div>
+<div class="flex gap-4 p-4 liquid-glass rounded-lg border-l-4 border-l-success-green">
+<span class="material-symbols-outlined text-success-green" data-icon="dna">dna</span>
+<div>
+<h4 class="font-label-caps text-[12px] text-on-surface">Genetic Programming</h4>
+<p class="text-[13px] text-on-surface-variant">Evolving ExpressionNode trees with crossover and mutation to discover proprietary market signals.</p>
+</div>
+</div>
+</div>
+</div>
+<div class="relative group">
+<div class="absolute -inset-1 bg-gradient-to-r from-primary to-secondary rounded-2xl blur opacity-25 group-hover:opacity-40 transition duration-1000"></div>
+<div class="relative bg-terminal-black liquid-glass p-0 rounded-2xl overflow-hidden aspect-square flex items-center justify-center">
+<canvas class="w-full h-full opacity-60" id="research-quant-engine"></canvas>
+<div class="absolute inset-0 flex items-center justify-center">
+<div class="text-center">
+<span class="font-data-mono text-headline-lg text-primary block">IC &gt; 0.05</span>
+<span class="font-label-caps text-[10px] text-on-surface-variant uppercase tracking-widest">Graduation Threshold</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Dashboard Preview Section -->
+<section class="py-stack-lg bg-terminal-black relative overflow-hidden" id="dashboard">
+<div class="max-w-container-max mx-auto px-margin-mobile relative z-10 text-center mb-stack-lg">
+<p class="font-label-caps text-label-caps text-primary mb-4">LIVE TERMINAL</p>
+<h2 class="font-display-lg text-headline-lg text-on-surface uppercase tracking-tight">Institutional Alpha Terminal</h2>
+</div>
+<div class="max-w-6xl mx-auto px-margin-mobile relative z-10">
+<div class="liquid-glass p-1 rounded-2xl border border-white/10 shadow-[0_0_100px_rgba(189,147,249,0.1)]">
+<div class="bg-surface-charcoal/40 backdrop-blur-xl rounded-xl overflow-hidden border border-white/5">
+<!-- Dashboard Header -->
+<div class="flex justify-between items-center px-6 py-3 border-b border-white/5 bg-white/2">
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-2">
+<div class="w-2 h-2 rounded-full bg-success-green animate-pulse"></div>
+<span class="text-[10px] font-data-mono text-on-surface-variant">LIVE_ASYNC_CORE</span>
+</div>
+<div class="hidden md:flex gap-4">
+<span class="text-[10px] font-data-mono text-primary">BTC/USD: $64,212.50 (+1.2%)</span>
+<span class="text-[10px] font-data-mono text-on-surface-variant">LOOPS: 19 ACTIVE</span>
+</div>
+</div>
+<div class="flex gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant cursor-pointer hover:text-primary transition-colors" data-icon="settings">settings</span>
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant cursor-pointer hover:text-primary transition-colors" data-icon="fullscreen">fullscreen</span>
+</div>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-4 min-h-[450px]">
+<!-- Sidebar Logs -->
+<div class="border-r border-white/5 p-6 space-y-6 bg-black/20 font-data-mono">
+<div class="space-y-2">
+<p class="text-[9px] font-label-caps text-on-surface-variant opacity-50 uppercase tracking-widest mb-3">Gate Chain Stream</p>
+<div class="text-[10px] space-y-2" id="dashboard-gate-logs">
+<div class="log-line"><span class="gate">INFO:</span> Evaluating Gate 01... <span class="status">PASS</span></div>
+<div class="log-line"><span class="gate">INFO:</span> Evaluating Gate 07... <span class="status">PASS</span></div>
+<div class="log-line"><span class="gate">INFO:</span> Evaluating Gate 10... <span class="status">PASS</span></div>
+<div class="log-line"><span class="status">SUCCESS:</span> All Gates Clear</div>
+</div>
+</div>
+<div class="pt-6 border-t border-white/5">
+<p class="text-[9px] font-label-caps text-on-surface-variant opacity-50 uppercase tracking-widest mb-4">Loop Health</p>
+<div class="space-y-4">
+<div>
+<div class="flex justify-between text-[9px] mb-1">
+<span class="opacity-40">Async Core</span>
+<span class="status">95%</span>
+</div>
+<div class="w-full bg-white/5 h-1 rounded-full overflow-hidden">
+<div class="bg-primary h-full w-[95%]"></div>
+</div>
+</div>
+<div>
+<div class="flex justify-between text-[9px] mb-1">
+<span class="opacity-40">Memory usage</span>
+<span class="status">88%</span>
+</div>
+<div class="w-full bg-white/5 h-1 rounded-full overflow-hidden">
+<div class="bg-success-green h-full w-[88%]"></div>
+</div>
+</div>
+<p class="text-[9px] text-on-surface-variant italic opacity-40 mt-4">system_status: monitoring_19_async_loops</p>
+</div>
+</div>
+</div>
+<!-- Main Chart Area -->
+<div class="lg:col-span-3 relative bg-terminal-black/40">
+<img alt="Trading terminal chart preview" class="w-full h-full object-cover opacity-40 mix-blend-screen grayscale hover:grayscale-0 transition-all duration-1000" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBeIbIZdtKmYWl8Vv8czkIlMPUPOFx9A4UZoA0XUG113y0p0DUSV-LfV-9OJYrSewaSsqAvaAt-ucs0QRRKr1HhH-tusOH522i1d_vOrFzj_bXJ5ahumHggeqaSEQFA4FZF3nez4YVZ1xxZG9J7TUzh7jYBqzD0-GbYbIIczkr2pojrpkmCqTHRhNvtAySDOA1_FaUvyW2izOsDDvrgOGCNfYs7xSmHhzRK5ulJ9GaKtqMTQo31fekSY4mPl1vGO1m9YBuhQFAUne0S"/>
+<div class="absolute inset-0 bg-gradient-to-t from-terminal-black/80 to-transparent pointer-events-none"></div>
+<!-- Floating Metrics Overlay -->
+<div class="absolute bottom-6 left-6 right-6 flex flex-wrap gap-4">
+<div class="bg-white/5 backdrop-blur-md border border-white/10 p-3 rounded-lg min-w-[120px]">
+<span class="block text-[9px] font-label-caps opacity-50 uppercase">Async Status</span>
+<span class="text-[14px] font-data-mono status">19/19 OK</span>
+</div>
+<div class="bg-white/5 backdrop-blur-md border border-white/10 p-3 rounded-lg min-w-[120px]">
+<span class="block text-[9px] font-label-caps opacity-50 uppercase">Active Signals</span>
+<span class="text-[14px] font-data-mono text-primary">09 / 11</span>
+</div>
+<div class="bg-white/5 backdrop-blur-md border border-white/10 p-3 rounded-lg min-w-[120px]">
+<span class="block text-[9px] font-label-caps opacity-50 uppercase">Gate Veto</span>
+<span class="text-[14px] font-data-mono text-caution-amber">04 Today</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+</main>
+<footer class="bg-terminal-black border-t border-white/5 font-data-mono text-data-mono">
+<div class="grid grid-cols-1 md:grid-cols-4 gap-gutter py-stack-lg px-margin-mobile max-w-container-max mx-auto">
+<div class="col-span-1">
+<div class="font-label-caps text-label-caps text-on-surface mb-stack-md">BLITHEBOT</div>
+<p class="text-on-tertiary-fixed-variant text-[12px] leading-relaxed">
+                Hybrid Trading Bot: A production system running 24/7 on Railway. 19 asyncio loops funneling into a multi-stage gate chain.
+            </p>
+</div>
+<div class="col-span-1">
+<div class="text-on-surface font-label-caps text-[10px] mb-4 uppercase tracking-widest opacity-60">Components</div>
+<ul class="space-y-2">
+<li><a class="text-on-tertiary-fixed-variant hover:text-success-green transition-opacity" href="#">Gate Chain Logic</a></li>
+<li><a class="text-on-tertiary-fixed-variant hover:text-success-green transition-opacity" href="#">Genetic Indicator Engine</a></li>
+</ul>
+</div>
+<div class="col-span-1">
+<div class="text-on-surface font-label-caps text-[10px] mb-4 uppercase tracking-widest opacity-60">Resources</div>
+<ul class="space-y-2">
+<li><a class="text-on-tertiary-fixed-variant hover:text-success-green transition-opacity" href="#">Walk-Forward Docs</a></li>
+<li><a class="text-on-tertiary-fixed-variant hover:text-success-green transition-opacity" href="#">Slack Interface</a></li>
+</ul>
+</div>
+<div class="col-span-1">
+<div class="text-on-surface font-label-caps text-[10px] mb-4 uppercase tracking-widest opacity-60">System Status</div>
+<div class="liquid-glass p-4 rounded-xl space-y-2 bg-terminal-black/50">
+<div class="flex justify-between items-center text-[11px]">
+<span class="text-on-tertiary-fixed-variant uppercase">Loops</span>
+<span class="status">19 Active</span>
+</div>
+<div class="flex justify-between items-center text-[11px]">
+<span class="text-on-tertiary-fixed-variant uppercase">Uptime</span>
+<span class="status">99.99%</span>
+</div>
+<p class="text-[9px] opacity-40 italic mt-2">system_status: monitoring_19_async_loops</p>
+</div>
+</div>
+</div>
+<div class="border-t border-white/5 py-stack-sm px-margin-mobile max-w-container-max mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
+<span class="text-on-tertiary-fixed-variant text-[10px] uppercase tracking-widest">© 2024 BLITHEBOT HYBRID ENGINE. VERSION 4.5.1.</span>
+<div class="flex gap-4">
+<a class="text-on-tertiary-fixed-variant hover:text-primary transition-colors text-[10px] uppercase tracking-widest" href="#">Privacy</a>
+<a class="text-on-tertiary-fixed-variant hover:text-primary transition-colors text-[10px] uppercase tracking-widest" href="#">Terms</a>
+</div>
+</div>
+</footer>
+<script>
+/**
+ * Adaptive Radial Morphing Engine
+ */
+class MorphingQuantEngine {
+    constructor(canvasId, scaleFactor = 1) {
+        this.canvas = document.getElementById(canvasId);
+        if (!this.canvas) return;
+        this.ctx = this.canvas.getContext('2d');
+        this.width = 0;
+        this.height = 0;
+        this.nodes = [];
+        this.nodeCount = 42; 
+        this.scaleFactor = scaleFactor;
+        
+        this.init();
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+    }
 
-  <!-- ── CANVAS LAYERS (fixed, stacked) ────────────────────────────────────── -->
-  <canvas id="canvas-grid"></canvas>
-  <canvas id="canvas-crt"></canvas>
-  <canvas id="canvas-dots"></canvas>
+    resize() {
+        this.width = this.canvas.width = this.canvas.offsetWidth * window.devicePixelRatio;
+        this.height = this.canvas.height = this.canvas.offsetHeight * window.devicePixelRatio;
+        this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    }
 
-  <!-- ── NAV ───────────────────────────────────────────────────────────────── -->
-  <nav class="nav">
-    <div class="nav-inner">
-      <div class="nav-left">
-        <span class="nav-dot"></span>
-        <a class="nav-logo" href="#" data-page="home">BLITHEBOT</a>
-      </div>
-      <div class="nav-center">
-        <a href="#" data-page="strategy">STRATEGY</a>
-        <span class="nav-sep">·</span>
-        <a href="#" data-page="performance">PERFORMANCE</a>
-        <span class="nav-sep">·</span>
-        <a href="#" data-page="research">RESEARCH</a>
-        <span class="nav-sep">·</span>
-        <a href="#" data-page="dashboard">DASHBOARD</a>
-      </div>
-      <div class="nav-right">
-        <a href="#contact" class="btn-access">REQUEST ACCESS</a>
-      </div>
-    </div>
-    <div class="eng-bar">BB@railway:~$ ./blithebot --mode=paper --loops=19 --gates=15</div>
-  </nav>
+    init() {
+        const baseRadius = 250 * this.scaleFactor;
+        for (let i = 0; i < this.nodeCount; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            this.nodes.push({
+                angle: angle,
+                radius: Math.random() * baseRadius,
+                baseRadius: baseRadius,
+                x: 0, y: 0, z: (Math.random() - 0.5) * 500,
+                targetRadius: Math.random() * baseRadius,
+                morphSpeed: 0.002 + Math.random() * 0.01,
+                rotationSpeed: (Math.random() - 0.5) * 0.005,
+                size: 2.5
+            });
+        }
+    }
 
-  <!-- ── PAGE CONTENT (SPA wrapper) ────────────────────────────────────────── -->
-  <div id="page-content">
+    project(x, y, z) {
+        const perspective = 1000 / (1000 + z);
+        return {
+            x: x * perspective + (this.canvas.offsetWidth / 2),
+            y: y * perspective + (this.canvas.offsetHeight / 2),
+            scale: perspective
+        };
+    }
 
-    <!-- SECTION 1 — HERO -->
-    <section class="hero" id="hero">
-      <div class="hero-corner-annotation">DOC NO: BB-001 · REV A · SYSTEMATIC TRADING ENGINE</div>
+    draw() {
+        if (!this.canvas) return;
+        const currentWidth = this.canvas.offsetWidth;
+        const currentHeight = this.canvas.offsetHeight;
+        this.ctx.clearRect(0, 0, currentWidth, currentHeight);
+        
+        const time = Date.now() * 0.001;
 
-      <div class="hero-headline">
-        <span class="hero-line hero-line--dim">ALGORITHMIC</span>
-        <span class="hero-line hero-line--mid">EDGE,</span>
-        <span class="hero-line hero-line--mid">SYSTEMATICALLY</span>
-        <span class="hero-line hero-line--accent">EXECUTED</span>
-      </div>
+        this.nodes.forEach(node => {
+            const diff = node.targetRadius - node.radius;
+            node.radius += diff * node.morphSpeed;
+            if (Math.abs(diff) < 1) {
+                node.targetRadius = Math.random() * node.baseRadius * (1 + Math.sin(time) * 0.2);
+            }
+            node.angle += node.rotationSpeed;
+            node.x = Math.cos(node.angle) * node.radius;
+            node.y = Math.sin(node.angle) * node.radius;
+        });
 
-      <div class="hero-sub">
-        <p>A systematic trading engine combining adaptive signal processing, alternative data, and walk-forward validated strategies.</p>
-      </div>
+        this.ctx.beginPath();
+        this.ctx.strokeStyle = '#bd93f9';
+        this.ctx.lineWidth = 0.65;
+        const maxDist = 200 * this.scaleFactor;
 
-      <div class="hero-actions">
-        <a href="#" data-page="dashboard" class="btn-primary">VIEW DASHBOARD</a>
-        <a href="#" data-page="research" class="btn-ghost">READ THE RESEARCH →</a>
-      </div>
+        for (let i = 0; i < this.nodes.length; i++) {
+            for (let j = i + 1; j < this.nodes.length; j++) {
+                const dx = this.nodes[i].x - this.nodes[j].x;
+                const dy = this.nodes[i].y - this.nodes[j].y;
+                const dz = this.nodes[i].z - this.nodes[j].z;
+                const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-      <div class="scroll-indicator" id="scroll-indicator">
-        <span>SCROLL</span>
-        <svg width="12" height="16" viewBox="0 0 12 16" fill="none">
-          <path d="M6 0v12M1 8l5 5 5-5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
-        </svg>
-      </div>
-    </section>
+                if (dist < maxDist) {
+                    const p1 = this.project(this.nodes[i].x, this.nodes[i].y, this.nodes[i].z);
+                    const p2 = this.project(this.nodes[j].x, this.nodes[j].y, this.nodes[j].z);
+                    const opacity = (1 - dist / maxDist) * 0.3;
+                    this.ctx.globalAlpha = opacity;
+                    this.ctx.moveTo(p1.x, p1.y);
+                    this.ctx.lineTo(p2.x, p2.y);
+                }
+            }
+        }
+        this.ctx.stroke();
 
-    <!-- SECTION 2 — STATS -->
-    <section class="stats-section" id="stats">
-      <div class="stat-col">
-        <span class="stat-ref">REF: BB-S01</span>
-        <div class="stat-numrow">
-          <span class="stat-number" data-target="19">0</span>
-        </div>
-        <span class="stat-label">ASYNC LOOPS</span>
-      </div>
-      <div class="stat-divider"></div>
-      <div class="stat-col">
-        <span class="stat-ref">REF: BB-S02</span>
-        <div class="stat-numrow">
-          <span class="stat-number" data-target="15">0</span>
-        </div>
-        <span class="stat-label">TRADE GATES</span>
-      </div>
-      <div class="stat-divider"></div>
-      <div class="stat-col">
-        <span class="stat-ref">REF: BB-S03</span>
-        <div class="stat-numrow">
-          <span class="stat-number" data-target="11">0</span>
-        </div>
-        <span class="stat-label">SIGNAL SOURCES</span>
-      </div>
-      <div class="stat-divider"></div>
-      <div class="stat-col">
-        <span class="stat-ref">REF: BB-S04</span>
-        <div class="stat-numrow">
-          <span class="stat-number" data-target="1215">0</span>
-          <span class="stat-unit">+</span>
-        </div>
-        <span class="stat-label">COMBOS TESTED</span>
-      </div>
-    </section>
+        this.nodes.forEach(node => {
+            const p = this.project(node.x, node.y, node.z);
+            if (p.scale > 0) {
+                this.ctx.globalAlpha = p.scale * 0.6;
+                this.ctx.fillStyle = '#bd93f9';
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, node.size * p.scale, 0, Math.PI * 2);
+                this.ctx.fill();
+            }
+        });
+        requestAnimationFrame(() => this.draw());
+    }
+}
 
-    <!-- SECTION 3 — EDGE STATEMENT (pinned scroll) -->
-    <section class="edge-section" id="edge">
-      <div class="edge-left">
-        <div class="edge-label">BUILT ON</div>
-        <div class="edge-headline">
-          <span class="edge-line edge-line--1">SIGNALS</span>
-          <span class="edge-line edge-line--2">MOST BOTS</span>
-          <span class="edge-line edge-line--3">NEVER SEE</span>
-        </div>
-      </div>
-      <div class="edge-right">
-        <div class="edge-card" data-edge-card="1">
-          <div class="edge-card-label">§ ALT DATA</div>
-          <p>SEC insider filings, congressional trades, FINRA short interest surface institutional activity.</p>
-        </div>
-        <div class="edge-card" data-edge-card="2">
-          <div class="edge-card-label">§ KALMAN FILTER</div>
-          <p>Adaptive trend estimation replaces static moving averages. Noise ratio gates low-quality setups.</p>
-        </div>
-        <div class="edge-card" data-edge-card="3">
-          <div class="edge-card-label">§ HURST EXPONENT</div>
-          <p>R/S analysis detects regime. H &gt; 0.6 = trending. SwingStrategy only fires in trending markets.</p>
-        </div>
-        <div class="edge-card" data-edge-card="4">
-          <div class="edge-card-label">§ KELLY CRITERION</div>
-          <p>Half-Kelly position sizing from historical win rate and payoff ratio. Hard cap at 10% per trade.</p>
-        </div>
-        <div class="edge-card" data-edge-card="5">
-          <div class="edge-card-label">§ GENETIC ENGINE</div>
-          <p>Overnight GP engine evolves novel indicators. Walk-forward IC &gt; 0.05 required to graduate.</p>
-        </div>
-      </div>
-    </section>
+document.addEventListener('DOMContentLoaded', () => {
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        const heroEngine = new MorphingQuantEngine('hero-quant-engine', 1.2);
+        heroEngine.draw();
 
-    <!-- SECTION 4 — GATE CHAIN -->
-    <section class="gate-section" id="gates">
-      <div class="gate-inner">
-        <div class="gate-header">
-          <span class="section-tag-mono">§ 01.00</span>
-          <h2 class="section-title">Trade execution specification</h2>
-        </div>
-        <table class="gate-table">
-          <thead>
-            <tr>
-              <th>GATE ID</th>
-              <th>DESCRIPTION</th>
-              <th>TYPE</th>
-              <th>STATUS</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr class="gate-row"><td class="gate-id">GATE-01</td><td>Daily halt check</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-02</td><td>Hold signal filter</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-03</td><td>One position per symbol (Alpaca)</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-04</td><td>Portfolio heat cap</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-05</td><td>Correlation guard — Pearson r &gt; 0.70</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-06</td><td>Short interest — FINRA vol &gt; 65%</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-07</td><td>Pre-execute hook — LLM bull/bear debate</td><td class="gate-type">SOFT GATE</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-08</td><td>Confluence / sector alert cooldown</td><td class="gate-type">SOFT GATE</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-09</td><td>Signal type determination</td><td class="gate-type">CLASSIFICATION</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-10</td><td>Circuit breaker — &lt;5% drawdown / 10d</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-11</td><td>Performance brain multiplier</td><td class="gate-type">SIZE</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-12</td><td>Kelly sizing — half-Kelly 10% cap</td><td class="gate-type">SIZE</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-13</td><td>Buying power confirmation</td><td class="gate-type">HARD BLOCK</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row"><td class="gate-id">GATE-14</td><td>Order submission (Alpaca API)</td><td class="gate-type">EXECUTE</td><td class="gate-pass">✓ PASS</td></tr>
-            <tr class="gate-row gate-row--execute">
-              <td class="gate-id gate-id--execute" style="color:#14b8a6;">EXECUTE</td>
-              <td class="gate-execute-text" style="color:#ffffff;">↑ BUY 12 shares COST @ $95.40</td>
-              <td class="gate-type gate-type--execute" style="color:#ffffff;">FILLED</td>
-              <td class="gate-pass" style="color:#ffffff;">✓ FILLED</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+        const researchEngine = new MorphingQuantEngine('research-quant-engine', 0.6);
+        researchEngine.draw();
 
-    <!-- SECTION 5 — TERMINAL -->
-    <section class="terminal-section" id="terminal">
-      <div class="terminal-left">
-        <div class="section-tag-mono">§ 02.00 LIVE SYSTEM OUTPUT</div>
-        <h2 class="terminal-title">The bot doesn't sleep.</h2>
-        <p class="terminal-body">19 concurrent async loops monitor markets, process alternative data, and execute walk-forward validated strategies around the clock.</p>
-      </div>
-      <div class="terminal-right">
-        <div class="terminal-window">
-          <div class="terminal-header">
-            <span class="terminal-header-label">LIVE SYSTEM OUTPUT</span>
-            <span class="terminal-status"><span class="terminal-dot"></span>ACTIVE</span>
-          </div>
-          <div class="terminal-body-lines" id="terminal-lines"></div>
-          <div class="terminal-cursor">█</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- SECTION 6 — STRATEGY OVERVIEW -->
-    <section class="strategy-section" id="strategies">
-      <div class="strat-panel" data-strat="1">
-        <div class="strat-code">STRAT-01</div>
-        <div class="strat-name">SWING</div>
-        <div class="strat-rows">
-          <div class="strat-row"><span class="strat-label">REGIME</span><span class="strat-val">Trending (H &gt; 0.60)</span></div>
-          <div class="strat-row"><span class="strat-label">SIGNALS</span><span class="strat-val">EMA · MACD · RSI · Kalman · Hurst</span></div>
-          <div class="strat-row"><span class="strat-label">SYMBOLS</span><span class="strat-val">JPM SPY COST BRK.B PG V</span></div>
-          <div class="strat-row"><span class="strat-label">EXIT</span><span class="strat-val">ATR trailing stop · 3:1 TP</span></div>
-          <div class="strat-row"><span class="strat-label">SIZING</span><span class="strat-val">Half-Kelly, 10% cap</span></div>
-        </div>
-      </div>
-      <div class="strat-divider"></div>
-      <div class="strat-panel" data-strat="2">
-        <div class="strat-code">STRAT-02</div>
-        <div class="strat-name">SMB</div>
-        <div class="strat-rows">
-          <div class="strat-row"><span class="strat-label">REGIME</span><span class="strat-val">Mean reversion</span></div>
-          <div class="strat-row"><span class="strat-label">SIGNALS</span><span class="strat-val">Kalman/VWAP crossover · AnchoredVWAP</span></div>
-          <div class="strat-row"><span class="strat-label">SYMBOLS</span><span class="strat-val">BTC/USD ETH/USD</span></div>
-          <div class="strat-row"><span class="strat-label">EXIT</span><span class="strat-val">VWAP reversion · half-life holding</span></div>
-          <div class="strat-row"><span class="strat-label">SIZING</span><span class="strat-val">Fixed 2% (Kelly pending)</span></div>
-        </div>
-      </div>
-      <div class="strat-divider"></div>
-      <div class="strat-panel" data-strat="3">
-        <div class="strat-code">STRAT-03</div>
-        <div class="strat-name">DISCOVERY</div>
-        <div class="strat-rows">
-          <div class="strat-row"><span class="strat-label">REGIME</span><span class="strat-val">Adaptive — best per regime</span></div>
-          <div class="strat-row"><span class="strat-label">SIGNALS</span><span class="strat-val">GP-evolved · walk-forward validated</span></div>
-          <div class="strat-row"><span class="strat-label">SYMBOLS</span><span class="strat-val">JPM SPY COST BRK.B PG</span></div>
-          <div class="strat-row"><span class="strat-label">UPDATES</span><span class="strat-val">Weekly · Friday 4:30 PM EST</span></div>
-          <div class="strat-row"><span class="strat-label">COMBOS</span><span class="strat-val">1,215+ tested per symbol</span></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- SECTION 7 — ROADMAP -->
-    <section class="roadmap-section" id="roadmap">
-      <div class="roadmap-inner">
-        <div class="roadmap-header">
-          <span class="section-tag-mono">§ 03.00</span>
-          <h2 class="section-title">Development timeline</h2>
-        </div>
-        <div class="roadmap-timeline" id="roadmap-timeline">
-          <div class="milestone milestone--left milestone--done">
-            <div class="milestone-content">
-              <div class="milestone-date">Q4 2024</div>
-              <div class="milestone-title">Foundation</div>
-              <div class="milestone-desc">Bot architecture, Alpaca integration, first strategies deployed.</div>
-            </div>
-            <div class="milestone-dot milestone-dot--done"></div>
-          </div>
-
-          <div class="milestone milestone--right milestone--done">
-            <div class="milestone-dot milestone-dot--done"></div>
-            <div class="milestone-content">
-              <div class="milestone-date">Q1 2025</div>
-              <div class="milestone-title">Signal Layer</div>
-              <div class="milestone-desc">Kalman, Hurst, Kelly, Correlation Guard, Short Interest added.</div>
-            </div>
-          </div>
-
-          <div class="milestone milestone--left milestone--done">
-            <div class="milestone-content">
-              <div class="milestone-date">Q4 2025</div>
-              <div class="milestone-title">Discovery Engine</div>
-              <div class="milestone-desc">Walk-forward backtester, genetic programming, 1,215 combos tested.</div>
-            </div>
-            <div class="milestone-dot milestone-dot--done"></div>
-          </div>
-
-          <div class="milestone milestone--right milestone--active">
-            <div class="milestone-dot milestone-dot--active"></div>
-            <div class="milestone-content">
-              <div class="milestone-date">Q2 2026 <span class="milestone-badge">ACTIVE</span></div>
-              <div class="milestone-title">Paper Trading</div>
-              <div class="milestone-desc">All 19 loops live on Railway. Full gate chain active. Accumulating performance data.</div>
-            </div>
-          </div>
-
-          <div class="milestone milestone--left milestone--future">
-            <div class="milestone-content">
-              <div class="milestone-date">Summer 2026</div>
-              <div class="milestone-title">Live Trading</div>
-              <div class="milestone-desc">Capital deployment pending prop firm partnership or seed capital.</div>
-            </div>
-            <div class="milestone-dot milestone-dot--future"></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- SECTION 8 — ABOUT -->
-    <section class="about-section" id="about">
-      <div class="about-left">
-        <span class="about-line about-line--1">BUILT</span>
-        <span class="about-line about-line--2">WITH</span>
-        <span class="about-line about-line--3">CONVICTION</span>
-      </div>
-      <div class="about-right">
-        <p class="about-text">BlitheBot is a systematic trading engine built by a high school junior with a deep interest in quantitative finance and algorithmic systems.</p>
-        <p class="about-text">What started as a project to understand markets became a production-grade trading system — combining adaptive signal processing, alternative data, genetic indicator discovery, and institutional risk architecture.</p>
-        <p class="about-text about-text--accent">The goal: financial independence through systematic, data-driven trading. Not tips, not speculation — edge.</p>
-      </div>
-    </section>
-
-    <!-- SECTION 9 — CONTACT -->
-    <section class="contact-section" id="contact">
-      <div class="contact-inner">
-        <div class="contact-label">INTERESTED IN PARTNERING?</div>
-        <p class="contact-body">BlitheBot is seeking prop firm partnership or seed capital for live launch in summer 2026.</p>
-        <a href="mailto:gamerdiamondknight@gmail.com" class="btn-contact">GET IN TOUCH</a>
-        <div class="contact-email">gamerdiamondknight@gmail.com</div>
-      </div>
-    </section>
-
-    <!-- FOOTER -->
-    <footer class="footer">
-      <div class="footer-main">
-        <span class="footer-logo">BLITHEBOT</span>
-        <div class="footer-links">
-          <a href="#" data-page="strategy">STRATEGY</a>
-          <a href="#" data-page="research">RESEARCH</a>
-          <a href="#contact">CONTACT</a>
-        </div>
-        <span class="footer-doc">DOC NO: BB-001 · REV A · PAPER TRADING · 2026</span>
-      </div>
-      <div class="footer-strip">
-        <span>SCALE 1:1 · THIRD ANGLE PROJECTION</span>
-        <span>APPROVED: SYSTEMATIC · CHECKED: WALK-FORWARD · DRAWN: BB-ENG</span>
-      </div>
-    </footer>
-
-  </div><!-- #page-content -->
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
-  <script src="script.js"></script>
-</body>
-</html>
+        document.addEventListener('mousemove', (e) => {
+            const grad = document.getElementById('hero-gradient');
+            if (!grad) return;
+            const x = (e.clientX / window.innerWidth) * 20 - 10;
+            const y = (e.clientY / window.innerHeight) * 20 - 10;
+            grad.style.transform = `translate(${x}px, ${y}px)`;
+        });
+    }
+});
+</script>
+</body></html>

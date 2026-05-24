@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400&amp;family=JetBrains+Mono:wght@500;700&amp;family=Lexend:wght@600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-tertiary-container": "#3b3b4c",
+                    "background": "#131316",
+                    "on-secondary-fixed-variant": "#354574",
+                    "on-background": "#e4e1e6",
+                    "surface-variant": "#353438",
+                    "on-error-container": "#ffdad6",
+                    "success-green": "#50FA7B",
+                    "on-secondary-fixed": "#041846",
+                    "primary-fixed-dim": "#d7baff",
+                    "on-primary": "#411478",
+                    "surface-charcoal": "#16161A",
+                    "secondary-fixed-dim": "#b5c5fc",
+                    "on-primary-fixed-variant": "#593090",
+                    "tertiary-fixed": "#e3e0f7",
+                    "on-secondary-container": "#a7b7ed",
+                    "on-secondary": "#1d2e5c",
+                    "secondary-container": "#374776",
+                    "tertiary-fixed-dim": "#c6c4da",
+                    "surface-dim": "#131316",
+                    "terminal-black": "#0B0B0D",
+                    "primary-container": "#bd93f9",
+                    "secondary": "#b5c5fc",
+                    "inverse-on-surface": "#303033",
+                    "outline": "#968e9c",
+                    "caution-amber": "#FFB86C",
+                    "on-error": "#690005",
+                    "error-container": "#93000a",
+                    "outline-variant": "#4a4451",
+                    "on-primary-container": "#4e2484",
+                    "primary": "#d7baff",
+                    "tertiary": "#c6c4da",
+                    "on-primary-fixed": "#290055",
+                    "inverse-primary": "#714aaa",
+                    "secondary-fixed": "#dbe1ff",
+                    "on-tertiary-fixed": "#1a1a2a",
+                    "surface-container": "#1f1f22",
+                    "surface-bright": "#39393c",
+                    "surface-tint": "#d7baff",
+                    "surface": "#131316",
+                    "primary-fixed": "#eddcff",
+                    "inverse-surface": "#e4e1e6",
+                    "surface-container-lowest": "#0e0e11",
+                    "surface-container-highest": "#353438",
+                    "surface-container-high": "#2a2a2d",
+                    "on-tertiary-fixed-variant": "#464557",
+                    "tertiary-container": "#a7a5ba",
+                    "surface-container-low": "#1b1b1e",
+                    "stroke-soft": "rgba(255, 255, 255, 0.08)",
+                    "on-tertiary": "#2f2f40",
+                    "error": "#ffb4ab",
+                    "on-surface-variant": "#ccc3d3",
+                    "on-surface": "#e4e1e6"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "stack-lg": "64px",
+                    "stack-md": "24px",
+                    "gutter": "24px",
+                    "container-max": "1280px",
+                    "margin-mobile": "16px",
+                    "stack-sm": "8px"
+            },
+            "fontFamily": {
+                    "headline-lg": ["Lexend"],
+                    "body-md": ["Inter"],
+                    "display-lg": ["Lexend"],
+                    "data-mono": ["JetBrains Mono"],
+                    "headline-lg-mobile": ["Lexend"],
+                    "label-caps": ["JetBrains Mono"]
+            },
+            "fontSize": {
+                    "headline-lg": ["32px", {"lineHeight": "40px", "fontWeight": "600"}],
+                    "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                    "display-lg": ["64px", {"lineHeight": "72px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                    "data-mono": ["14px", {"lineHeight": "20px", "fontWeight": "500"}],
+                    "headline-lg-mobile": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                    "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        .liquid-glass { 
+            background: linear-gradient(135deg, rgba(22, 22, 26, 0.7) 0%, rgba(19, 19, 22, 0.4) 100%); 
+            backdrop-filter: blur(16px); 
+            border: 1px solid rgba(255, 255, 255, 0.08); 
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        .terminal-cursor { 
+            display: inline-block; 
+            width: 8px; 
+            height: 16px; 
+            background: #a78bfa; 
+            animation: blink 1s step-end infinite; 
+            vertical-align: middle; 
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+        
+        /* Terminal Log Color System */
+        .log-bg { background-color: #0a0a0f; }
+        .log-bracket { color: #9d7dea; }
+        .log-ticker { color: #c4b5fd; font-weight: 700; }
+        .log-text { color: #6b7280; }
+        .log-buy { color: #ffffff; }
+        .log-sell { color: #ec4899; }
+        .log-status { color: #4ade80; }
+        .log-gate { color: #7c3aed; }
+        .log-profit { color: #ffffff; }
+        .log-loss { color: #ec4899; }
+
+        /* Performance Specific Enhancements */
+        .heat-map-cell { transition: all 0.2s ease; }
+        .heat-map-cell:hover { transform: scale(1.05); z-index: 10; }
+    </style>
+</head>
+<body class="bg-terminal-black text-on-surface font-body-md selection:bg-primary selection:text-on-primary !bg-[#0a0a0f]">
+<!-- Header -->
+<header class="bg-surface-charcoal/80 backdrop-blur-xl border-b border-stroke-soft sticky top-0 z-50">
+<div class="flex justify-between items-center w-full px-margin-mobile md:px-gutter max-w-container-max mx-auto h-16">
+<div class="font-display-lg text-headline-lg-mobile md:text-headline-lg tracking-tighter text-on-surface uppercase">
+            BlitheBot
+        </div>
+<nav class="hidden md:flex gap-gutter items-center">
+<a class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-colors" href="#">Strategy</a>
+<a class="font-label-caps text-label-caps text-primary border-b-2 border-primary pb-1" href="#">Performance</a>
+<a class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-colors" href="#">Timeline</a>
+<a class="font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-colors" href="#">Contact</a>
+</nav>
+<div class="flex gap-4 items-center">
+<button class="hidden md:block font-label-caps text-label-caps text-on-surface-variant hover:text-primary transition-colors">Docs</button>
+<button class="bg-primary text-on-primary font-label-caps text-label-caps px-4 py-2 rounded-lg hover:opacity-80 active:scale-95 transition-all">Institutional Access</button>
+</div>
+</div>
+</header>
+<main class="max-w-container-max mx-auto px-margin-mobile md:px-gutter py-stack-lg">
+<!-- Hero Performance Section -->
+<section class="mb-stack-lg">
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-6">
+<div class="space-y-2">
+<span class="font-data-mono text-label-caps text-primary">§ 01.00 / ENGINE_FIDELITY</span>
+<h1 class="font-display-lg text-headline-lg-mobile md:text-display-lg tracking-tight">Institutional <span class="text-primary-container">Attribution</span>.</h1>
+<p class="text-on-surface-variant max-w-xl">Verified results from 24-month walk-forward backtests across institutional equity universes. Validating the core Genetic Engine.</p>
+</div>
+<div class="liquid-glass p-4 rounded-xl flex items-center gap-4">
+<div class="w-12 h-12 bg-success-green/10 flex items-center justify-center rounded-lg">
+<span class="material-symbols-outlined log-status" data-icon="verified">verified</span>
+</div>
+<div>
+<div class="font-label-caps text-label-caps text-on-surface-variant">LOG_STATUS</div>
+<div class="font-data-mono log-status">LIVE_SYNC: ACTIVE <span class="terminal-cursor"></span></div>
+</div>
+</div>
+</div>
+</section>
+<!-- KPI Grid -->
+<section class="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-gutter mb-stack-md">
+<div class="liquid-glass p-6 rounded-xl">
+<div class="font-label-caps text-label-caps text-on-surface-variant mb-2">SHARPE RATIO</div>
+<div class="font-display-lg text-headline-lg text-primary">2.1</div>
+<div class="text-[10px] font-data-mono text-on-tertiary-fixed-variant mt-1">24M OUT-OF-SAMPLE (OOS)</div>
+</div>
+<div class="liquid-glass p-6 rounded-xl">
+<div class="font-label-caps text-label-caps text-on-surface-variant mb-2">MAX DRAWDOWN</div>
+<div class="font-display-lg text-headline-lg text-error">-4.2%</div>
+<div class="text-[10px] font-data-mono text-on-tertiary-fixed-variant mt-1">PEAK-TO-VALLEY TRACE</div>
+</div>
+<div class="liquid-glass p-6 rounded-xl">
+<div class="font-label-caps text-label-caps text-on-surface-variant mb-2">WIN RATE</div>
+<div class="font-display-lg text-headline-lg log-status">68%</div>
+<div class="text-[10px] font-data-mono text-on-tertiary-fixed-variant mt-1">VALIDATED OOS SAMPLES</div>
+</div>
+<div class="liquid-glass p-6 rounded-xl">
+<div class="font-label-caps text-label-caps text-on-surface-variant mb-2">KELLY SIZER</div>
+<div class="font-display-lg text-headline-lg text-secondary">0.5f</div>
+<div class="text-[10px] font-data-mono text-on-tertiary-fixed-variant mt-1">HALF-KELLY / 10% CAP</div>
+</div>
+</section>
+<!-- Main Equity Chart -->
+<section class="liquid-glass p-6 md:p-10 rounded-xl mb-stack-md relative overflow-hidden">
+<div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-4">
+<div>
+<h2 class="font-headline-lg text-headline-lg-mobile md:text-headline-lg">Growth of $100,000</h2>
+<p class="font-data-mono text-label-caps text-on-surface-variant">COMPOSITE EQUITY CURVE / 24-MONTH WALK-FORWARD TEST</p>
+</div>
+<div class="flex gap-2 bg-terminal-black p-1 border border-stroke-soft rounded-lg !bg-[#0a0a0f]">
+<button class="px-3 py-1 font-label-caps text-label-caps bg-surface-charcoal text-primary border border-primary/20 rounded">1Y</button>
+<button class="px-3 py-1 font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface">3Y</button>
+<button class="px-3 py-1 font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface">ALL</button>
+</div>
+</div>
+<div class="relative h-[300px] md:h-[450px] w-full">
+<svg class="w-full h-full preserve-3d overflow-visible" viewbox="0 0 1000 400">
+<g class="stroke-stroke-soft stroke-[1]">
+<line x1="0" x2="1000" y1="350" y2="350"></line>
+<line x1="0" x2="1000" y1="250" y2="250"></line>
+<line x1="0" x2="1000" y1="150" y2="150"></line>
+<line x1="0" x2="1000" y1="50" y2="50"></line>
+</g>
+<path d="M0,350 L100,340 L200,320 L300,335 L400,280 L500,290 L600,220 L700,180 L800,195 L900,120 L1000,80 L1000,400 L0,400 Z" fill="url(#chartGradient)" opacity="0.15"></path>
+<path d="M0,350 L100,340 L200,320 L300,335 L400,280 L500,290 L600,220 L700,180 L800,195 L900,120 L1000,80" fill="none" stroke="#d7baff" stroke-width="4"></path>
+<defs>
+<lineargradient id="chartGradient" x1="0" x2="0" y1="0" y2="1">
+<stop offset="0%" stop-color="#d7baff"></stop>
+<stop offset="100%" stop-color="#d7baff" stop-opacity="0"></stop>
+</lineargradient>
+</defs>
+<circle cx="1000" cy="80" fill="#d7baff" r="6"></circle>
+</svg>
+<div class="absolute bottom-0 w-full flex justify-between font-data-mono text-[10px] text-on-tertiary-fixed-variant pt-4 border-t border-stroke-soft">
+<span>Q1 2023</span>
+<span>Q2 2023</span>
+<span>Q3 2023</span>
+<span>Q4 2023</span>
+<span>Q1 2024 (PRESENT)</span>
+</div>
+</div>
+<div class="absolute top-20 right-10 liquid-glass p-4 rounded-lg hidden md:block">
+<div class="font-label-caps text-[10px] text-on-surface-variant">CURRENT VALUE</div>
+<div class="font-data-mono text-headline-lg text-primary">$214,842.10</div>
+<div class="font-data-mono text-xs log-status">+114.8% TOTAL</div>
+</div>
+</section>
+<!-- Two Column: Heatmap & Logs -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
+<!-- Heatmap -->
+<div class="lg:col-span-2 liquid-glass p-6 rounded-xl">
+<div class="flex justify-between items-center mb-6">
+<h3 class="font-headline-lg text-headline-lg-mobile">Monthly Heatmap (Validated OOS)</h3>
+<div class="flex items-center gap-2">
+<span class="w-3 h-3 bg-error rounded-sm"></span>
+<span class="text-[10px] font-data-mono text-on-surface-variant">Neg</span>
+<span class="w-3 h-3 log-status bg-success-green rounded-sm ml-2"></span>
+<span class="text-[10px] font-data-mono text-on-surface-variant">Pos</span>
+</div>
+</div>
+<div class="overflow-x-auto">
+<table class="w-full text-left font-data-mono text-xs border-collapse">
+<thead>
+<tr class="border-b border-stroke-soft">
+<th class="py-3 px-2 text-on-surface-variant">YEAR</th>
+<th class="py-3 px-2 text-on-surface-variant">JAN</th>
+<th class="py-3 px-2 text-on-surface-variant">FEB</th>
+<th class="py-3 px-2 text-on-surface-variant">MAR</th>
+<th class="py-3 px-2 text-on-surface-variant">APR</th>
+<th class="py-3 px-2 text-on-surface-variant">MAY</th>
+<th class="py-3 px-2 text-on-surface-variant">JUN</th>
+<th class="py-3 px-2 text-on-surface-variant">JUL</th>
+<th class="py-3 px-2 text-on-surface-variant">AUG</th>
+<th class="py-3 px-2 text-on-surface-variant">SEP</th>
+<th class="py-3 px-2 text-on-surface-variant">OCT</th>
+<th class="py-3 px-2 text-on-surface-variant">NOV</th>
+<th class="py-3 px-2 text-on-surface-variant">DEC</th>
+<th class="py-3 px-2 text-on-surface-variant font-bold text-primary">YTD</th>
+</tr>
+</thead>
+<tbody>
+<tr class="border-b border-stroke-soft/50">
+<td class="py-3 px-2 font-bold text-on-surface">2024</td>
+<td class="py-3 px-2 bg-success-green/20 log-status heat-map-cell">+4.2%</td>
+<td class="py-3 px-2 bg-success-green/40 log-status heat-map-cell">+6.8%</td>
+<td class="py-3 px-2 bg-success-green/10 log-status heat-map-cell">+1.2%</td>
+<td class="py-3 px-2 text-on-tertiary-fixed-variant opacity-30">-</td>
+<td class="py-3 px-2 text-on-tertiary-fixed-variant opacity-30">-</td>
+<td class="py-3 px-2 text-on-tertiary-fixed-variant opacity-30">-</td>
+<td class="py-3 px-2 text-on-tertiary-fixed-variant opacity-30">-</td>
+<td class="py-3 px-2 text-on-tertiary-fixed-variant opacity-30">-</td>
+<td class="py-3 px-2 text-on-tertiary-fixed-variant opacity-30">-</td>
+<td class="py-3 px-2 text-on-tertiary-fixed-variant opacity-30">-</td>
+<td class="py-3 px-2 text-on-tertiary-fixed-variant opacity-30">-</td>
+<td class="py-3 px-2 text-on-tertiary-fixed-variant opacity-30">-</td>
+<td class="py-3 px-2 font-bold text-primary">+12.2%</td>
+</tr>
+<tr class="border-b border-stroke-soft/50">
+<td class="py-3 px-2 font-bold text-on-surface">2023</td>
+<td class="py-3 px-2 bg-success-green/20 log-status heat-map-cell">+2.1%</td>
+<td class="py-3 px-2 bg-error/20 text-error heat-map-cell">-1.4%</td>
+<td class="py-3 px-2 bg-success-green/50 log-status heat-map-cell">+9.2%</td>
+<td class="py-3 px-2 bg-success-green/10 log-status heat-map-cell">+0.8%</td>
+<td class="py-3 px-2 bg-error/10 text-error heat-map-cell">-0.5%</td>
+<td class="py-3 px-2 bg-success-green/30 log-status heat-map-cell">+4.5%</td>
+<td class="py-3 px-2 bg-success-green/60 log-status heat-map-cell">+11.2%</td>
+<td class="py-3 px-2 bg-error/30 text-error heat-map-cell">-2.1%</td>
+<td class="py-3 px-2 bg-success-green/40 log-status heat-map-cell">+7.4%</td>
+<td class="py-3 px-2 bg-success-green/20 log-status heat-map-cell">+3.8%</td>
+<td class="py-3 px-2 bg-success-green/30 log-status heat-map-cell">+5.1%</td>
+<td class="py-3 px-2 bg-success-green/40 log-status heat-map-cell">+8.0%</td>
+<td class="py-3 px-2 font-bold text-primary">+64.2%</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<!-- Terminal Logs -->
+<div class="liquid-glass rounded-xl overflow-hidden flex flex-col h-full border border-stroke-soft">
+<div class="bg-surface-container p-4 border-b border-stroke-soft flex items-center justify-between">
+<span class="font-label-caps text-label-caps">Risk API Logs</span>
+<div class="flex gap-1.5">
+<div class="w-2.5 h-2.5 rounded-full bg-error"></div>
+<div class="w-2.5 h-2.5 rounded-full bg-caution-amber"></div>
+<div class="w-2.5 h-2.5 rounded-full bg-success-green"></div>
+</div>
+</div>
+<div class="p-4 log-bg flex-1 font-data-mono text-[11px] leading-relaxed overflow-y-auto max-h-[400px]">
+<div class="mb-2"><span class="log-bracket">[2024-03-14 09:30:11]</span> <span class="log-gate">GATE-01</span>: <span class="log-text">Daily loss limit check passed.</span></div>
+<div class="mb-2"><span class="log-bracket">[2024-03-14 09:30:12]</span> <span class="log-gate">GATE-05</span>: <span class="log-text">Correlation guard passed (p ≤ 0.75).</span></div>
+<div class="mb-2"><span class="log-bracket">[2024-03-14 09:30:15]</span> <span class="log-gate">GATE-07</span>: <span class="log-text">FINRA short interest veto: ratio &lt; 65%.</span></div>
+<div class="mb-2"><span class="log-bracket">[ORDER]</span> <span class="log-ticker">JPM</span> <span class="log-buy">↑ BUY</span> <span class="log-text">Market Order Executed.</span></div>
+<div class="mb-2"><span class="log-bracket">[EXIT]</span> <span class="log-ticker">SPY</span> <span class="log-sell">↓ SELL</span> <span class="log-text">at 512.40.</span></div>
+<div class="mb-2"><span class="log-bracket">[P&amp;L]</span> <span class="log-ticker">COST</span> <span class="log-profit">+$40.80</span> <span class="log-text">settled.</span></div>
+<div class="mb-2"><span class="log-bracket">[P&amp;L]</span> <span class="log-ticker">BRK.B</span> <span class="log-loss">-$25.60</span> <span class="log-text">settled.</span></div>
+<div class="mb-2"><span class="log-bracket">[2024-03-14 09:30:22]</span> <span class="log-gate">GATE-11</span>: <span class="log-text">Strategy circuit breaker check: </span><span class="log-status">STABLE</span>.</div>
+<div class="mb-2 mt-4 border-t border-stroke-soft pt-2"><span class="log-bracket">[2024-03-14 09:31:10]</span> <span class="log-gate">EXECUTE</span>: <span class="log-text">Bracket order submitted for </span><span class="log-ticker">V</span>.</div>
+<div class="opacity-50"><span class="log-text">&gt; Waiting for next telemetry packet...</span> <span class="terminal-cursor"></span></div>
+</div>
+<div class="p-4 border-t border-stroke-soft bg-surface-charcoal">
+<button class="w-full bg-surface-container hover:bg-surface-variant border border-stroke-soft py-2 font-label-caps text-[10px] rounded transition-all">DOWNLOAD FULL AUDIT (PDF)</button>
+</div>
+</div>
+</div>
+<!-- CTA Section -->
+<section class="mt-stack-lg p-10 liquid-glass rounded-xl flex flex-col md:flex-row items-center gap-10">
+<div class="flex-1">
+<h3 class="font-headline-lg text-headline-lg mb-4">Deploy the Quant Engine</h3>
+<p class="text-on-surface-variant mb-6">BlitheBot's institutional tier provides direct API access, custom Hurst analysis, and Kelly-weighted execution. Position sizes are dynamically optimized using a half-Kelly approach.</p>
+<div class="flex flex-wrap gap-4">
+<button class="bg-primary text-on-primary font-label-caps text-label-caps px-8 py-4 rounded hover:opacity-90 transition-all">Start Onboarding</button>
+<button class="border border-stroke-soft text-on-surface font-label-caps text-label-caps px-8 py-4 rounded hover:bg-surface-charcoal transition-all">Technical Specs</button>
+</div>
+</div>
+<div class="w-full md:w-1/3">
+<div class="relative rounded-lg overflow-hidden border border-stroke-soft aspect-video">
+<img alt="Quantitative Trading Interface" class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB_1dWTn7ODzTj9vzyiGm1eZ85bOhroNstXzrDnu8Q8SImQXgX2om6OJhK3ed7VJUvjrzzF3jIBwobjvY1IpLTQJfC7DgEQc6R9dOSvx8QRu_LMLgkyhxIiYTumFiLVo93Fq0HSPiAP887aLnvbsN-Wf988Cqapumt1zWOYdAON0H7xQKA_g-58q5K-1fZhqgnwS91DjOXof2bcgI2aTyP5IhOVQWujWEYwjYgZ1-wYvZ2W0OFoOT3lc-205tXsG892pKHGlrWGT5_q"/>
+<div class="absolute inset-0 bg-gradient-to-t from-terminal-black/80 to-transparent"></div>
+</div>
+</div>
+</section>
+</main>
+<footer class="bg-terminal-black border-t border-stroke-soft !bg-[#0a0a0f]">
+<div class="grid grid-cols-1 md:grid-cols-4 gap-gutter py-stack-lg px-margin-mobile max-w-container-max mx-auto">
+<div class="space-y-4">
+<div class="font-label-caps text-label-caps text-on-surface">BLITHEBOT QUANT</div>
+<p class="font-data-mono text-[10px] text-on-tertiary-fixed-variant leading-relaxed">
+                Systematic trading involves substantial risk. All metrics validated on out-of-sample data.
+            </p>
+</div>
+<div>
+<div class="font-label-caps text-label-caps text-secondary mb-4">RESOURCES</div>
+<ul class="space-y-2">
+<li><a class="font-data-mono text-data-mono text-on-tertiary-fixed-variant hover:text-primary transition-colors" href="#">Genetic Engine Docs</a></li>
+<li><a class="font-data-mono text-data-mono text-on-tertiary-fixed-variant hover:text-primary transition-colors" href="#">Risk API</a></li>
+</ul>
+</div>
+<div>
+<div class="font-label-caps text-label-caps text-secondary mb-4">SYSTEM</div>
+<ul class="space-y-2">
+<li><a class="font-data-mono text-data-mono text-on-tertiary-fixed-variant hover:text-primary transition-colors" href="#">System Logs</a></li>
+<li><a class="font-data-mono text-data-mono text-on-tertiary-fixed-variant hover:text-primary transition-colors" href="#">Hurst Analysis</a></li>
+</ul>
+</div>
+<div>
+<div class="font-label-caps text-label-caps text-secondary mb-4">LEGAL</div>
+<div class="font-data-mono text-data-mono text-on-tertiary-fixed-variant">
+                REV/DOC: 882.Q4<br/>
+                © 2024 BLITHEBOT ENGINE.
+            </div>
+</div>
+</div>
+</footer>
+<!-- Mobile Nav -->
+<nav class="md:hidden fixed bottom-0 left-0 right-0 liquid-glass border-t border-stroke-soft flex justify-around py-3 z-50">
+<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
+<span class="material-symbols-outlined" data-icon="dashboard">dashboard</span>
+<span class="text-[10px] font-label-caps">Home</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-primary" href="#">
+<span class="material-symbols-outlined" data-icon="monitoring" style="font-variation-settings: 'FILL' 1;">monitoring</span>
+<span class="text-[10px] font-label-caps">Stats</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
+<span class="material-symbols-outlined" data-icon="code">code</span>
+<span class="text-[10px] font-label-caps">API</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-on-surface-variant" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span class="text-[10px] font-label-caps">Config</span>
+</a>
+</nav>
+<script>
+    document.querySelectorAll('button, a').forEach(el => {
+        el.addEventListener('mousedown', () => el.style.transform = 'scale(0.98)');
+        el.addEventListener('mouseup', () => el.style.transform = 'scale(1)');
+    });
+</script>
+</body></html>

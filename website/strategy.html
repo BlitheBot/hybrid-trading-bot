@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Strategy | BlitheBot Quantitative Engine</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&amp;family=JetBrains+Mono:wght@400;500;700&amp;family=Lexend:wght@600;700&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-tertiary-container": "#3b3b4c",
+                        "background": "#131316",
+                        "on-secondary-fixed-variant": "#354574",
+                        "on-background": "#e4e1e6",
+                        "surface-variant": "#353438",
+                        "on-error-container": "#ffdad6",
+                        "success-green": "#50FA7B",
+                        "on-secondary-fixed": "#041846",
+                        "primary-fixed-dim": "#d7baff",
+                        "on-primary": "#411478",
+                        "surface-charcoal": "#16161A",
+                        "secondary-fixed-dim": "#b5c5fc",
+                        "on-primary-fixed-variant": "#593090",
+                        "tertiary-fixed": "#e3e0f7",
+                        "on-secondary-container": "#a7b7ed",
+                        "on-secondary": "#1d2e5c",
+                        "secondary-container": "#374776",
+                        "tertiary-fixed-dim": "#c6c4da",
+                        "surface-dim": "#131316",
+                        "terminal-black": "#0B0B0D",
+                        "primary-container": "#bd93f9",
+                        "secondary": "#b5c5fc",
+                        "inverse-on-surface": "#303033",
+                        "outline": "#968e9c",
+                        "caution-amber": "#FFB86C",
+                        "on-error": "#690005",
+                        "error-container": "#93000a",
+                        "outline-variant": "#4a4451",
+                        "on-primary-container": "#4e2484",
+                        "primary": "#d7baff",
+                        "tertiary": "#c6c4da",
+                        "on-primary-fixed": "#290055",
+                        "inverse-primary": "#714aaa",
+                        "secondary-fixed": "#dbe1ff",
+                        "on-tertiary-fixed": "#1a1a2a",
+                        "surface-container": "#1f1f22",
+                        "surface-bright": "#39393c",
+                        "surface-tint": "#d7baff",
+                        "surface": "#131316",
+                        "primary-fixed": "#eddcff",
+                        "inverse-surface": "#e4e1e6",
+                        "surface-container-lowest": "#0e0e11",
+                        "surface-container-highest": "#353438",
+                        "surface-container-high": "#2a2a2d",
+                        "on-tertiary-fixed-variant": "#464557",
+                        "tertiary-container": "#a7a5ba",
+                        "surface-container-low": "#1b1b1e",
+                        "stroke-soft": "rgba(255, 255, 255, 0.08)",
+                        "on-tertiary": "#2f2f40",
+                        "error": "#ffb4ab",
+                        "on-surface-variant": "#ccc3d3",
+                        "on-surface": "#e4e1e6"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "stack-lg": "64px",
+                        "stack-md": "24px",
+                        "gutter": "24px",
+                        "container-max": "1280px",
+                        "margin-mobile": "16px",
+                        "stack-sm": "8px"
+                    },
+                    "fontFamily": {
+                        "headline-lg": ["Lexend"],
+                        "body-md": ["Inter"],
+                        "display-lg": ["Lexend"],
+                        "data-mono": ["JetBrains Mono"],
+                        "headline-lg-mobile": ["Lexend"],
+                        "label-caps": ["JetBrains Mono"]
+                    },
+                    "fontSize": {
+                        "headline-lg": ["32px", {"lineHeight": "40px", "fontWeight": "600"}],
+                        "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                        "display-lg": ["64px", {"lineHeight": "72px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "data-mono": ["14px", {"lineHeight": "20px", "fontWeight": "500"}],
+                        "headline-lg-mobile": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                        "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700"}]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .liquid-glass {
+            background: linear-gradient(135deg, rgba(31, 31, 34, 0.4) 0%, rgba(19, 19, 22, 0.6) 100%);
+            backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        .terminal-panel {
+            background: rgba(11, 11, 13, 0.95);
+            border: 1px solid rgba(215, 186, 255, 0.1);
+        }
+        .liquid-bg {
+            background: radial-gradient(circle at 0% 0%, rgba(215, 186, 255, 0.03) 0%, transparent 50%),
+                        radial-gradient(circle at 100% 100%, rgba(181, 197, 252, 0.03) 0%, transparent 50%);
+        }
+        .code-accent {
+            color: #d7baff; /* primary */
+        }
+        .code-success {
+            color: #50FA7B; /* success-green */
+        }
+        .code-dim {
+            color: #4a4451; /* outline-variant */
+        }
+        .code-label {
+            color: #ccc3d3; /* on-surface-variant */
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface font-body-md selection:bg-primary/30 overflow-x-hidden">
+<nav class="bg-surface-container-lowest/80 backdrop-blur-xl border-b border-stroke-soft fixed top-0 w-full z-50">
+<div class="flex justify-between items-center w-full px-margin-mobile md:px-gutter max-w-container-max mx-auto h-16">
+<div class="font-display-lg text-headline-lg-mobile tracking-tighter text-on-surface uppercase">
+            BlitheBot
+        </div>
+<div class="hidden md:flex items-center gap-8 font-label-caps text-label-caps uppercase">
+<a class="text-primary font-bold border-b-2 border-primary pb-1" href="#">Strategy</a>
+<a class="text-on-surface-variant hover:text-primary transition-colors" href="#">Performance</a>
+<a class="text-on-surface-variant hover:text-primary transition-colors" href="#">Timeline</a>
+<a class="text-on-surface-variant hover:text-primary transition-colors" href="#">Contact</a>
+</div>
+<div class="flex items-center gap-4">
+<button class="hidden md:block font-label-caps text-label-caps px-4 py-2 border border-outline-variant text-on-surface hover:border-primary transition-all uppercase">Docs</button>
+<button class="bg-primary text-on-primary font-label-caps text-label-caps px-6 py-2 hover:brightness-110 active:scale-95 transition-all uppercase">Institutional Access</button>
+</div>
+</div>
+</nav>
+<main class="liquid-bg pt-16">
+<!-- Hero -->
+<header class="max-w-container-max mx-auto px-margin-mobile md:px-gutter py-24">
+<div class="flex flex-col gap-6">
+<span class="font-label-caps text-label-caps text-primary uppercase tracking-[0.2em]">§ 01.00 CORE METHODOLOGY</span>
+<h1 class="font-display-lg text-headline-lg-mobile md:text-display-lg max-w-4xl text-on-surface leading-tight">
+                Multi-Horizon Signal Fusion
+            </h1>
+<p class="text-on-surface-variant max-w-2xl text-body-md leading-relaxed">
+                Our engine synthesizes fractal market structures across 19 concurrent loops. BlitheBot operates at the intersection of statistical rigor and Pearson r concentration filtering.
+            </p>
+</div>
+</header>
+<!-- Strategy Layers -->
+<section class="max-w-container-max mx-auto px-margin-mobile md:px-gutter pb-stack-lg">
+<div class="grid grid-cols-1 md:grid-cols-12 gap-gutter">
+<!-- Adaptive Kalman -->
+<div class="md:col-span-8 liquid-glass p-8 flex flex-col gap-8">
+<div class="flex justify-between items-start">
+<div>
+<span class="font-label-caps text-label-caps text-primary/60 mb-2 block">§ 01.01 STATE ESTIMATION</span>
+<h3 class="font-headline-lg text-headline-lg-mobile text-on-surface">Adaptive Kalman Matrix</h3>
+</div>
+<span class="material-symbols-outlined text-primary text-4xl" data-icon="filter_center_focus">filter_center_focus</span>
+</div>
+<p class="text-on-surface-variant text-body-md max-w-xl">
+                    Recursive state estimation filtering noise from high-frequency pricing. Tracks latent trend velocity and Pearson r concentration across cross-asset correlations.
+                </p>
+<div class="terminal-panel p-6 font-data-mono text-data-mono overflow-x-auto">
+<div class="flex justify-between items-center mb-4 border-b border-outline-variant pb-2">
+<span class="code-success uppercase">KALMAN_PREDICT_CORRECT</span>
+<span class="code-dim">v4.0.1_KF</span>
+</div>
+<div class="space-y-2 whitespace-nowrap">
+<div class="flex justify-between gap-4"><span class="code-label">x_hat[k|k-1] = A * x_hat[k-1|k-1] + B * u[k]</span> <span class="code-accent">[PREDICT]</span></div>
+<div class="flex justify-between gap-4"><span class="code-label">P[k|k-1] = A * P[k-1|k-1] * A.T + Q</span> <span class="code-accent">[UNCERTAINTY]</span></div>
+<div class="flex justify-between gap-4"><span class="code-label">K[k] = P[k|k-1] * H.T * inv(H * P[k|k-1] * H.T + R)</span> <span class="code-success">[GAIN_SYNC]</span></div>
+</div>
+</div>
+</div>
+<!-- Persistence -->
+<div class="md:col-span-4 liquid-glass p-8 flex flex-col gap-8 border-l-4 border-l-primary">
+<div>
+<span class="font-label-caps text-label-caps text-primary/60 mb-2 block">§ 01.02 PERSISTENCE</span>
+<h3 class="font-headline-lg text-headline-lg-mobile text-on-surface">Hurst Exponent</h3>
+</div>
+<p class="text-on-surface-variant text-body-md">
+                    Discriminating between mean-reverting (H &lt; 0.5) and trending (H &gt; 0.5) regimes via R/S Analysis and <b>Ornstein-Uhlenbeck</b> decay.
+                </p>
+<div class="mt-auto terminal-panel p-4 font-data-mono text-[12px]">
+<span class="code-accent block mb-2">REGIME_METRICS:</span>
+<div class="space-y-1">
+<div class="flex justify-between"><span class="code-label">Hurst_Exp:</span> <span class="text-on-surface">0.584</span></div>
+<div class="flex justify-between"><span class="code-label">OU_theta:</span> <span class="text-on-surface">0.142</span></div>
+<div class="flex justify-between border-t border-outline-variant mt-2 pt-2"><span class="code-label">STATE:</span> <span class="code-success">PERSISTENT</span></div>
+</div>
+</div>
+</div>
+<!-- Strategy Architecture (Alignment with GitHub: Swing, SMB, Discovery) -->
+<div class="md:col-span-12 liquid-glass p-8 grid md:grid-cols-2 gap-12 items-center">
+<div class="flex flex-col gap-6">
+<span class="font-label-caps text-label-caps text-primary/60">§ 01.03 SYSTEM ARCHITECTURE</span>
+<h3 class="font-headline-lg text-headline-lg-mobile text-on-surface">The Triad Engine</h3>
+<div class="space-y-4">
+<div class="flex gap-4">
+<div class="w-1.5 h-1.5 rounded-full bg-primary mt-2"></div>
+<div>
+<h4 class="text-on-surface font-label-caps text-label-caps uppercase">Swing Engine</h4>
+<p class="text-on-surface-variant text-sm">Longer-term regime tracking with volatility-adjusted exit gates.</p>
+</div>
+</div>
+<div class="flex gap-4">
+<div class="w-1.5 h-1.5 rounded-full bg-primary mt-2"></div>
+<div>
+<h4 class="text-on-surface font-label-caps text-label-caps uppercase">SMB Matrix</h4>
+<p class="text-on-surface-variant text-sm">Small-minus-Big factor modeling for idiosyncratic alpha extraction.</p>
+</div>
+</div>
+<div class="flex gap-4">
+<div class="w-1.5 h-1.5 rounded-full bg-primary mt-2"></div>
+<div>
+<h4 class="text-on-surface font-label-caps text-label-caps uppercase">Discovery Loop</h4>
+<p class="text-on-surface-variant text-sm">Genetic optimization of novel signal combinations (ExpressionNodes).</p>
+</div>
+</div>
+</div>
+</div>
+<div class="terminal-panel h-64 p-6 font-data-mono text-[11px] relative overflow-hidden">
+<div class="space-y-1" id="terminal-logs">
+<!-- Static Logs (No animation as requested) -->
+<p><span class="code-dim">[09:41:22]</span> <span class="code-label">&gt; INITIALIZING Kelly Sizing Engine...</span></p>
+<p><span class="code-dim">[09:41:23]</span> <span class="code-label">&gt; Fetching Pearson r concentration (n=40)...</span></p>
+<p><span class="code-dim">[09:41:23]</span> <span class="code-label">&gt; Odds Ratio Calculation: 1.62:1</span></p>
+<p><span class="code-dim">[09:41:24]</span> <span class="code-label">&gt; Suggested Fraction: 0.285 (F-Kelly)</span></p>
+<p><span class="code-dim">[09:41:25]</span> <span class="code-label">&gt; GATE 1: Daily loss limits</span> <span class="code-success">[PASS]</span></p>
+<p><span class="code-dim">[09:41:26]</span> <span class="code-label">&gt; GATE 4: Position occupancy</span> <span class="code-success">[PASS]</span></p>
+<p><span class="code-dim">[09:41:27]</span> <span class="code-label">&gt; GATE 6: Correlation Guard (ρ ≤ 0.75)</span> <span class="code-success">[PASS]</span></p>
+<p><span class="code-dim">[09:41:28]</span> <span class="code-label">&gt; DeepSeek Bull/Bear Debate Verdict:</span> <span class="code-accent">PROCEED (0.82)</span></p>
+<p><span class="code-dim">[09:41:29]</span> <span class="code-success">&gt; SUBMITTING BRACKET ORDER TO ALPACA...</span></p>
+<p><span class="code-dim">[09:41:30]</span> <span class="code-label">&gt; OK. Order ID: fill_82b2f190</span></p>
+</div>
+<div class="absolute inset-0 bg-gradient-to-t from-terminal-black via-transparent to-transparent pointer-events-none"></div>
+</div>
+</div>
+</div>
+</section>
+<!-- Genetic Engine -->
+<section class="max-w-container-max mx-auto px-margin-mobile md:px-gutter py-stack-lg border-t border-stroke-soft">
+<div class="grid md:grid-cols-2 gap-16 items-center">
+<div class="relative aspect-square liquid-glass p-4">
+<img alt="Quantitative processor circuits" class="w-full h-full object-cover opacity-60 mix-blend-luminosity" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAxTCrKlQCw_pdS5bCH5bvEJgwZ3NuMFWAJYD-h6Fdzp4404oBPIuYLzOeWugp6pHkvBQ2znFXI_usTHcBkagjP359EVYKAi-Gbmr8Tn0FZa7pvQrRBpNQBZ8_ssgHKx89NCTGYnTNEo4jbaRwbzU4jv464qs7FLKfZ-wHZnk2DsB77tJXxlzFp6WFr8nBj5xeXgy7C261pbxZX8vu177nJW0wlu21SHisAmdZRSV1X8bNbDk4_wyVMj_BcgZRp2K8nm2LVvM55kjW5"/>
+<div class="absolute inset-0 bg-primary/10 mix-blend-overlay"></div>
+</div>
+<div class="flex flex-col gap-8">
+<span class="font-label-caps text-label-caps text-primary uppercase tracking-[0.2em]">§ 02.00 SYSTEMATIC EVOLUTION</span>
+<h2 class="font-headline-lg text-on-surface">Genetic Indicator Engine</h2>
+<div class="space-y-8">
+<div class="flex gap-6">
+<div class="mt-1 flex-shrink-0"><span class="material-symbols-outlined text-secondary text-3xl" data-icon="account_tree">account_tree</span></div>
+<div>
+<h4 class="font-label-caps text-label-caps text-on-surface mb-2 uppercase tracking-wide">ExpressionNode Trees</h4>
+<p class="text-on-surface-variant text-body-md leading-relaxed">Evolving novel indicator expressions from a library of price transforms and rolling stats. 50-member populations, 20 generations of mutation and crossover.</p>
+</div>
+</div>
+<div class="flex gap-6">
+<div class="mt-1 flex-shrink-0"><span class="material-symbols-outlined text-secondary text-3xl" data-icon="avg_pace">avg_pace</span></div>
+<div>
+<h4 class="font-label-caps text-label-caps text-on-surface mb-2 uppercase tracking-wide">Walk-Forward Graduation</h4>
+<p class="text-on-surface-variant text-body-md leading-relaxed">Only candidates achieving a mean Information Coefficient (IC) &gt; 0.05 across 4-month walk-forward folds graduate to production consideration.</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- CTA -->
+<section class="max-w-container-max mx-auto px-margin-mobile md:px-gutter py-stack-lg">
+<div class="liquid-glass p-12 text-center flex flex-col items-center gap-8 relative overflow-hidden">
+<div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary via-secondary to-primary opacity-50"></div>
+<h2 class="font-headline-lg text-on-surface max-w-xl">Request Access to the Full Whitepaper &amp; Log Access</h2>
+<p class="text-on-surface-variant max-w-md">Our documentation includes full Hurst Analysis datasets and Kalman state transition matrices for review by institutional risk committees.</p>
+<div class="flex flex-col md:flex-row gap-4">
+<button class="bg-primary text-on-primary font-label-caps text-label-caps px-8 py-4 hover:brightness-110 transition-all uppercase flex items-center gap-2">
+                    Institutional Onboarding <span class="material-symbols-outlined" data-icon="arrow_forward">arrow_forward</span>
+</button>
+<button class="border border-outline-variant hover:border-primary text-on-surface font-label-caps text-label-caps px-8 py-4 transition-all uppercase">
+                    Download Tech Specs
+                </button>
+</div>
+</div>
+</section>
+</main>
+<footer class="bg-surface-container-lowest border-t border-stroke-soft mt-12">
+<div class="grid grid-cols-1 md:grid-cols-4 gap-gutter py-12 px-margin-mobile max-w-container-max mx-auto font-data-mono text-data-mono">
+<div class="flex flex-col gap-4">
+<span class="font-label-caps text-label-caps text-on-surface uppercase">BLITHEBOT</span>
+<p class="text-on-tertiary-fixed-variant leading-relaxed text-sm">
+                © 2024 BLITHEBOT QUANTITATIVE ENGINE. ALL RIGHTS RESERVED. REV/DOC: 882.Q4
+            </p>
+</div>
+<div class="flex flex-col gap-4">
+<span class="text-on-surface-variant opacity-50 uppercase text-xs">Infrastructure</span>
+<nav class="flex flex-col gap-2">
+<a class="text-on-tertiary-fixed-variant hover:text-success-green transition-colors" href="#">System Logs</a>
+<a class="text-on-tertiary-fixed-variant hover:text-success-green transition-colors" href="#">Genetic Engine Docs</a>
+<a class="text-on-tertiary-fixed-variant hover:text-success-green transition-colors" href="#">Hurst Analysis</a>
+<a class="text-on-tertiary-fixed-variant hover:text-success-green transition-colors" href="#">Risk API</a>
+</nav>
+</div>
+<div class="flex flex-col gap-4">
+<span class="text-on-surface-variant opacity-50 uppercase text-xs">Legal</span>
+<nav class="flex flex-col gap-2">
+<a class="text-on-tertiary-fixed-variant hover:text-success-green transition-colors" href="#">Privacy Policy</a>
+<a class="text-on-tertiary-fixed-variant hover:text-success-green transition-colors" href="#">Risk Disclosure</a>
+<a class="text-on-tertiary-fixed-variant hover:text-success-green transition-colors" href="#">Institutional Terms</a>
+</nav>
+</div>
+<div class="flex flex-col gap-4 items-start md:items-end">
+<span class="text-success-green flex items-center gap-2 text-sm uppercase">
+<span class="w-2 h-2 rounded-full bg-success-green"></span>
+                SYSTEMS_ONLINE_LHR_01
+            </span>
+<span class="text-on-tertiary-fixed-variant text-xs">NODE_LATENCY: 0.12ms</span>
+</div>
+</div>
+</footer>
+</body></html>

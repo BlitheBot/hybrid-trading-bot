@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Alpha Research &amp; Edge | BlitheBot Quantitative Engine</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500;700&amp;family=Lexend:wght@600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body {
+            background-color: #131316;
+            color: #e4e1e6;
+            font-family: 'Inter', sans-serif;
+        }
+        .liquid-glass {
+            background: rgba(31, 31, 34, 0.4);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: inset 0 0 20px rgba(255, 255, 255, 0.02);
+        }
+        .terminal-bg {
+            background-color: #0B0B0D !important;
+        }
+        .scanline {
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(to right, transparent, #d7baff, transparent);
+            position: absolute;
+            animation: scan 4s linear infinite;
+            opacity: 0.15;
+            pointer-events: none;
+        }
+        @keyframes scan {
+            0% { top: 0; }
+            100% { top: 100%; }
+        }
+        .blink-cursor {
+            background-color: #d7baff !important;
+            display: inline-block;
+            width: 8px;
+            height: 16px;
+            animation: blink 1s step-end infinite;
+            vertical-align: middle;
+        }
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+        .morph-bg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            overflow: hidden;
+            z-index: -1;
+            opacity: 0.2;
+        }
+        .geometric-shape {
+            position: absolute;
+            filter: blur(80px);
+            border-radius: 50%;
+            background: linear-gradient(45deg, #d7baff, #714aaa);
+            animation: morph 20s infinite alternate;
+        }
+        @keyframes morph {
+            0% { transform: translate(0, 0) scale(1); }
+            50% { transform: translate(100px, 50px) scale(1.2); }
+            100% { transform: translate(-50px, 100px) scale(0.8); }
+        }
+    </style>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-tertiary-container": "#3b3b4c",
+                        "background": "#131316",
+                        "on-secondary-fixed-variant": "#354574",
+                        "on-background": "#e4e1e6",
+                        "surface-variant": "#353438",
+                        "on-error-container": "#ffdad6",
+                        "success-green": "#50FA7B",
+                        "on-secondary-fixed": "#041846",
+                        "primary-fixed-dim": "#d7baff",
+                        "on-primary": "#411478",
+                        "surface-charcoal": "#16161A",
+                        "secondary-fixed-dim": "#b5c5fc",
+                        "on-primary-fixed-variant": "#593090",
+                        "tertiary-fixed": "#e3e0f7",
+                        "on-secondary-container": "#a7b7ed",
+                        "on-secondary": "#1d2e5c",
+                        "secondary-container": "#374776",
+                        "tertiary-fixed-dim": "#c6c4da",
+                        "surface-dim": "#131316",
+                        "terminal-black": "#0B0B0D",
+                        "primary-container": "#bd93f9",
+                        "secondary": "#b5c5fc",
+                        "inverse-on-surface": "#303033",
+                        "outline": "#968e9c",
+                        "caution-amber": "#FFB86C",
+                        "on-error": "#690005",
+                        "error-container": "#93000a",
+                        "outline-variant": "#4a4451",
+                        "on-primary-container": "#4e2484",
+                        "primary": "#d7baff",
+                        "tertiary": "#c6c4da",
+                        "on-primary-fixed": "#290055",
+                        "inverse-primary": "#714aaa",
+                        "secondary-fixed": "#dbe1ff",
+                        "on-tertiary-fixed": "#1a1a2a",
+                        "surface-container": "#1f1f22",
+                        "surface-bright": "#39393c",
+                        "surface-tint": "#d7baff",
+                        "surface": "#131316",
+                        "primary-fixed": "#eddcff",
+                        "inverse-surface": "#e4e1e6",
+                        "surface-container-lowest": "#0e0e11",
+                        "surface-container-highest": "#353438",
+                        "surface-container-high": "#2a2a2d",
+                        "on-tertiary-fixed-variant": "#464557",
+                        "tertiary-container": "#a7a5ba",
+                        "surface-container-low": "#1b1b1e",
+                        "stroke-soft": "rgba(255, 255, 255, 0.08)",
+                        "on-tertiary": "#2f2f40",
+                        "error": "#ffb4ab",
+                        "on-surface-variant": "#ccc3d3",
+                        "on-surface": "#e4e1e6"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "stack-lg": "64px",
+                        "stack-md": "24px",
+                        "gutter": "24px",
+                        "container-max": "1280px",
+                        "margin-mobile": "16px",
+                        "stack-sm": "8px"
+                    },
+                    "fontFamily": {
+                        "headline-lg": ["Lexend", "sans-serif"],
+                        "display-lg": ["Lexend", "sans-serif"],
+                        "label-caps": ["JetBrains Mono", "monospace"],
+                        "data-mono": ["JetBrains Mono", "monospace"]
+                    },
+                    "fontSize": {
+                        "headline-lg": ["32px", {"lineHeight": "40px", "fontWeight": "600"}],
+                        "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
+                        "display-lg": ["64px", {"lineHeight": "72px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                        "data-mono": ["14px", {"lineHeight": "20px", "fontWeight": "500"}],
+                        "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700"}]
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-surface text-on-surface antialiased overflow-x-hidden">
+<!-- Morphing Background -->
+<div class="morph-bg">
+<div class="geometric-shape w-[600px] h-[600px] -top-48 -left-48"></div>
+<div class="geometric-shape w-[500px] h-[500px] top-1/2 -right-24" style="animation-delay: -5s; background: linear-gradient(45deg, #714aaa, #d7baff);"></div>
+</div>
+<!-- TopNavBar -->
+<nav class="bg-surface-charcoal/40 backdrop-blur-xl border-b border-stroke-soft sticky top-0 z-50">
+<div class="flex justify-between items-center w-full px-margin-mobile md:px-gutter max-w-container-max mx-auto h-16">
+<div class="font-display-lg text-2xl tracking-tighter text-on-surface uppercase flex items-center gap-2">
+<span class="w-2 h-2 bg-primary rounded-full animate-pulse"></span>
+                BlitheBot
+            </div>
+<div class="hidden md:flex items-center gap-8">
+<a class="font-label-caps text-xs text-on-surface-variant hover:text-primary transition-colors" href="#">Strategy</a>
+<a class="font-label-caps text-xs text-on-surface-variant hover:text-primary transition-colors" href="#">Performance</a>
+<a class="font-label-caps text-xs text-primary border-b-2 border-primary pb-1" href="#">Research</a>
+<a class="font-label-caps text-xs text-on-surface-variant hover:text-primary transition-colors" href="#">Timeline</a>
+<a class="font-label-caps text-xs text-on-surface-variant hover:text-primary transition-colors" href="#">Contact</a>
+</div>
+<div class="flex gap-4">
+<button class="hidden lg:block font-label-caps text-xs text-on-surface-variant border border-stroke-soft px-4 py-2 hover:bg-white/5 transition-all">Docs</button>
+<button class="bg-primary text-on-primary font-label-caps text-xs px-4 py-2 rounded hover:opacity-90 active:scale-95 transition-all font-bold">Institutional Access</button>
+</div>
+</div>
+</nav>
+<main class="max-w-container-max mx-auto px-margin-mobile md:px-gutter">
+<!-- Hero Section -->
+<section class="py-stack-lg border-b border-stroke-soft">
+<div class="grid grid-cols-1 md:grid-cols-12 gap-gutter items-center">
+<div class="md:col-span-8">
+<p class="font-label-caps text-xs text-primary mb-4 tracking-[0.2em]">§ 01.00 / ALPHA RESEARCH &amp; EDGE</p>
+<h1 class="font-display-lg text-5xl md:text-7xl text-on-surface mb-6 leading-[1.1] tracking-tight">Quantitative Intelligence Infrastructure.</h1>
+<p class="text-on-surface-variant text-lg md:text-xl max-w-2xl mb-8 leading-relaxed">BlitheBot runs 19 concurrent asyncio loops across equity swing trading, crypto scalping, and alternative data monitoring. Signals pass through a multi-stage gate chain (Gate 01-14) before reaching execution endpoints.</p>
+<div class="flex flex-wrap gap-3">
+<span class="inline-flex items-center gap-2 liquid-glass px-4 py-2 rounded text-xs font-data-mono uppercase tracking-wider">
+<span class="material-symbols-outlined text-primary text-base">database</span>
+                            SEC Form 4 Feed
+                        </span>
+<span class="inline-flex items-center gap-2 liquid-glass px-4 py-2 rounded text-xs font-data-mono uppercase tracking-wider">
+<span class="material-symbols-outlined text-success-green text-base">trending_up</span>
+                            FINRA Short Vol
+                        </span>
+<span class="inline-flex items-center gap-2 liquid-glass px-4 py-2 rounded text-xs font-data-mono uppercase tracking-wider">
+<span class="material-symbols-outlined text-caution-amber text-base">public</span>
+                            FRED Macro Signals
+                        </span>
+</div>
+</div>
+<div class="md:col-span-4">
+<div class="w-full h-56 liquid-glass relative p-6 flex flex-col justify-between overflow-hidden">
+<div class="scanline"></div>
+<div class="flex justify-between items-start">
+<div class="font-data-mono text-[10px] text-primary/80 uppercase tracking-widest">Async Loops: 19 Active</div>
+<span class="material-symbols-outlined text-primary/40">sensors</span>
+</div>
+<div class="font-data-mono text-2xl text-on-surface">VAL_ACC: 89.42% <span class="text-success-green text-sm">↑ 1.2%</span></div>
+<div class="flex gap-1.5 items-end h-16">
+<div class="bg-primary/20 w-full h-1/2 rounded-t-sm"></div>
+<div class="bg-primary/40 w-full h-3/4 rounded-t-sm"></div>
+<div class="bg-primary/60 w-full h-2/3 rounded-t-sm"></div>
+<div class="bg-primary/80 w-full h-4/5 rounded-t-sm"></div>
+<div class="bg-primary w-full h-full rounded-t-sm shadow-[0_-4px_12px_rgba(215,186,255,0.3)]"></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Alternative Data Grid -->
+<section class="py-stack-lg">
+<p class="font-label-caps text-xs text-secondary mb-8 tracking-[0.2em]">§ 02.00 / DATA INTEGRATION PIPELINES</p>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-gutter">
+<!-- SEC Filings -->
+<div class="liquid-glass p-8 flex flex-col h-full group hover:border-primary/40 transition-all duration-500">
+<div class="mb-8 flex justify-between items-start">
+<div class="w-12 h-12 rounded bg-primary/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-primary text-3xl">description</span>
+</div>
+<span class="font-data-mono text-[10px] text-on-surface-variant border border-stroke-soft px-2 py-1 rounded bg-surface-charcoal/40">SOURCE: EDGAR</span>
+</div>
+<h3 class="font-headline-lg text-2xl mb-4 text-on-surface group-hover:text-primary transition-colors">SEC Form 4 Insider Filings</h3>
+<p class="text-on-surface-variant flex-grow mb-8 leading-relaxed">Automated XML parsing of SEC EDGAR RSS feeds. System triggers trades on insider buys ≥$100k, with high-conviction auto-execution for $1M+ transactions.</p>
+<div class="terminal-bg p-4 rounded font-data-mono text-xs border border-stroke-soft shadow-2xl">
+<div class="mb-1 text-on-surface-variant/40"><span class="text-primary-fixed-dim">[Startup]</span> SCANNING FORM-4 <span class="text-primary">[GATE-01]</span></div>
+<div class="mb-1 text-on-surface-variant/40"><span class="text-primary-fixed-dim">[ORDER]</span> <span class="text-on-surface font-bold">↑ BUY</span> <span class="text-secondary font-bold">COST</span>: <span class="text-on-surface">+$1.2M</span></div>
+<div class="text-on-surface-variant/40"><span class="text-primary-fixed-dim">[STATUS]</span>: <span class="text-success-green">LIVE_SYNC</span></div>
+</div>
+</div>
+<!-- Short Interest -->
+<div class="liquid-glass p-8 flex flex-col h-full group hover:border-secondary/40 transition-all duration-500">
+<div class="mb-8 flex justify-between items-start">
+<div class="w-12 h-12 rounded bg-secondary/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-secondary text-3xl">trending_down</span>
+</div>
+<span class="font-data-mono text-[10px] text-on-surface-variant border border-stroke-soft px-2 py-1 rounded bg-surface-charcoal/40">FINRA: LIVE</span>
+</div>
+<h3 class="font-headline-lg text-2xl mb-4 text-on-surface group-hover:text-secondary transition-colors">FINRA CNMS Short Interest</h3>
+<p class="text-on-surface-variant flex-grow mb-8 leading-relaxed">Monitoring Daily Short Volume ratios. Ratio ≥65% triggers a veto (Gate 07), or a squeeze boost if price action confirms an upward pivot.</p>
+<div class="grid grid-cols-2 gap-3 font-data-mono text-xs">
+<div class="liquid-glass p-3 rounded">
+<div class="text-[10px] text-on-surface-variant uppercase mb-1 opacity-60">SHORT RATIO</div>
+<div class="text-caution-amber text-lg font-bold">68.4%</div>
+</div>
+<div class="liquid-glass p-3 rounded">
+<div class="text-[10px] text-on-surface-variant uppercase mb-1 opacity-60">VETO STATE</div>
+<div class="text-secondary text-lg font-bold">ACTIVE</div>
+</div>
+</div>
+</div>
+<!-- FRED Macro -->
+<div class="liquid-glass p-8 flex flex-col h-full group hover:border-success-green/40 transition-all duration-500">
+<div class="mb-8 flex justify-between items-start">
+<div class="w-12 h-12 rounded bg-success-green/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-success-green text-3xl">public</span>
+</div>
+<span class="font-data-mono text-[10px] text-on-surface-variant border border-stroke-soft px-2 py-1 rounded bg-surface-charcoal/40">SOURCE: FRED/MACRO</span>
+</div>
+<h3 class="font-headline-lg text-2xl mb-4 text-on-surface group-hover:text-success-green transition-colors">FRED Macro &amp; Sentiment</h3>
+<p class="text-on-surface-variant flex-grow mb-8 leading-relaxed">Integrating FRED macro indicators and social sentiment. VIX thresholds (Gate 11-12) dynamically scale risk or halt trading during volatility spikes.</p>
+<div class="terminal-bg p-4 rounded font-data-mono text-[11px] border border-stroke-soft shadow-2xl space-y-2">
+<div class="flex justify-between border-b border-white/5 pb-1">
+<span class="text-on-surface-variant/40">UMCSENT</span>
+<span class="text-secondary font-bold">67.9</span>
+</div>
+<div class="flex justify-between border-b border-white/5 pb-1">
+<span class="text-on-surface-variant/40">T10Y2Y</span>
+<span class="text-error font-bold">-↓ 0.12</span>
+</div>
+<div class="flex justify-between">
+<span class="text-on-surface-variant/40">VIX_VOL</span>
+<span class="text-secondary font-bold">14.28</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Visualization Bento -->
+<section class="py-stack-lg">
+<div class="grid grid-cols-1 md:grid-cols-12 gap-gutter">
+<!-- Indicators -->
+<div class="md:col-span-8 liquid-glass p-8 relative overflow-hidden group min-h-[320px] flex flex-col">
+<div class="flex justify-between items-start relative z-10">
+<div>
+<p class="font-label-caps text-xs text-secondary tracking-widest">§ 03.01 / EVOLUTIONARY ENGINE</p>
+<h4 class="font-headline-lg text-3xl text-on-surface mt-3">Genetic Expression Indicators</h4>
+</div>
+<div class="text-right">
+<div class="font-data-mono text-3xl text-success-green font-bold">IC &gt; 0.05</div>
+<div class="text-[10px] text-on-surface-variant uppercase tracking-widest mt-1">Walk-Forward Val</div>
+</div>
+</div>
+<div class="mt-auto h-40 w-full flex items-end gap-1.5 relative z-10">
+<div class="bg-primary/20 w-full h-[40%] rounded-t-sm group-hover:h-[45%] transition-all duration-700"></div>
+<div class="bg-primary/30 w-full h-[55%] rounded-t-sm group-hover:h-[65%] transition-all duration-700"></div>
+<div class="bg-primary/40 w-full h-[45%] rounded-t-sm group-hover:h-[50%] transition-all duration-700"></div>
+<div class="bg-primary/50 w-full h-[70%] rounded-t-sm group-hover:h-[80%] transition-all duration-700"></div>
+<div class="bg-primary/60 w-full h-[60%] rounded-t-sm group-hover:h-[70%] transition-all duration-700"></div>
+<div class="bg-primary/70 w-full h-[85%] rounded-t-sm group-hover:h-[95%] transition-all duration-700"></div>
+<div class="bg-primary/80 w-full h-[75%] rounded-t-sm group-hover:h-[85%] transition-all duration-700"></div>
+<div class="bg-primary w-full h-full rounded-t-sm shadow-[0_-8px_24px_rgba(215,186,255,0.4)] group-hover:h-[100%] transition-all duration-700"></div>
+</div>
+</div>
+<!-- Sentiment -->
+<div class="md:col-span-4 bg-primary p-8 relative overflow-hidden flex flex-col justify-between">
+<div>
+<p class="font-label-caps text-xs text-on-primary/60 tracking-widest">§ 03.02 / SEMANTIC</p>
+<h4 class="font-headline-lg text-3xl text-on-primary mt-3">Reddit/X Signals</h4>
+</div>
+<div class="font-data-mono text-sm space-y-4 mb-4">
+<div class="flex justify-between border-b border-on-primary/10 pb-2">
+<span class="text-on-primary/70">REDDIT_WSB</span>
+<span class="font-bold text-on-primary">+0.82</span>
+</div>
+<div class="flex justify-between border-b border-on-primary/10 pb-2">
+<span class="text-on-primary/70">X_GROK_LIVE</span>
+<span class="font-bold text-on-primary">+0.64</span>
+</div>
+<div class="flex justify-between">
+<span class="text-on-primary/70">FREQ_DELTA</span>
+<span class="font-bold text-on-primary">+0.44</span>
+</div>
+</div>
+<span class="material-symbols-outlined text-on-primary/5 text-[160px] absolute -right-8 -bottom-8">psychology</span>
+</div>
+<!-- Execution Log -->
+<div class="md:col-span-12 terminal-bg border border-stroke-soft p-6 font-data-mono text-sm shadow-2xl relative">
+<div class="scanline opacity-5"></div>
+<div class="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
+<div class="flex items-center gap-3">
+<div class="flex gap-1.5">
+<div class="w-2.5 h-2.5 rounded-full bg-error/40"></div>
+<div class="w-2.5 h-2.5 rounded-full bg-caution-amber/40"></div>
+<div class="w-2.5 h-2.5 rounded-full bg-success-green/40"></div>
+</div>
+<span class="ml-4 text-on-surface-variant/50 text-xs tracking-widest uppercase">gate_chain_execution_v1.log</span>
+</div>
+<span class="text-[10px] text-success-green bg-success-green/10 px-2 py-0.5 rounded border border-success-green/20 font-bold">SYSTEM ONLINE</span>
+</div>
+<div class="space-y-1.5 leading-relaxed overflow-x-auto">
+<div class="text-on-surface-variant/50"><span class="text-primary-fixed-dim">[Startup]</span> [08:44:21] Evaluating <span class="text-primary">GATE-01</span>: Daily loss limits... <span class="text-success-green">ACTIVE</span></div>
+<div class="text-on-surface-variant/50"><span class="text-primary-fixed-dim">[SWING]</span> [08:44:23] Analyzing <span class="text-secondary font-bold">JPM</span> &amp; <span class="text-secondary font-bold">SPY</span>... <span class="text-success-green">STABLE</span></div>
+<div class="text-on-surface-variant/50"><span class="text-primary-fixed-dim">[ORDER]</span> [08:44:24] <span class="text-on-surface font-bold">↑ BUY</span> <span class="text-secondary font-bold">V</span> at market | <span class="text-primary">GATE-05</span> passed</div>
+<div class="text-on-surface-variant/50"><span class="text-primary-fixed-dim">[EXIT]</span> [08:44:28] <span class="text-error font-bold">↓ SELL</span> <span class="text-secondary font-bold">PG</span> executed at <span class="text-primary">EXECUTE</span></div>
+<div class="text-on-surface-variant/50"><span class="text-primary-fixed-dim">[P&amp;L]</span> [08:44:29] Session Delta: <span class="text-on-surface font-bold">+$40.80</span> (Auto-Scale Active)</div>
+<div class="text-on-surface-variant/50 pt-2 flex items-center gap-2">
+<span>[08:44:30] &gt; system_status: monitoring_19_async_loops</span>
+<span class="blink-cursor"></span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Technical Specs Table -->
+<section class="py-stack-lg mb-16">
+<p class="font-label-caps text-xs text-secondary mb-8 tracking-[0.2em]">§ 04.00 / PIPELINE SPECIFICATIONS</p>
+<div class="liquid-glass rounded overflow-hidden">
+<div class="overflow-x-auto">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="font-label-caps text-[11px] text-on-surface-variant/60 border-b border-stroke-soft bg-white/2">
+<th class="py-5 px-6 font-bold tracking-widest">MODULE</th>
+<th class="py-5 px-6 font-bold tracking-widest">ARCHITECTURE</th>
+<th class="py-5 px-6 font-bold tracking-widest">DATA SOURCES</th>
+<th class="py-5 px-6 font-bold tracking-widest">GATE STATUS</th>
+</tr>
+</thead>
+<tbody class="font-data-mono text-xs text-on-surface-variant">
+<tr class="border-b border-stroke-soft/50 hover:bg-white/5 transition-colors">
+<td class="py-6 px-6 text-on-surface font-bold">GENETIC_ENGINE_V1</td>
+<td class="py-6 px-6">Evolutionary Programming</td>
+<td class="py-6 px-6 text-primary">PostgreSQL Corpus</td>
+<td class="py-6 px-6"><span class="text-success-green bg-success-green/10 px-2 py-1 rounded">VALIDATED (IC &gt; 0.05)</span></td>
+</tr>
+<tr class="border-b border-stroke-soft/50 hover:bg-white/5 transition-colors">
+<td class="py-6 px-6 text-on-surface font-bold">INSIDER_SCANNER</td>
+<td class="py-6 px-6">XML / RSS Parser</td>
+<td class="py-6 px-6 text-primary">SEC Form 4</td>
+<td class="py-6 px-6"><span class="text-primary bg-primary/10 px-2 py-1 rounded">PROCEED (G-05)</span></td>
+</tr>
+<tr class="border-b border-stroke-soft/50 hover:bg-white/5 transition-colors">
+<td class="py-6 px-6 text-on-surface font-bold">SENTIMENT_ENGINE</td>
+<td class="py-6 px-6">LLM / Keyword Scoring</td>
+<td class="py-6 px-6 text-primary">Reddit / X (Grok)</td>
+<td class="py-6 px-6"><span class="text-secondary bg-secondary/10 px-2 py-1 rounded">ACTIVE</span></td>
+</tr>
+<tr class="hover:bg-white/5 transition-colors">
+<td class="py-6 px-6 text-on-surface font-bold">MACRO_ADAPTER</td>
+<td class="py-6 px-6">FRED Strategy Module</td>
+<td class="py-6 px-6 text-primary">FRED / VIX</td>
+<td class="py-6 px-6"><span class="text-caution-amber bg-caution-amber/10 px-2 py-1 rounded">G-11 MULTIPLIER</span></td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</section>
+</main>
+<!-- Footer -->
+<footer class="bg-surface-container-lowest border-t border-stroke-soft py-stack-lg relative z-10">
+<div class="max-w-container-max mx-auto px-margin-mobile md:px-gutter grid grid-cols-1 md:grid-cols-4 gap-gutter">
+<div class="md:col-span-1">
+<div class="font-display-lg text-lg text-on-surface mb-4 uppercase tracking-tighter font-bold">BLITHEBOT</div>
+<p class="font-data-mono text-[10px] text-on-surface-variant/40 leading-relaxed">
+                    QUANTITATIVE EXECUTION ENGINE<br/>
+                    REV/DOC: 882.Q4.ALPHA<br/>
+                    LATENCY: 1.2ms (Avg)
+                </p>
+</div>
+<div class="md:col-span-1">
+<div class="font-label-caps text-[11px] text-secondary mb-6 tracking-widest uppercase">System Resources</div>
+<ul class="space-y-3 font-data-mono text-[11px] text-on-surface-variant/60">
+<li><a class="hover:text-primary transition-colors flex items-center gap-2" href="#"><span class="w-1 h-1 bg-primary/40 rounded-full"></span>Architecture Overview</a></li>
+<li><a class="hover:text-primary transition-colors flex items-center gap-2" href="#"><span class="w-1 h-1 bg-primary/40 rounded-full"></span>Genetic Engine API</a></li>
+</ul>
+</div>
+<div class="md:col-span-1">
+<div class="font-label-caps text-[11px] text-secondary mb-6 tracking-widest uppercase">Compliance</div>
+<ul class="space-y-3 font-data-mono text-[11px] text-on-surface-variant/60">
+<li><a class="hover:text-primary transition-colors flex items-center gap-2" href="#"><span class="w-1 h-1 bg-primary/40 rounded-full"></span>Risk Disclosure</a></li>
+<li><a class="hover:text-primary transition-colors flex items-center gap-2" href="#"><span class="w-1 h-1 bg-primary/40 rounded-full"></span>Execution Policy</a></li>
+</ul>
+</div>
+<div class="md:col-span-1 text-right flex flex-col justify-between">
+<div class="font-data-mono text-[10px] text-on-surface-variant/40">
+                    © 2024 BLITHEBOT QUANTITATIVE ENGINE.<br/>ALL RIGHTS RESERVED.
+                </div>
+<div class="flex justify-end gap-6 text-on-surface-variant/40 mt-6">
+<span class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors text-xl">terminal</span>
+<span class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors text-xl">shield_with_heart</span>
+</div>
+</div>
+</div>
+</footer>
+</body></html>

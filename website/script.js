@@ -382,7 +382,7 @@ function setupAnimations() {
   });
 }
 
-// ── Page builders ─────────────────────────────────────────────────────────────
+// ── Page builders (removed — pages now loaded via fetch) ──────────────────────
 function buildStrategyPage() {
   return `<div class="spa-page">
     <div class="spa-hero spa-fade">
@@ -602,14 +602,6 @@ function buildDashboardPage() {
 
 // ── SPA routing ───────────────────────────────────────────────────────────────
 const pageContent = document.getElementById('page-content');
-let homeHTML = ''; // set in DOMContentLoaded after buildTerminal() runs
-
-const PAGES = {
-  strategy:    buildStrategyPage(),
-  research:    buildResearchPage(),
-  performance: buildPerformancePage(),
-  dashboard:   buildDashboardPage(),
-};
 
 // Single delegated listener — never duplicated on re-navigation
 document.addEventListener('click', e => {
@@ -624,34 +616,43 @@ function navigateTo(page, push) {
     el.classList.toggle('nav-active', el.dataset.page === page);
   });
 
-  pageContent.style.opacity = '0';
+  const filename = page === 'home' ? 'index.html' : `${page}.html`;
 
-  setTimeout(() => {
-    // Kill content ScrollTriggers before swapping HTML — canvas RAF is untouched
-    if (typeof ScrollTrigger !== 'undefined') {
-      ScrollTrigger.getAll().forEach(t => t.kill());
-    }
+  fetch(filename)
+    .then(r => r.text())
+    .then(html => {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
+      const body = doc.body.innerHTML;
 
-    pageContent.innerHTML = page === 'home' ? homeHTML : (PAGES[page] || '');
-    window.scrollTo(0, 0);
+      pageContent.style.opacity = '0';
 
-    if (push) history.pushState({ page }, '', page === 'home' ? '/' : `/${page}`);
+      setTimeout(() => {
+        if (typeof ScrollTrigger !== 'undefined') {
+          ScrollTrigger.getAll().forEach(t => t.kill());
+        }
 
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      pageContent.style.opacity = '1';
-      if (page === 'home') {
-        setupAnimations();
-      } else {
-        gsap.to('.spa-fade', {
-          opacity: 1, y: 0,
-          duration: 0.6,
-          ease: 'power2.out',
-          stagger: 0.1,
-          delay: 0.05,
-        });
-      }
-    }));
-  }, 200);
+        pageContent.innerHTML = body;
+        window.scrollTo(0, 0);
+
+        if (push) history.pushState({ page }, '', page === 'home' ? '/' : `/${page}`);
+
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          pageContent.style.opacity = '1';
+          if (page === 'home') {
+            setupAnimations();
+          } else {
+            gsap.to('.spa-fade', {
+              opacity: 1, y: 0,
+              duration: 0.6,
+              ease: 'power2.out',
+              stagger: 0.1,
+              delay: 0.05,
+            });
+          }
+        }));
+      }, 200);
+    });
 }
 
 window.addEventListener('popstate', e => {
@@ -666,7 +667,4 @@ window.addEventListener('DOMContentLoaded', () => {
   rafLoop();        // starts CRT + dots animation
 
   setupAnimations(); // buildTerminal() is called inside here
-
-  // Snapshot home AFTER buildTerminal() has populated #terminal-lines
-  homeHTML = pageContent.innerHTML;
 });

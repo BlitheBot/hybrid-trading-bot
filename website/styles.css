@@ -1,18 +1,27 @@
 /* ── Custom properties ───────────────────────────────────────────────────── */
 :root {
-  --bg:         #020a08;
-  --surface:    #030c09;
-  --border:     rgba(20,184,166,0.08);
-  --teal:       #14b8a6;
-  --cyan:       #06b6d4;
-  --log-text:   #7a9090;
-  --body:       #3a5a54;
-  --muted:      #2d4a44;
-  --h1-primary: #8ab5ae;
-  --h1-accent:  #14b8a6;
-  --sell:       #ec4899;
-  --font-sans:  'Inter', sans-serif;
-  --font-mono:  'JetBrains Mono', monospace;
+  /* Purple accent system */
+  --accent:       #7c3aed;
+  --accent-light: #a78bfa;
+  --ticker:       #c4b5fd;
+  --bracket:      #9d7dea;
+  --log-val:      #6b7280;
+  --buy:          #ffffff;
+  --sell:         #ec4899;
+  --status:       #4ade80;
+  --bg:           #0a0a0f;
+  --surface:      #0f0f18;
+  /* Legacy names remapped → purple */
+  --border:       rgba(124,58,237,0.08);
+  --teal:         #a78bfa;
+  --cyan:         #9d7dea;
+  --log-text:     #6b7280;
+  --body:         #7c6fa0;
+  --muted:        #6b5fa0;
+  --h1-primary:   #c4b5fd;
+  --h1-accent:    #a78bfa;
+  --font-sans:    'Inter', sans-serif;
+  --font-mono:    'JetBrains Mono', monospace;
 }
 
 /* ── Reset ───────────────────────────────────────────────────────────────── */
