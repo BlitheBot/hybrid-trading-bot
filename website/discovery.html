@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>BlitheBot | Discovery Engine</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lexend:wght@600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet"/>
+<script src="script.js" defer></script>
+<script id="tailwind-config">
+tailwind.config={darkMode:"class",theme:{extend:{"colors":{"terminal-black":"#0a0a0f","on-surface":"#e4e1e6","success-green":"#4ade80","surface-charcoal":"#16161A","surface":"#131316","error":"#ec4899","primary":"#d7baff","on-surface-variant":"#ccc3d3","primary-container":"#bd93f9","stroke-soft":"rgba(255,255,255,0.08)","caution-amber":"#FFB86C"},"spacing":{"container-max":"1280px","gutter":"24px","margin-mobile":"16px"},"fontFamily":{"label-caps":["JetBrains Mono"],"data-mono":["JetBrains Mono"],"display-lg":["Lexend"],"headline-lg-mobile":["Lexend"]},"fontSize":{"headline-lg-mobile":["24px",{"lineHeight":"32px","fontWeight":"600"}],"label-caps":["12px",{"lineHeight":"16px","letterSpacing":"0.1em","fontWeight":"700"}],"data-mono":["14px",{"lineHeight":"20px","fontWeight":"500"}]}}}}
+</script>
+</head>
+<body class="bg-terminal-black text-on-surface overflow-x-hidden" style="font-family:'Inter',sans-serif">
+<style>
+:root{--accent:#7c3aed;--al:#a78bfa;--ticker:#c4b5fd;--br:#9d7dea;--ok:#4ade80;--warn:#FFB86C;--fail:#ec4899;--bg:#0a0a0f;--sf:#0f0f18;--border:rgba(124,58,237,0.15);--bs:rgba(255,255,255,0.06);--dim:#6b7280;--faint:#4a4060}
+@keyframes pulse-soft{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.6;transform:scale(.95)}}.status-pulse{animation:pulse-soft 2s cubic-bezier(.4,0,.6,1) infinite}
+.liquid-glass-button-primary{background:linear-gradient(135deg,#bd93f9 0%,#a781e0 100%);border:1px solid rgba(255,255,255,.2);box-shadow:inset 0 1px 0 0 rgba(255,255,255,.3),0 4px 15px rgba(189,147,249,.3)}
+.back-link{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;color:var(--al);text-decoration:none;display:inline-flex;align-items:center;gap:.4rem;transition:color .2s}.back-link:hover{color:var(--ticker)}
+.slabel{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--br);display:block;margin-bottom:.5rem}
+.stitle{font-family:'Lexend',sans-serif;font-size:clamp(1.3rem,3vw,1.8rem);font-weight:600;color:#e4e1e6;line-height:1.2}
+.data-table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace}
+.data-table thead tr{border-bottom:1px solid var(--border)}
+.data-table th{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--br);font-weight:500;padding:.6rem 1rem;text-align:left}
+.data-table td{padding:.65rem 1rem;font-size:11px;color:#ccc3d3;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:top}
+.data-table tr:last-child td{border-bottom:none}
+.data-table tr:hover td{background:rgba(124,58,237,.04)}
+.csec{padding:2.5rem 0;border-bottom:1px solid var(--bs)}
+.csec:last-child{border-bottom:none}
+.box{background:#0a0a0f;border:1px solid rgba(124,58,237,.2);overflow:hidden}
+.box-head{display:flex;align-items:center;justify-content:space-between;padding:.7rem 1rem;border-bottom:1px solid rgba(255,255,255,.05);background:rgba(124,58,237,.04)}
+.box-head-label{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#9d7dea}
+.box-head-sub{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--faint)}
+.fblock{background:#0a0a0f;border:1px solid var(--border);padding:1.1rem 1.4rem;font-family:'JetBrains Mono',monospace;font-size:11px;color:#ccc3d3;line-height:2;margin-bottom:.8rem}
+.fblock .fh{color:var(--ticker);font-weight:700;display:block;margin-bottom:.3rem}
+.fblock .fn{color:var(--dim);font-size:10px;display:block;margin-top:.25rem}
+.spec-r{display:flex;justify-content:space-between;padding:.38rem 0;border-bottom:1px solid rgba(255,255,255,.04);font-family:'JetBrains Mono',monospace;font-size:11px}
+.spec-r:last-child{border-bottom:none}
+.spec-k{color:var(--dim);font-size:10px;letter-spacing:.04em}
+.spec-v{color:#ccc3d3;text-align:right}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:2rem}
+.three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.2rem}
+@media(max-width:900px){.three-col{grid-template-columns:1fr}}
+@media(max-width:768px){.two-col{grid-template-columns:1fr}}
+.terminal{background:#050508;border:1px solid rgba(124,58,237,.2);padding:1.2rem 1.4rem;font-family:'JetBrains Mono',monospace;font-size:11px;line-height:2;overflow-x:auto}
+.t-br{color:#9d7dea}
+.t-ticker{color:#c4b5fd;font-weight:700}
+.t-val{color:#6b7280}
+.t-ok{color:#4ade80;font-weight:700}
+.t-warn{color:#FFB86C}
+.data-card{background:#0a0a0f;border:1px solid rgba(124,58,237,.2);padding:1.4rem}
+.data-card-title{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--br);margin-bottom:.6rem}
+.data-card-head{font-family:'Lexend',sans-serif;font-size:1rem;font-weight:600;color:#e4e1e6;margin-bottom:.6rem}
+.data-card-body{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--dim);line-height:1.75}
+.bact{display:inline-block;padding:.1rem .4rem;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);color:#4ade80;font-size:10px;font-family:'JetBrains Mono',monospace}
+.bdep{display:inline-block;padding:.1rem .4rem;background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.25);color:#a78bfa;font-size:10px;font-family:'JetBrains Mono',monospace}
+</style>
+
+<!-- NAV -->
+<header class="bg-surface-charcoal/40 backdrop-blur-2xl border-b border-stroke-soft sticky top-0 z-50">
+<div class="flex justify-between items-center w-full px-margin-mobile md:px-gutter max-w-container-max mx-auto h-16">
+<a href="index.html" style="font-family:'Lexend',sans-serif;font-weight:600;font-size:24px;letter-spacing:-.02em;color:#e4e1e6;text-decoration:none;text-transform:uppercase;display:flex;align-items:center;gap:.5rem">
+  BlitheBot <span class="w-2 h-2 rounded-full bg-success-green status-pulse"></span>
+</a>
+<nav class="hidden md:flex gap-gutter items-center">
+  <a class="text-on-surface-variant hover:text-primary transition-colors duration-300" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="architecture" href="#">Architecture</a>
+  <a class="text-on-surface-variant hover:text-primary transition-colors duration-300" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="performance" href="#">Performance</a>
+  <a style="color:#a78bfa;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="discovery" href="#">Discovery</a>
+  <a class="text-on-surface-variant hover:text-primary transition-colors duration-300" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="dashboard" href="#">Live Dashboard</a>
+</nav>
+<div class="flex items-center gap-4">
+  <a class="hidden lg:block text-on-surface-variant hover:text-primary transition-colors" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" href="#">Docs</a>
+  <button class="liquid-glass-button-primary rounded-lg hover:opacity-95 active:scale-95 transition-all" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;color:#0a0a0f;padding:.5rem 1rem;cursor:pointer">Institutional Access</button>
+</div>
+</div>
+</header>
+
+<main style="max-width:1280px;margin:0 auto;padding:3rem 1.5rem">
+
+  <div style="margin-bottom:2rem">
+    <a href="index.html" class="back-link" data-page="home">← BACK TO HOME</a>
+  </div>
+
+  <div style="margin-bottom:3rem">
+    <span class="slabel">BB-003 · REV A</span>
+    <h1 style="font-family:'Lexend',sans-serif;font-size:clamp(2rem,5vw,3rem);font-weight:600;color:#e4e1e6;line-height:1.1;margin-bottom:.75rem">Discovery Engine</h1>
+    <p style="color:var(--dim);font-size:.9rem;max-width:600px;line-height:1.75">Automated overnight parameter search using walk-forward validation, genetic programming, and alternative data integration. The system discovers and validates its own signal improvements weekly.</p>
+  </div>
+
+  <!-- § 01 Genetic Programming Engine -->
+  <div class="csec">
+    <span class="slabel">§ 01 — GENETIC INDICATOR DISCOVERY</span>
+    <h2 class="stitle" style="margin-bottom:1rem">Expression Tree Evolution</h2>
+    <div class="two-col">
+      <div>
+        <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.2rem;line-height:1.75">The genetic engine evolves indicator expressions as binary expression trees. Each tree combines primitives from a fixed library — price transforms, rolling statistics, arithmetic operators — into novel indicator formulas that no human explicitly designed.</p>
+        <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.2rem;line-height:1.75">Each generation applies tournament selection, subtree crossover, and point mutation. Trees that produce higher Information Coefficient scores on walk-forward out-of-sample folds survive. After 20 generations, any tree with IC &gt; 0.05 graduates to the <span style="color:#ccc3d3">discovered_indicators</span> table for human review.</p>
+        <div class="fblock">
+          <span class="fh">Example Expression Tree</span>
+          div(<br>
+          &nbsp;&nbsp;sub(ema(close, 20), ema(close, 50)),<br>
+          &nbsp;&nbsp;rolling_std(close, 20)<br>
+          )<br>
+          <span class="fn">Equivalent to a normalized EMA spread — discovered autonomously, not hand-coded</span>
+        </div>
+        <div class="fblock">
+          <span class="fh">Primitive Library</span>
+          ema · sma · rsi · macd · bollinger<br>
+          add · sub · mul · div · abs · log<br>
+          rolling_std · rolling_mean · delta<br>
+          <span class="fn">indicator_library.py · ~25 primitives · protected division (div-by-zero safe)</span>
+        </div>
+      </div>
+      <div>
+        <div class="box">
+          <div class="box-head"><span class="box-head-label">GENETIC ENGINE PARAMETERS</span></div>
+          <div style="padding:1rem">
+            <div class="spec-r"><span class="spec-k">Population size</span><span class="spec-v">50 expression trees</span></div>
+            <div class="spec-r"><span class="spec-k">Generations per run</span><span class="spec-v">20</span></div>
+            <div class="spec-r"><span class="spec-k">Symbols per run</span><span class="spec-v">6 (full universe)</span></div>
+            <div class="spec-r"><span class="spec-k">Fitness function</span><span class="spec-v">Spearman rank IC</span></div>
+            <div class="spec-r"><span class="spec-k">IC graduation threshold</span><span class="spec-v">IC &gt; 0.05</span></div>
+            <div class="spec-r"><span class="spec-k">Selection method</span><span class="spec-v">Tournament selection</span></div>
+            <div class="spec-r"><span class="spec-k">Operators</span><span class="spec-v">Subtree crossover · point mutation</span></div>
+            <div class="spec-r"><span class="spec-k">Schedule</span><span class="spec-v">Saturday 11PM EST</span></div>
+            <div class="spec-r"><span class="spec-k">Output table</span><span class="spec-v">discovered_indicators</span></div>
+            <div class="spec-r"><span class="spec-k">File</span><span class="spec-v">discovery/genetic_engine.py</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- § 02 Walk-Forward Validation -->
+  <div class="csec">
+    <span class="slabel">§ 02 — WALK-FORWARD IC SCORING</span>
+    <h2 class="stitle" style="margin-bottom:1rem">Out-of-Sample Validation Protocol</h2>
+    <div class="two-col">
+      <div>
+        <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.2rem;line-height:1.75">Information Coefficient (IC) measures the Spearman rank correlation between a signal's predicted direction and the actual realized return over the next holding period. IC = 0 means the signal is noise; IC = 1 means perfect prediction.</p>
+        <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.2rem;line-height:1.75">Walk-forward validation prevents look-ahead bias. A 6-year data window is divided into 5 folds of 4 months each. The model trains on all prior folds, then predicts on the next unseen fold. IC is computed on the out-of-sample prediction only — in-sample fit is irrelevant.</p>
+        <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.2rem;line-height:1.75">IC &gt; 0.05 is the graduation threshold. This is a relatively modest bar — it means roughly 52.5% directional accuracy over the test window. The requirement is that this threshold holds consistently across all 5 folds, not just the best one.</p>
+        <div class="fblock">
+          <span class="fh">IC Formula</span>
+          IC = SpearmanCorr(signal_rank, return_rank)<br>
+          fold IC = mean IC across 4-month window<br>
+          <span class="fn">Spearman rank is used over Pearson to reduce outlier sensitivity in fat-tailed return distributions</span>
+        </div>
+      </div>
+      <div>
+        <div class="box" style="margin-bottom:1rem">
+          <div class="box-head"><span class="box-head-label">VALIDATION FOLD STRUCTURE</span></div>
+          <div style="padding:1rem">
+            <div class="spec-r"><span class="spec-k">Total history</span><span class="spec-v">6 years daily bars</span></div>
+            <div class="spec-r"><span class="spec-k">Fold count</span><span class="spec-v">5 folds</span></div>
+            <div class="spec-r"><span class="spec-k">Fold width</span><span class="spec-v">4 months each</span></div>
+            <div class="spec-r"><span class="spec-k">Training window</span><span class="spec-v">All prior folds (expanding)</span></div>
+            <div class="spec-r"><span class="spec-k">Test window</span><span class="spec-v">Next unseen fold only</span></div>
+            <div class="spec-r"><span class="spec-k">IC threshold</span><span class="spec-v">IC &gt; 0.05 all folds</span></div>
+            <div class="spec-r"><span class="spec-k">v1 significance test</span><span class="spec-v">scipy t-test p &lt; 0.05</span></div>
+            <div class="spec-r"><span class="spec-k">File</span><span class="spec-v">discovery/fitness_evaluator.py</span></div>
+          </div>
+        </div>
+        <div style="background:rgba(124,58,237,.05);border:1px solid rgba(124,58,237,.15);padding:1rem 1.4rem">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.08em;color:var(--br);margin-bottom:.5rem">OUTPUT TABLE</div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--dim);line-height:1.75">Graduated indicators write to <span style="color:#ccc3d3">discovery_results</span> (v2, JSONB) and <span style="color:#ccc3d3">discovered_indicators</span> (GP). Both tables are reviewable via the Streamlit dashboard approval tab before any strategy uses them.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- § 03 Alternative Data Sources -->
+  <div class="csec">
+    <span class="slabel">§ 03 — ALTERNATIVE DATA INTEGRATION</span>
+    <h2 class="stitle" style="margin-bottom:1.5rem">Non-Price Signal Sources</h2>
+    <div class="three-col">
+      <div class="data-card">
+        <div class="data-card-title">SEC EDGAR · Form 4</div>
+        <div class="data-card-head">Insider Transaction Filings</div>
+        <div class="data-card-body">
+          Form 4 is filed within 2 business days of any insider trade. The bot polls the EDGAR XBRL API continuously, parsing XML for transaction type (P/S), shares transacted, and per-share price.<br><br>
+          Cluster detection fires when multiple insiders at the same company buy within a rolling 30-day window. Transactions above $1M trigger auto-signal generation. Tiered scoring by officer rank: CEO/CFO weighted highest.
+        </div>
+        <div style="margin-top:1rem">
+          <div class="spec-r"><span class="spec-k">Filing lag</span><span class="spec-v">≤ 2 business days</span></div>
+          <div class="spec-r"><span class="spec-k">Poll cadence</span><span class="spec-v">30-min continuous</span></div>
+          <div class="spec-r"><span class="spec-k">Auto-execute threshold</span><span class="spec-v">$1M+ transactions</span></div>
+          <div class="spec-r"><span class="spec-k">Rate limit</span><span class="spec-v">429 backoff · exponential</span></div>
+          <div class="spec-r"><span class="spec-k">File</span><span class="spec-v">strategies/sec_edgar_strategy.py</span></div>
+        </div>
+      </div>
+      <div class="data-card">
+        <div class="data-card-title">FINRA CNMS · Short Volume</div>
+        <div class="data-card-head">Daily Short Interest Ratio</div>
+        <div class="data-card-body">
+          FINRA publishes daily consolidated short volume data (CNMSshvol) per symbol. The ratio of short volume to total volume is computed for each symbol in the watchlist.<br><br>
+          A ratio ≥ 65% vetoes any long entry as a hard GATE-07 block. When a high-short-ratio stock shows a price uptick relative to prior day, the system flags a potential short squeeze and posts to the Slack alerts channel.
+        </div>
+        <div style="margin-top:1rem">
+          <div class="spec-r"><span class="spec-k">Veto threshold</span><span class="spec-v">ratio ≥ 65%</span></div>
+          <div class="spec-r"><span class="spec-k">Cache TTL</span><span class="spec-v">12 hours</span></div>
+          <div class="spec-r"><span class="spec-k">Squeeze detection</span><span class="spec-v">Price uptick on high SI</span></div>
+          <div class="spec-r"><span class="spec-k">Gate position</span><span class="spec-v">GATE-07 (hard block)</span></div>
+          <div class="spec-r"><span class="spec-k">File</span><span class="spec-v">strategies/short_interest_signal.py</span></div>
+        </div>
+      </div>
+      <div class="data-card">
+        <div class="data-card-title">Quiver Quantitative · Congressional</div>
+        <div class="data-card-head">Congressional Trade Disclosures</div>
+        <div class="data-card-body">
+          Members of Congress are required to disclose personal trades within 45 days under the STOCK Act. Academic research documents that congressional portfolios historically outperform the market by ~6% annually.<br><br>
+          The strategy tracks disclosed purchases by committee members with relevant oversight jurisdiction. Currently disabled pending Quiver Quantitative API key provisioning.
+        </div>
+        <div style="margin-top:1rem">
+          <div class="spec-r"><span class="spec-k">Status</span><span class="spec-v" style="color:var(--warn)">DISABLED (API key pending)</span></div>
+          <div class="spec-r"><span class="spec-k">Disclosure lag</span><span class="spec-v">≤ 45 days (STOCK Act)</span></div>
+          <div class="spec-r"><span class="spec-k">Signal type</span><span class="spec-v">Directional + conviction boost</span></div>
+          <div class="spec-r"><span class="spec-k">Historical alpha</span><span class="spec-v">~6% above market (academic)</span></div>
+          <div class="spec-r"><span class="spec-k">File</span><span class="spec-v">strategies/congressional_trading_strategy.py</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- § 04 Discovery Schedule -->
+  <div class="csec">
+    <span class="slabel">§ 04 — WEEKLY RUN SCHEDULE</span>
+    <h2 class="stitle" style="margin-bottom:1rem">Overnight Discovery Pipeline</h2>
+    <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.5rem;max-width:640px;line-height:1.75">Two discovery loops run on independent schedules. v2 parameter search runs every Friday afternoon before market close data is finalized. The genetic programming loop runs Saturday night across the full 6-symbol universe.</p>
+    <div class="terminal">
+      <div><span class="t-br">[FRIDAY 4:30PM]</span> <span class="t-ticker">discovery_loop()</span> <span class="t-val">fires — v2 parameter search begins</span></div>
+      <div><span class="t-br">[ENGINE]</span>        <span class="t-val">1,215+ param combos tested · 5 strategy families · top-100 S&amp;P</span></div>
+      <div><span class="t-br">[VALIDATION]</span>    <span class="t-val">Walk-forward Sharpe per regime (bull · bear · high-vol)</span></div>
+      <div><span class="t-br">[RESULTS]</span>       <span class="t-val">bull_sharpe · bear_sharpe · high_vol_sharpe → JSONB</span></div>
+      <div><span class="t-br">[STORAGE]</span>       <span class="t-val">discovery_results table · status=</span><span style="color:#FFB86C">pending_approval</span></div>
+      <div><span class="t-br">[APPROVAL]</span>      <span class="t-val">human review via Streamlit dashboard · approve / reject per symbol</span></div>
+      <div></div>
+      <div><span class="t-br">[SATURDAY 11PM]</span> <span class="t-ticker">indicator_discovery_loop()</span> <span class="t-val">fires — GP engine begins</span></div>
+      <div><span class="t-br">[GENETIC]</span>       <span class="t-val">50 trees × 20 generations × 6 symbols · ~18,000 evaluations</span></div>
+      <div><span class="t-br">[IC GATE]</span>       <span class="t-val">IC &gt; 0.05 required across all walk-forward folds to graduate</span></div>
+      <div><span class="t-br">[LIBRARY]</span>       <span class="t-ok">discovered_indicators</span> <span class="t-val">table updated with graduated expressions</span></div>
+      <div><span class="t-br">[SLACK]</span>         <span class="t-val">Summary posted to #performance channel with top IC scores</span></div>
+    </div>
+  </div>
+
+  <!-- § 05 Strategy Evolution Table -->
+  <div class="csec">
+    <span class="slabel">§ 05 — REGIME ADAPTER</span>
+    <h2 class="stitle" style="margin-bottom:1rem">Discovered Strategy Deployment</h2>
+    <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.5rem;max-width:640px;line-height:1.75"><span style="color:#ccc3d3">regime_adapter.py</span> selects the highest-Sharpe approved strategy for each symbol based on the current SPY regime (bull / bear / high-vol). Approved results from the Discovery Engine are applied automatically at next market open.</p>
+    <div class="box">
+      <div class="box-head"><span class="box-head-label">CURRENT DEPLOYED STRATEGIES BY REGIME</span><span class="box-head-sub">approved via dashboard</span></div>
+      <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead><tr><th>Regime</th><th>Best Strategy</th><th>Sharpe</th><th>Status</th><th>Applied</th></tr></thead>
+          <tbody>
+            <tr>
+              <td style="color:var(--ok);font-weight:700">BULL</td>
+              <td style="color:#ccc3d3">SwingStrategy · params A (EMA 20/100 · RSI 10 · band 35–65)</td>
+              <td style="color:var(--ticker)">1.82</td>
+              <td><span class="bdep">DEPLOYED</span></td>
+              <td style="color:var(--dim)">COST · BRK.B · SPY</td>
+            </tr>
+            <tr>
+              <td style="color:var(--fail);font-weight:700">BEAR</td>
+              <td style="color:#ccc3d3">SwingStrategy · params B (EMA 50/200 · RSI 21 · band 40–65)</td>
+              <td style="color:var(--ticker)">1.34</td>
+              <td><span class="bdep">DEPLOYED</span></td>
+              <td style="color:var(--dim)">All 6 symbols</td>
+            </tr>
+            <tr>
+              <td style="color:var(--warn);font-weight:700">HIGH VOL</td>
+              <td style="color:#ccc3d3">BollingerMeanReversion · OU half-life gate · middle-band exit</td>
+              <td style="color:var(--ticker)">1.21</td>
+              <td><span class="bdep">DEPLOYED</span></td>
+              <td style="color:var(--dim)">VIX &gt; 25 trigger</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div style="margin-top:1.2rem;display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+      <div style="background:rgba(124,58,237,.05);border:1px solid rgba(124,58,237,.15);padding:1rem 1.4rem">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.08em;color:var(--br);margin-bottom:.5rem">REGIME DETECTION</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--dim);line-height:1.75">SPY regime classified by 200-day SMA slope and 30-day realized volatility. Bull = above SMA + low vol. Bear = below SMA. High-vol = rolling vol &gt; 1.5× baseline regardless of direction.</div>
+      </div>
+      <div style="background:rgba(124,58,237,.05);border:1px solid rgba(124,58,237,.15);padding:1rem 1.4rem">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.08em;color:var(--br);margin-bottom:.5rem">APPROVAL FLOW</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--dim);line-height:1.75">All discovered results land in <span style="color:#ccc3d3">pending_approval</span> state. The Streamlit dashboard approval tab surfaces each result with its Sharpe breakdown. One click approves or rejects per symbol per regime.</div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer style="border-top:1px solid var(--bs);padding:1.4rem 1.5rem;display:flex;justify-content:space-between;align-items:center;max-width:1280px;margin:0 auto">
+  <span style="font-family:'Lexend',sans-serif;font-size:.9rem;font-weight:600;color:#d7baff">BlitheBot</span>
+  <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--faint);letter-spacing:.08em">BB-003 · REV A · DISCOVERY ENGINE</span>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>BlitheBot | System Architecture</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lexend:wght@600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet"/>
+<script src="script.js" defer></script>
+<script id="tailwind-config">
+tailwind.config={darkMode:"class",theme:{extend:{"colors":{"terminal-black":"#0a0a0f","on-surface":"#e4e1e6","success-green":"#4ade80","surface-charcoal":"#16161A","surface":"#131316","error":"#ec4899","primary":"#d7baff","on-surface-variant":"#ccc3d3","primary-container":"#bd93f9","stroke-soft":"rgba(255,255,255,0.08)","caution-amber":"#FFB86C"},"spacing":{"container-max":"1280px","gutter":"24px","margin-mobile":"16px"},"fontFamily":{"label-caps":["JetBrains Mono"],"data-mono":["JetBrains Mono"],"display-lg":["Lexend"],"headline-lg-mobile":["Lexend"]},"fontSize":{"headline-lg-mobile":["24px",{"lineHeight":"32px","fontWeight":"600"}],"label-caps":["12px",{"lineHeight":"16px","letterSpacing":"0.1em","fontWeight":"700"}],"data-mono":["14px",{"lineHeight":"20px","fontWeight":"500"}]}}}}
+</script>
+</head>
+<body class="bg-terminal-black text-on-surface overflow-x-hidden" style="font-family:'Inter',sans-serif">
+<style>
+:root{--accent:#7c3aed;--al:#a78bfa;--ticker:#c4b5fd;--br:#9d7dea;--ok:#4ade80;--warn:#FFB86C;--fail:#ec4899;--bg:#0a0a0f;--sf:#0f0f18;--border:rgba(124,58,237,0.15);--bs:rgba(255,255,255,0.06);--dim:#6b7280;--faint:#4a4060}
+@keyframes pulse-soft{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.6;transform:scale(.95)}}.status-pulse{animation:pulse-soft 2s cubic-bezier(.4,0,.6,1) infinite}
+.liquid-glass-button-primary{background:linear-gradient(135deg,#bd93f9 0%,#a781e0 100%);border:1px solid rgba(255,255,255,.2);box-shadow:inset 0 1px 0 0 rgba(255,255,255,.3),0 4px 15px rgba(189,147,249,.3)}
+.back-link{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;color:var(--al);text-decoration:none;display:inline-flex;align-items:center;gap:.4rem;transition:color .2s}.back-link:hover{color:var(--ticker)}
+.slabel{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--br);display:block;margin-bottom:.5rem}
+.stitle{font-family:'Lexend',sans-serif;font-size:clamp(1.3rem,3vw,1.8rem);font-weight:600;color:#e4e1e6;line-height:1.2}
+.data-table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace}
+.data-table thead tr{border-bottom:1px solid var(--border)}
+.data-table th{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--br);font-weight:500;padding:.6rem 1rem;text-align:left}
+.data-table td{padding:.65rem 1rem;font-size:11px;color:#ccc3d3;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:top}
+.data-table tr:last-child td{border-bottom:none}
+.data-table tr:hover td{background:rgba(124,58,237,.04)}
+.gate-id{color:var(--al);font-size:10px;white-space:nowrap}
+.bh{display:inline-block;padding:.1rem .4rem;background:rgba(236,72,153,.1);border:1px solid rgba(236,72,153,.25);color:#ec4899;font-size:10px;font-family:'JetBrains Mono',monospace}
+.bs{display:inline-block;padding:.1rem .4rem;background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.25);color:#a78bfa;font-size:10px;font-family:'JetBrains Mono',monospace}
+.bsz{display:inline-block;padding:.1rem .4rem;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);color:#4ade80;font-size:10px;font-family:'JetBrains Mono',monospace}
+.bl{display:inline-block;padding:.1rem .4rem;background:rgba(255,184,108,.1);border:1px solid rgba(255,184,108,.25);color:#FFB86C;font-size:10px;font-family:'JetBrains Mono',monospace}
+.fblock{background:#0a0a0f;border:1px solid var(--border);padding:1.1rem 1.4rem;font-family:'JetBrains Mono',monospace;font-size:11px;color:#ccc3d3;line-height:2;margin-bottom:.8rem}
+.fblock .fh{color:var(--ticker);font-weight:700;display:block;margin-bottom:.3rem}
+.fblock .fn{color:var(--dim);font-size:10px;display:block;margin-top:.25rem}
+.spec-r{display:flex;justify-content:space-between;padding:.38rem 0;border-bottom:1px solid rgba(255,255,255,.04);font-family:'JetBrains Mono',monospace;font-size:11px}
+.spec-r:last-child{border-bottom:none}
+.spec-k{color:var(--dim);font-size:10px;letter-spacing:.04em}
+.spec-v{color:#ccc3d3;text-align:right}
+.csec{padding:2.5rem 0;border-bottom:1px solid var(--bs)}
+.csec:last-child{border-bottom:none}
+.box{background:#0a0a0f;border:1px solid rgba(124,58,237,.2);overflow:hidden}
+.box-head{display:flex;align-items:center;justify-content:space-between;padding:.7rem 1rem;border-bottom:1px solid rgba(255,255,255,.05);background:rgba(124,58,237,.04)}
+.box-head-label{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#9d7dea}
+.box-head-sub{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--faint)}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:2rem}
+@media(max-width:768px){.two-col{grid-template-columns:1fr}}
+</style>
+
+<!-- NAV -->
+<header class="bg-surface-charcoal/40 backdrop-blur-2xl border-b border-stroke-soft sticky top-0 z-50">
+<div class="flex justify-between items-center w-full px-margin-mobile md:px-gutter max-w-container-max mx-auto h-16">
+<a href="index.html" style="font-family:'Lexend',sans-serif;font-weight:600;font-size:24px;letter-spacing:-.02em;color:#e4e1e6;text-decoration:none;text-transform:uppercase;display:flex;align-items:center;gap:.5rem">
+  BlitheBot <span class="w-2 h-2 rounded-full bg-success-green status-pulse"></span>
+</a>
+<nav class="hidden md:flex gap-gutter items-center">
+  <a style="color:#a78bfa;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="architecture" href="#">Architecture</a>
+  <a class="text-on-surface-variant hover:text-primary transition-colors duration-300" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="performance" href="#">Performance</a>
+  <a class="text-on-surface-variant hover:text-primary transition-colors duration-300" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="discovery" href="#">Discovery</a>
+  <a class="text-on-surface-variant hover:text-primary transition-colors duration-300" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="dashboard" href="#">Live Dashboard</a>
+</nav>
+<div class="flex items-center gap-4">
+  <a class="hidden lg:block text-on-surface-variant hover:text-primary transition-colors" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" href="#">Docs</a>
+  <button class="liquid-glass-button-primary rounded-lg hover:opacity-95 active:scale-95 transition-all" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;color:#0a0a0f;padding:.5rem 1rem;cursor:pointer">Institutional Access</button>
+</div>
+</div>
+</header>
+
+<main style="max-width:1280px;margin:0 auto;padding:3rem 1.5rem">
+
+  <div style="margin-bottom:2rem">
+    <a href="index.html" class="back-link" data-page="home">← BACK TO HOME</a>
+  </div>
+
+  <div style="margin-bottom:3rem">
+    <span class="slabel">BB-001 · REV A</span>
+    <h1 style="font-family:'Lexend',sans-serif;font-size:clamp(2rem,5vw,3rem);font-weight:600;color:#e4e1e6;line-height:1.1;margin-bottom:.75rem">System Architecture</h1>
+    <p style="color:var(--dim);font-size:.9rem;max-width:600px;line-height:1.75">19 concurrent asyncio loops running 24/7 on Railway. Every buy signal passes a 15-gate deterministic veto chain before execution. No discretion. No exceptions.</p>
+  </div>
+
+  <!-- § 01 Gate Chain -->
+  <div class="csec">
+    <span class="slabel">§ 01 — CONVICTION GATE CHAIN</span>
+    <h2 class="stitle" style="margin-bottom:1rem">15-Gate Sequential Veto</h2>
+    <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.5rem;max-width:640px;line-height:1.75">All 15 gates run in order per buy signal. First failure discards the trade. No human override exists in the execution path.</p>
+    <div class="box">
+      <div class="box-head"><span class="box-head-label">GATE CHAIN · BB-RISK-01</span><span class="box-head-sub">15 of 15 active</span></div>
+      <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead><tr><th>Gate</th><th>Name</th><th>Type</th><th>Trigger Condition</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td class="gate-id">GATE-01</td><td>Daily Trading Halt</td><td><span class="bh">HARD BLOCK</span></td><td>max daily loss ≥ 5%</td><td>Halts all trades for session</td></tr>
+            <tr><td class="gate-id">GATE-02</td><td>Bot Pause</td><td><span class="bh">HARD BLOCK</span></td><td>_bot_paused flag set via Slack /pause</td><td>All signals skip immediately</td></tr>
+            <tr><td class="gate-id">GATE-03</td><td>Symbol Cooldown</td><td><span class="bh">HARD BLOCK</span></td><td>within 120-min cooldown window</td><td>Triggered after stop-loss exit</td></tr>
+            <tr><td class="gate-id">GATE-04</td><td>Position Check</td><td><span class="bh">HARD BLOCK</span></td><td>already holding this symbol</td><td>Live Alpaca position lookup</td></tr>
+            <tr><td class="gate-id">GATE-05</td><td>Portfolio Heat Cap</td><td><span class="bh">HARD BLOCK</span></td><td>∑(|mkt_val| × SL%) / equity ≥ 15%</td><td>Block + critical Slack alert</td></tr>
+            <tr><td class="gate-id">GATE-06</td><td>Correlation Guard</td><td><span class="bh">HARD BLOCK</span></td><td>Pearson ρ &gt; 0.75 vs any open position</td><td>Max 2 per sector enforced</td></tr>
+            <tr><td class="gate-id">GATE-07</td><td>FINRA Short Interest</td><td><span class="bh">HARD BLOCK</span></td><td>CNMSshvol ratio ≥ 65% on long entry</td><td>Veto; squeeze note on uptick</td></tr>
+            <tr><td class="gate-id">GATE-08</td><td>Fundamentals Gate</td><td><span class="bh">HARD BLOCK</span></td><td>Negative P/E or EPS decline &gt; 20% YoY</td><td>Finnhub quality check</td></tr>
+            <tr><td class="gate-id">GATE-09</td><td>Earnings Filter</td><td><span class="bsz">SIZE × 0.25</span></td><td>earnings within 48h of signal</td><td>Position size reduced to 25%</td></tr>
+            <tr><td class="gate-id">GATE-10</td><td>Bull/Bear LLM Debate</td><td><span class="bs">SOFT GATE</span></td><td>3 API calls: bull + bear + synthesis</td><td>proceed / skip / reduce_size</td></tr>
+            <tr><td class="gate-id">GATE-11</td><td>Strategy Circuit Breaker</td><td><span class="bh">HARD BLOCK</span></td><td>rolling pnl_pct ≤ −threshold%</td><td>Auto-resets on drawdown recovery</td></tr>
+            <tr><td class="gate-id">GATE-12</td><td>VIX Extreme</td><td><span class="bh">HARD BLOCK</span></td><td>VIX &gt; 40</td><td>Full block + critical Slack alert</td></tr>
+            <tr><td class="gate-id">GATE-13</td><td>VIX Spike</td><td><span class="bsz">SIZE × 0.25</span></td><td>VIX &gt; 35</td><td>Proceeds at 25% normal size</td></tr>
+            <tr><td class="gate-id">GATE-14</td><td>ADX Regime Filter</td><td><span class="bl">LOG ONLY</span></td><td>SPY ADX(14) &lt; 20 (choppy)</td><td>Caution log only; 4-hr cache</td></tr>
+            <tr><td class="gate-id">GATE-15</td><td>Candlestick Confirm</td><td><span class="bl">CONV × 0.8</span></td><td>no bullish pattern in last 3 bars</td><td>Conviction multiplier × 0.8</td></tr>
+            <tr style="border-top:1px solid rgba(124,58,237,.3)"><td style="color:var(--ticker);font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700">EXECUTE</td><td colspan="4" style="color:#e4e1e6;font-family:'JetBrains Mono',monospace;font-size:11px">KellySizer → bracket order → PostgreSQL log → Slack notification</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- § 02 Swing Strategy -->
+  <div class="csec">
+    <span class="slabel">§ 02 — SWING STRATEGY SIGNAL STACK</span>
+    <h2 class="stitle" style="margin-bottom:1rem">EMA / MACD / RSI Momentum</h2>
+    <div class="two-col">
+      <div>
+        <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.2rem;line-height:1.75">Daily swing trades across 6 S&P 500 symbols. Entry window: 10:30 AM EST. Primary signal is an EMA fast/slow crossover confirmed by MACD histogram expansion and RSI in a neutral band. Three secondary gates filter regime and positioning noise.</p>
+        <div class="fblock">
+          <span class="fh">Primary Signal</span>
+          EMA_fast crosses above EMA_slow<br>
+          MACD histogram expanding (bar₀ &gt; bar₋₁)<br>
+          RSI_low &lt; RSI &lt; RSI_high (band gate)<br>
+          <span class="fn">Parameters per-symbol, updated weekly by Discovery Engine v1</span>
+        </div>
+        <div class="fblock">
+          <span class="fh">Secondary Gates (all three required)</span>
+          Kalman slope &gt; 0 → trend confirmation<br>
+          Hurst H &gt; 0.60 → trending regime required<br>
+          VWAP distance_pct in range → price position<br>
+          <span class="fn">Gates run after primary signal; any failure discards entry</span>
+        </div>
+      </div>
+      <div>
+        <div class="box" style="margin-bottom:1rem">
+          <div class="box-head"><span class="box-head-label">PER-SYMBOL VALIDATED PARAMETERS</span></div>
+          <div style="overflow-x:auto">
+            <table class="data-table">
+              <thead><tr><th>Symbol</th><th>EMA</th><th>RSI Period</th><th>Band</th><th>Validated</th></tr></thead>
+              <tbody>
+                <tr><td style="color:var(--ticker)">COST</td><td>20/100</td><td>10</td><td>35–65</td><td style="color:var(--ok)">125 / 243</td></tr>
+                <tr><td>BRK.B</td><td>50/200</td><td>21</td><td>40–65</td><td style="color:var(--ok)">24 / 243</td></tr>
+                <tr><td>SPY</td><td>50/200</td><td>14</td><td>40–60</td><td style="color:var(--ok)">9 / 243</td></tr>
+                <tr><td style="color:var(--dim)">JPM</td><td>50/200</td><td>14</td><td>40–60</td><td style="color:var(--fail)">0 / 243</td></tr>
+                <tr><td style="color:var(--dim)">PG</td><td>50/200</td><td>14</td><td>40–60</td><td style="color:var(--fail)">0 / 243</td></tr>
+                <tr><td style="color:var(--dim)">V</td><td>50/200</td><td>14</td><td>40–60</td><td style="color:var(--fail)">0 / 243</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="spec-r"><span class="spec-k">Entry Window</span><span class="spec-v">10:30 AM EST daily</span></div>
+        <div class="spec-r"><span class="spec-k">Exit</span><span class="spec-v">ATR trailing stop · 3:1 take profit</span></div>
+        <div class="spec-r"><span class="spec-k">Sizing</span><span class="spec-v">Half-Kelly capped 10%</span></div>
+        <div class="spec-r"><span class="spec-k">Circuit Breaker</span><span class="spec-v">−5% drawdown / 10-day window</span></div>
+        <div class="spec-r"><span class="spec-k">Bollinger Alt</span><span class="spec-v">BB lower-break + OU half-life gate</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- § 03 SMB Strategy -->
+  <div class="csec">
+    <span class="slabel">§ 03 — SMB CRYPTO SCALP SIGNAL STACK</span>
+    <h2 class="stitle" style="margin-bottom:1rem">Kalman / VWAP Crypto Scalp</h2>
+    <div class="two-col">
+      <div>
+        <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.2rem;line-height:1.75">High-frequency scalping on BTC/USD and ETH/USD. Entry when Kalman-filtered price crosses above session VWAP, confirmed by Anchored VWAP gate. Grok X sentiment overlay on 30-minute cadence.</p>
+        <div class="fblock">
+          <span class="fh">Entry Condition</span>
+          Kalman_price crosses above session_VWAP<br>
+          Anchored VWAP distance_pct within gate<br>
+          volume_ratio confirms breakout strength<br>
+          <span class="fn">Grok sentiment ≥ 7 provides conviction multiplier boost</span>
+        </div>
+        <div class="fblock">
+          <span class="fh">Exit Condition</span>
+          Price reverts toward VWAP (mean-reversion)<br>
+          ATR trailing stop on momentum continuation<br>
+          Half-life holding window maximum<br>
+          <span class="fn">Currently DISABLED — SCALP_ENABLED=False in config</span>
+        </div>
+      </div>
+      <div>
+        <div class="box">
+          <div class="box-head"><span class="box-head-label">STRATEGY SPECIFICATION</span></div>
+          <div style="padding:1rem">
+            <div class="spec-r"><span class="spec-k">Symbols</span><span class="spec-v">BTC/USD · ETH/USD</span></div>
+            <div class="spec-r"><span class="spec-k">Status</span><span class="spec-v" style="color:var(--warn)">DISABLED (SCALP_ENABLED=False)</span></div>
+            <div class="spec-r"><span class="spec-k">Sentiment Layer</span><span class="spec-v">Grok-3-mini · X live search · 0–10</span></div>
+            <div class="spec-r"><span class="spec-k">Sentiment Cadence</span><span class="spec-v">30-minute intervals</span></div>
+            <div class="spec-r"><span class="spec-k">Sizing</span><span class="spec-v">Fixed 2% (Kelly pending min trades)</span></div>
+            <div class="spec-r"><span class="spec-k">VWAP Types</span><span class="spec-v">Session VWAP + Anchored VWAP gate</span></div>
+            <div class="spec-r"><span class="spec-k">Kalman Process Noise Q</span><span class="spec-v">0.001</span></div>
+            <div class="spec-r"><span class="spec-k">Re-enable</span><span class="spec-v">Set SCALP_ENABLED=True in .env</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- § 04 Statistical Signal Layer -->
+  <div class="csec">
+    <span class="slabel">§ 04 — STATISTICAL SIGNAL LAYER</span>
+    <h2 class="stitle" style="margin-bottom:1.5rem">Signal Mathematics</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
+      <div class="fblock">
+        <span class="fh">Kalman Filter (1D Scalar)</span>
+        x̂ₖ = x̂ₖ₋₁ + K·(zₖ − x̂ₖ₋₁)<br>
+        K = P⁻·(P⁻ + R)⁻¹<br>
+        <span class="fn">Optional db4 wavelet pre-denoising · outputs: trend, slope, noise_ratio, signal ∈ {−1,0,+1}</span>
+      </div>
+      <div class="fblock">
+        <span class="fh">Hurst Exponent (R/S Analysis)</span>
+        H = log(R/S) / log(n)<br>
+        H &gt; 0.6 → trending · H &lt; 0.4 → mean-reverting<br>
+        <span class="fn">100-bar rolling window · OLS log(RS) ~ log(lag) · regime gate for swing entries</span>
+      </div>
+      <div class="fblock">
+        <span class="fh">Half-Life (Ornstein-Uhlenbeck)</span>
+        Δpₜ = α + β·pₜ₋₁ + εₜ<br>
+        HL = −ln(2) / ln(1 + β)<br>
+        <span class="fn">Gates BB mean reversion entries · valid HL ∈ [1, 30] bars · β ∈ (−1, 0) required</span>
+      </div>
+      <div class="fblock">
+        <span class="fh">Half-Kelly Position Sizing</span>
+        f* = (p·b − q) / b<br>
+        size = (f*/2) · equity · risk%<br>
+        <span class="fn">90-day lookback from signal_outcomes · min 20 closed trades · 10% hard cap · 2% default</span>
+      </div>
+      <div class="fblock">
+        <span class="fh">Correlation Guard (Pearson ρ)</span>
+        ρ = Σ(Xᵢ−X̄)(Yᵢ−Ȳ) / [σX·σY·n]<br>
+        Block if ρ &gt; 0.75 vs any open position<br>
+        <span class="fn">60-day closing price window · max 2 open positions per sector simultaneously</span>
+      </div>
+      <div class="fblock">
+        <span class="fh">FINRA Short Interest Ratio</span>
+        ratio = ShortVolume / TotalVolume<br>
+        ratio ≥ 0.65 → veto long entry<br>
+        <span class="fn">CNMSshvol daily data · price uptick detection triggers squeeze flag notification</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- § 05 Discovery -->
+  <div class="csec">
+    <span class="slabel">§ 05 — DISCOVERY ENGINE</span>
+    <h2 class="stitle" style="margin-bottom:1rem">Walk-Forward Parameter Validation</h2>
+    <div class="two-col">
+      <div>
+        <p style="color:var(--dim);font-size:.82rem;line-height:1.75;margin-bottom:1.2rem">Discovery Engine v1 runs a 243-combination grid search on 6-year daily bars. Each combination validated with a 24-month train / 3-month test walk-forward, requiring p &lt; 0.05 on scipy t-test.</p>
+        <div class="spec-r"><span class="spec-k">Grid Combinations</span><span class="spec-v">243 per symbol (v1)</span></div>
+        <div class="spec-r"><span class="spec-k">Training Window</span><span class="spec-v">24 months</span></div>
+        <div class="spec-r"><span class="spec-k">Test Window</span><span class="spec-v">3 months (walk-forward)</span></div>
+        <div class="spec-r"><span class="spec-k">Significance Test</span><span class="spec-v">scipy t-test p &lt; 0.05</span></div>
+        <div class="spec-r"><span class="spec-k">v2 Families</span><span class="spec-v">5 strategy families · top-100 S&P</span></div>
+        <div class="spec-r"><span class="spec-k">GP Engine</span><span class="spec-v">50-pop × 20-gen · IC &gt; 0.05 to graduate</span></div>
+        <div class="spec-r"><span class="spec-k">Schedule</span><span class="spec-v">Fri 4:30PM (v2) · Sat 11PM (GP)</span></div>
+      </div>
+      <div>
+        <a data-page="discovery" href="#" style="display:block;background:rgba(124,58,237,.06);border:1px solid rgba(124,58,237,.25);padding:1.5rem;text-decoration:none;transition:background .2s" onmouseover="this.style.background='rgba(124,58,237,.12)'" onmouseout="this.style.background='rgba(124,58,237,.06)'">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--br);margin-bottom:.6rem">DEEP DIVE →</div>
+          <div style="font-family:'Lexend',sans-serif;font-size:1.1rem;font-weight:600;color:#e4e1e6;margin-bottom:.4rem">Discovery Engine</div>
+          <div style="font-size:.82rem;color:var(--dim);line-height:1.65">Genetic programming, expression trees, IC threshold validation, alternative data integration, and overnight run schedule.</div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer style="border-top:1px solid var(--bs);padding:1.4rem 1.5rem;display:flex;justify-content:space-between;align-items:center;max-width:1280px;margin:0 auto">
+  <span style="font-family:'Lexend',sans-serif;font-size:.9rem;font-weight:600;color:#d7baff">BlitheBot</span>
+  <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--faint);letter-spacing:.08em">BB-001 · REV A · SYSTEM ARCHITECTURE</span>
+</footer>
+
+</body>
+</html>

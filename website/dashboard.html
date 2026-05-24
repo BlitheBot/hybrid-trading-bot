@@ -1,431 +1,405 @@
 <!DOCTYPE html>
-
-<html class="dark" lang="en"><head>
+<html class="dark" lang="en">
+<head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500;700&amp;family=Lexend:wght@600;700&amp;display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<title>BlitheBot | Live Dashboard</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Lexend:wght@600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet"/>
+<script src="script.js" defer></script>
 <script id="tailwind-config">
-      tailwind.config = {
-        darkMode: "class",
-        theme: {
-          extend: {
-            "colors": {
-                "primary-fixed-dim": "#d7baff",
-                "surface-variant": "#353438",
-                "on-primary-container": "#4e2484",
-                "secondary": "#b5c5fc",
-                "background": "#131316",
-                "surface-container-low": "#1b1b1e",
-                "surface-container-lowest": "#0e0e11",
-                "primary": "#d7baff",
-                "secondary-fixed-dim": "#b5c5fc",
-                "tertiary": "#c6c4da",
-                "on-error-container": "#ffdad6",
-                "surface-container-high": "#2a2a2d",
-                "on-surface-variant": "#ccc3d3",
-                "on-tertiary-container": "#3b3b4c",
-                "on-secondary": "#1d2e5c",
-                "surface-tint": "#d7baff",
-                "primary-container": "#bd93f9",
-                "on-surface": "#e4e1e6",
-                "caution-amber": "#FFB86C",
-                "success-green": "#50FA7B",
-                "inverse-primary": "#714aaa",
-                "primary-fixed": "#eddcff",
-                "tertiary-fixed-dim": "#c6c4da",
-                "on-primary-fixed-variant": "#593090",
-                "terminal-black": "#0a0a0f",
-                "secondary-fixed": "#dbe1ff",
-                "on-tertiary-fixed": "#1a1a2a",
-                "surface-bright": "#39393c",
-                "on-error": "#690005",
-                "error": "#ffb4ab",
-                "on-background": "#e4e1e6",
-                "on-secondary-container": "#a7b7ed",
-                "surface-container": "#1f1f22",
-                "on-secondary-fixed": "#041846",
-                "inverse-on-surface": "#303033",
-                "tertiary-container": "#a7a5ba",
-                "surface-dim": "#131316",
-                "tertiary-fixed": "#e3e0f7",
-                "on-secondary-fixed-variant": "#354574",
-                "surface-container-highest": "#353438",
-                "on-primary": "#411478",
-                "surface-charcoal": "#16161A",
-                "error-container": "#93000a",
-                "outline": "#968e9c",
-                "on-primary-fixed": "#290055",
-                "on-tertiary": "#2f2f40",
-                "inverse-surface": "#e4e1e6",
-                "stroke-soft": "rgba(255, 255, 255, 0.08)",
-                "on-tertiary-fixed-variant": "#464557",
-                "outline-variant": "#4a4451",
-                "secondary-container": "#374776",
-                "surface": "#131316"
-            },
-            "borderRadius": {
-                "DEFAULT": "0.125rem",
-                "lg": "0.25rem",
-                "xl": "0.5rem",
-                "full": "0.75rem"
-            },
-            "spacing": {
-                "stack-sm": "8px",
-                "stack-lg": "64px",
-                "margin-mobile": "16px",
-                "stack-md": "24px",
-                "gutter": "24px",
-                "container-max": "1280px"
-            },
-            "fontFamily": {
-                "label-caps": ["JetBrains Mono"],
-                "data-mono": ["JetBrains Mono"],
-                "body-md": ["Inter"],
-                "headline-lg": ["Lexend"],
-                "headline-lg-mobile": ["Lexend"],
-                "display-lg": ["Lexend"]
-            },
-            "fontSize": {
-                "label-caps": ["12px", {"lineHeight": "16px", "letterSpacing": "0.1em", "fontWeight": "700"}],
-                "data-mono": ["14px", {"lineHeight": "20px", "fontWeight": "500"}],
-                "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "400"}],
-                "headline-lg": ["32px", {"lineHeight": "40px", "fontWeight": "600"}],
-                "headline-lg-mobile": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
-                "display-lg": ["64px", {"lineHeight": "72px", "letterSpacing": "-0.02em", "fontWeight": "700"}]
-            }
-          },
-        },
-      }
-    </script>
-<style>
-        .material-symbols-outlined {
-            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-        }
-        ::-webkit-scrollbar { width: 4px; height: 4px; }
-        ::-webkit-scrollbar-track { background: #131316; }
-        ::-webkit-scrollbar-thumb { background: #353438; border-radius: 2px; }
-        ::-webkit-scrollbar-thumb:hover { background: #d7baff; }
-
-        .liquid-glass {
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 100%);
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-        }
-
-        .terminal-bg { background-color: #0a0a0f; }
-        .terminal-bracket { color: #9d7dea; }
-        .terminal-ticker { color: #c4b5fd; font-weight: 700; }
-        .terminal-log-text { color: #6b7280; }
-        .terminal-positive { color: #ffffff; }
-        .terminal-negative { color: #ec4899; }
-        .terminal-status { color: #4ade80; }
-        .terminal-gate { color: #7c3aed; }
-        
-        .blinking-cursor {
-            animation: blink 1s step-end infinite;
-            background-color: #a78bfa;
-        }
-        @keyframes blink {
-            from, to { opacity: 0 }
-            50% { opacity: 1 }
-        }
-
-        .scanline {
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(to bottom, transparent 50%, rgba(189, 147, 249, 0.02) 50%);
-            background-size: 100% 4px;
-            pointer-events: none;
-            position: absolute;
-            top: 0; left: 0;
-            z-index: 10;
-        }
-
-        .glow-border {
-            box-shadow: 0 0 15px rgba(215, 186, 255, 0.1);
-        }
-    </style>
+tailwind.config={darkMode:"class",theme:{extend:{"colors":{"terminal-black":"#0a0a0f","on-surface":"#e4e1e6","success-green":"#4ade80","surface-charcoal":"#16161A","surface":"#131316","error":"#ec4899","primary":"#d7baff","on-surface-variant":"#ccc3d3","primary-container":"#bd93f9","stroke-soft":"rgba(255,255,255,0.08)","caution-amber":"#FFB86C"},"spacing":{"container-max":"1280px","gutter":"24px","margin-mobile":"16px"},"fontFamily":{"label-caps":["JetBrains Mono"],"data-mono":["JetBrains Mono"],"display-lg":["Lexend"],"headline-lg-mobile":["Lexend"]},"fontSize":{"headline-lg-mobile":["24px",{"lineHeight":"32px","fontWeight":"600"}],"label-caps":["12px",{"lineHeight":"16px","letterSpacing":"0.1em","fontWeight":"700"}],"data-mono":["14px",{"lineHeight":"20px","fontWeight":"500"}]}}}}
+</script>
 </head>
-<body class="bg-surface text-on-surface font-body-md h-screen flex flex-col overflow-hidden selection:bg-primary/30">
-<!-- Institutional Header -->
-<header class="h-16 border-b border-stroke-soft liquid-glass sticky top-0 z-50 flex items-center shrink-0">
-<div class="max-w-[1920px] w-full mx-auto px-6 flex justify-between items-center">
-<div class="flex items-center gap-12">
-<div class="flex items-center gap-3">
-<div class="w-8 h-8 bg-primary rounded-sm flex items-center justify-center">
-<span class="material-symbols-outlined text-on-primary text-xl">query_stats</span>
-</div>
-<span class="font-headline-lg-mobile tracking-tighter uppercase text-on-surface">BlitheBot</span>
-</div>
-<nav class="hidden lg:flex items-center gap-8">
-<a class="text-primary font-label-caps text-label-caps border-b-2 border-primary pb-1" href="#">Strategy</a>
-<a class="text-on-surface-variant hover:text-on-surface transition-colors font-label-caps text-label-caps" href="#">Performance</a>
-<a class="text-on-surface-variant hover:text-on-surface transition-colors font-label-caps text-label-caps" href="#">Timeline</a>
-<a class="text-on-surface-variant hover:text-on-surface transition-colors font-label-caps text-label-caps" href="#">Contact</a>
+<body class="bg-terminal-black text-on-surface overflow-x-hidden" style="font-family:'Inter',sans-serif">
+<style>
+:root{--accent:#7c3aed;--al:#a78bfa;--ticker:#c4b5fd;--br:#9d7dea;--ok:#4ade80;--warn:#FFB86C;--fail:#ec4899;--bg:#0a0a0f;--sf:#0f0f18;--border:rgba(124,58,237,0.15);--bs:rgba(255,255,255,0.06);--dim:#6b7280;--faint:#4a4060}
+@keyframes pulse-soft{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.6;transform:scale(.95)}}.status-pulse{animation:pulse-soft 2s cubic-bezier(.4,0,.6,1) infinite}
+.liquid-glass-button-primary{background:linear-gradient(135deg,#bd93f9 0%,#a781e0 100%);border:1px solid rgba(255,255,255,.2);box-shadow:inset 0 1px 0 0 rgba(255,255,255,.3),0 4px 15px rgba(189,147,249,.3)}
+.back-link{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:.08em;color:var(--al);text-decoration:none;display:inline-flex;align-items:center;gap:.4rem;transition:color .2s}.back-link:hover{color:var(--ticker)}
+.slabel{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--br);display:block;margin-bottom:.5rem}
+.stitle{font-family:'Lexend',sans-serif;font-size:clamp(1.3rem,3vw,1.8rem);font-weight:600;color:#e4e1e6;line-height:1.2}
+.data-table{width:100%;border-collapse:collapse;font-family:'JetBrains Mono',monospace}
+.data-table thead tr{border-bottom:1px solid var(--border)}
+.data-table th{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--br);font-weight:500;padding:.6rem 1rem;text-align:left}
+.data-table td{padding:.65rem 1rem;font-size:11px;color:#ccc3d3;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:middle}
+.data-table tr:last-child td{border-bottom:none}
+.data-table tr:hover td{background:rgba(124,58,237,.04)}
+.spec-r{display:flex;justify-content:space-between;padding:.38rem 0;border-bottom:1px solid rgba(255,255,255,.04);font-family:'JetBrains Mono',monospace;font-size:11px}
+.spec-r:last-child{border-bottom:none}
+.spec-k{color:var(--dim);font-size:10px;letter-spacing:.04em}
+.spec-v{color:#ccc3d3;text-align:right}
+.csec{padding:2.5rem 0;border-bottom:1px solid var(--bs)}
+.csec:last-child{border-bottom:none}
+.box{background:#0a0a0f;border:1px solid rgba(124,58,237,.2);overflow:hidden}
+.box-head{display:flex;align-items:center;justify-content:space-between;padding:.7rem 1rem;border-bottom:1px solid rgba(255,255,255,.05);background:rgba(124,58,237,.04)}
+.box-head-label{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#9d7dea}
+.box-head-sub{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--faint)}
+.stat-card{background:#0a0a0f;border:1px solid rgba(124,58,237,.2);padding:1.4rem 1.5rem}
+.stat-label{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--br)}
+.stat-val{font-family:'JetBrains Mono',monospace;font-size:1.4rem;font-weight:700;color:#e4e1e6;margin:.3rem 0 .1rem}
+.stat-sub{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim)}
+.terminal{background:#050508;border:1px solid rgba(124,58,237,.2);padding:1.2rem 1.4rem;font-family:'JetBrains Mono',monospace;font-size:11px;line-height:2;overflow-x:auto}
+.t-br{color:#9d7dea}
+.t-ticker{color:#c4b5fd;font-weight:700}
+.t-val{color:#6b7280}
+.t-ok{color:#4ade80;font-weight:700}
+.t-warn{color:#FFB86C}
+.sig-row{display:grid;grid-template-columns:80px 70px 90px 90px 1fr 90px;gap:.5rem;padding:.55rem 1rem;border-bottom:1px solid rgba(255,255,255,.04);font-family:'JetBrains Mono',monospace;font-size:11px;align-items:center}
+.sig-row:last-child{border-bottom:none}
+.sig-buy{color:#4ade80}
+.sig-sell{color:#ec4899}
+.sig-block{color:#6b7280}
+.sig-warn{color:#FFB86C}
+.badge-exec{display:inline-block;padding:.05rem .35rem;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);color:#4ade80;font-size:10px}
+.badge-veto{display:inline-block;padding:.05rem .35rem;background:rgba(236,72,153,.1);border:1px solid rgba(236,72,153,.25);color:#ec4899;font-size:10px}
+.badge-block{display:inline-block;padding:.05rem .35rem;background:rgba(255,184,108,.1);border:1px solid rgba(255,184,108,.25);color:#FFB86C;font-size:10px}
+.mx-cell{font-family:'JetBrains Mono',monospace;font-size:11px;text-align:center;padding:.45rem .6rem;border:1px solid rgba(255,255,255,.04)}
+.mx-high{background:rgba(236,72,153,.12);color:#ec4899;border-color:rgba(236,72,153,.2)}
+.mx-mid{background:rgba(124,58,237,.1);color:#a78bfa;border-color:rgba(124,58,237,.2)}
+.mx-low{background:transparent;color:#6b7280}
+.mx-diag{background:rgba(124,58,237,.06);color:var(--br);font-weight:700}
+.mx-head{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--br);letter-spacing:.08em;text-align:center;padding:.3rem .6rem}
+</style>
+
+<!-- NAV -->
+<header class="bg-surface-charcoal/40 backdrop-blur-2xl border-b border-stroke-soft sticky top-0 z-50">
+<div class="flex justify-between items-center w-full px-margin-mobile md:px-gutter max-w-container-max mx-auto h-16">
+<a href="index.html" style="font-family:'Lexend',sans-serif;font-weight:600;font-size:24px;letter-spacing:-.02em;color:#e4e1e6;text-decoration:none;text-transform:uppercase;display:flex;align-items:center;gap:.5rem">
+  BlitheBot <span class="w-2 h-2 rounded-full bg-success-green status-pulse"></span>
+</a>
+<nav class="hidden md:flex gap-gutter items-center">
+  <a class="text-on-surface-variant hover:text-primary transition-colors duration-300" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="architecture" href="#">Architecture</a>
+  <a class="text-on-surface-variant hover:text-primary transition-colors duration-300" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="performance" href="#">Performance</a>
+  <a class="text-on-surface-variant hover:text-primary transition-colors duration-300" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="discovery" href="#">Discovery</a>
+  <a style="color:#a78bfa;font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" data-page="dashboard" href="#">Live Dashboard</a>
 </nav>
-</div>
-<div class="flex items-center gap-6">
-<button class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface">Docs</button>
-<button class="bg-primary text-on-primary font-label-caps text-label-caps px-6 py-2 rounded-sm hover:brightness-110 active:scale-95 transition-all shadow-lg shadow-primary/20">Institutional Access</button>
+<div class="flex items-center gap-4">
+  <a class="hidden lg:block text-on-surface-variant hover:text-primary transition-colors" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;text-decoration:none" href="#">Docs</a>
+  <button class="liquid-glass-button-primary rounded-lg hover:opacity-95 active:scale-95 transition-all" style="font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.1em;font-weight:700;color:#0a0a0f;padding:.5rem 1rem;cursor:pointer">Institutional Access</button>
 </div>
 </div>
 </header>
-<main class="flex-1 flex overflow-hidden">
-<!-- Sidebar: Entropy & Signals -->
-<aside class="w-64 border-r border-stroke-soft bg-surface-container-lowest flex flex-col shrink-0 overflow-y-auto">
-<div class="p-4 border-b border-stroke-soft liquid-glass">
-<div class="flex justify-between items-center mb-3">
-<span class="font-label-caps text-[10px] text-on-surface-variant">§ 01.00 ENTROPY</span>
-<span class="terminal-status font-data-mono text-[10px]">STABLE</span>
-</div>
-<div class="h-1 w-full bg-surface-container-highest rounded-full overflow-hidden">
-<div class="h-full bg-primary w-2/3 shadow-[0_0_10px_rgba(215,186,255,0.5)]"></div>
-</div>
-</div>
-<div class="flex-1 p-4 space-y-8">
-<section>
-<h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 flex items-center gap-2">
-<span class="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                    ACTIVE SIGNALS
-                </h3>
-<div class="space-y-1">
-<div class="liquid-glass p-2.5 flex justify-between items-center">
-<span class="terminal-ticker text-[11px]">JPM</span>
-<span class="terminal-status text-[11px] font-bold">BULL</span>
-</div>
-<div class="liquid-glass p-2.5 flex justify-between items-center">
-<span class="terminal-ticker text-[11px]">SPY</span>
-<span class="terminal-status text-[11px] font-bold">TREND</span>
-</div>
-<div class="liquid-glass p-2.5 flex justify-between items-center border-primary/20 bg-primary/5">
-<span class="terminal-ticker text-[11px]">COST</span>
-<span class="terminal-positive text-[11px] font-bold">0.87 Sharpe</span>
-</div>
-<div class="liquid-glass p-2.5 flex justify-between items-center opacity-70">
-<span class="terminal-ticker text-[11px]">BRK.B</span>
-<span class="terminal-log-text text-[11px]">WIDE</span>
-</div>
-<div class="liquid-glass p-2.5 flex justify-between items-center opacity-50">
-<span class="terminal-ticker text-[11px]">PG</span>
-<span class="terminal-negative text-[11px]">WAIT</span>
-</div>
-<div class="liquid-glass p-2.5 flex justify-between items-center">
-<span class="terminal-ticker text-[11px]">BTC/USD</span>
-<span class="terminal-status text-[11px]">ACTIVE</span>
-</div>
-<div class="liquid-glass p-2.5 flex justify-between items-center">
-<span class="terminal-ticker text-[11px]">ETH/USD</span>
-<span class="terminal-status text-[11px]">ACTIVE</span>
-</div>
-</div>
-</section>
-<section>
-<h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 flex items-center gap-2">
-<span class="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                    TELEMETRY
-                </h3>
-<div class="font-data-mono text-[10px] space-y-2 terminal-log-text">
-<div class="flex justify-between border-b border-stroke-soft pb-1">
-<span>VIX CONVICTION</span>
-<span class="terminal-positive">HI</span>
-</div>
-<div class="flex justify-between border-b border-stroke-soft pb-1">
-<span>HURST EXP</span>
-<span class="terminal-status">0.62</span>
-</div>
-<div class="flex justify-between border-b border-stroke-soft pb-1">
-<span>KELLY F*</span>
-<span class="terminal-positive">0.082</span>
-</div>
-</div>
-</section>
-</div>
-<div class="p-4 border-t border-stroke-soft liquid-glass">
-<div class="flex items-center gap-3 mb-2">
-<div class="w-2 h-2 rounded-full bg-terminal-status animate-pulse shadow-[0_0_8px_#4ade80]"></div>
-<span class="font-data-mono text-[10px] terminal-status uppercase tracking-widest">Live Sync: Mainnet-V4</span>
-</div>
-<div class="font-data-mono text-[10px] terminal-log-text">
-                Latency: 12.4ms • PING: 42
-            </div>
-</div>
-</aside>
-<!-- Main Workspace: Chart & Terminal -->
-<section class="flex-1 flex flex-col bg-terminal-black relative">
-<div class="scanline"></div>
-<!-- Workspace Header -->
-<div class="p-5 border-b border-stroke-soft flex justify-between items-end liquid-glass">
-<div class="flex flex-col gap-1">
-<div class="flex items-center gap-3">
-<h2 class="font-headline-lg text-primary uppercase">BTC / USD</h2>
-<div class="flex gap-1">
-<span class="bg-surface-variant/50 px-2 py-0.5 text-[10px] font-label-caps text-on-surface border border-stroke-soft">1M</span>
-<span class="bg-primary/20 px-2 py-0.5 text-[10px] font-label-caps text-primary border border-primary/40">5M</span>
-<span class="bg-surface-variant/50 px-2 py-0.5 text-[10px] font-label-caps text-on-surface border border-stroke-soft">15M</span>
-<span class="bg-surface-variant/50 px-2 py-0.5 text-[10px] font-label-caps text-on-surface border border-stroke-soft">1H</span>
-</div>
-</div>
-<div class="font-data-mono text-[12px] terminal-log-text">BITSTAMP • VOL: 4.2k • 24H: +1.24%</div>
-</div>
-<div class="text-right">
-<div class="font-data-mono text-3xl terminal-status tabular-nums" id="price-ticker">$64,281.13</div>
-<div class="font-data-mono text-sm terminal-status">+1.24% (+$784.00)</div>
-</div>
-</div>
-<!-- Visualizer -->
-<div class="flex-1 relative overflow-hidden bg-[radial-gradient(circle_at_50%_50%,_rgba(189,147,249,0.05)_0%,_transparent_70%)]">
-<div class="absolute inset-0 opacity-10" style="background-image: linear-gradient(var(--stroke-soft) 1px, transparent 1px), linear-gradient(90deg, var(--stroke-soft) 1px, transparent 1px); background-size: 60px 60px;"></div>
-<!-- Simulated Professional Chart -->
-<div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-<svg class="w-full h-[60%] opacity-80" preserveaspectratio="none" viewbox="0 0 1000 400">
-<defs>
-<lineargradient id="areaGrad" x1="0%" x2="0%" y1="0%" y2="100%">
-<stop offset="0%" style="stop-color:#bd93f9;stop-opacity:0.15"></stop>
-<stop offset="100%" style="stop-color:#bd93f9;stop-opacity:0"></stop>
-</lineargradient>
-</defs>
-<path d="M0,320 L100,300 L200,340 L300,280 L400,310 L500,220 L600,250 L700,160 L800,200 L900,120 L1000,100 L1000,400 L0,400 Z" fill="url(#areaGrad)"></path>
-<path d="M0,320 L100,300 L200,340 L300,280 L400,310 L500,220 L600,250 L700,160 L800,200 L900,120 L1000,100" fill="none" stroke="#bd93f9" stroke-width="2.5"></path>
-<!-- Order Marker -->
-<circle cx="500" cy="220" fill="#4ade80" r="4"></circle>
-<line stroke="#4ade80" stroke-dasharray="4,4" stroke-width="1" x1="500" x2="650" y1="220" y2="220"></line>
-<text class="font-data-mono text-[10px]" fill="#4ade80" x="660" y="225">[ORDER] BRACKET ENTRY @ 62,400</text>
-</svg>
-</div>
-<!-- Console Overlay (Institutional Terminal Style) -->
-<div class="absolute bottom-6 left-6 right-6">
-<div class="liquid-glass border-primary/20 rounded-sm p-4 glow-border">
-<div class="flex items-center gap-4 mb-3 border-b border-stroke-soft pb-2">
-<span class="material-symbols-outlined text-primary text-sm">terminal</span>
-<span class="font-label-caps text-[10px] text-on-surface-variant">CONSOLE OUTPUT</span>
-</div>
-<div class="font-data-mono text-[13px] leading-relaxed">
-<div class="flex items-center gap-2">
-<span class="terminal-log-text">blithebot@quant:~$</span>
-<span class="terminal-positive">exec --risk-profile institutional --focus-volatility</span>
-<span class="bg-primary/40 w-2 h-4 inline-block align-middle ml-1"></span>
-</div>
-</div>
-</div>
-</div>
-</div>
-</section>
-<!-- Right Panel: Order Book & Stats -->
-<aside class="w-80 border-l border-stroke-soft bg-surface-container-lowest flex flex-col shrink-0">
-<div class="p-4 border-b border-stroke-soft liquid-glass">
-<h3 class="font-label-caps text-[10px] text-on-surface-variant">§ 02.00 BRACKET ORDERS</h3>
-</div>
-<div class="flex-1 overflow-hidden flex flex-col">
-<!-- Orders Table -->
-<div class="flex-1 overflow-y-auto font-data-mono text-[11px] p-2">
-<table class="w-full text-left">
-<thead class="sticky top-0 bg-surface-container-lowest border-b border-stroke-soft z-10">
-<tr class="text-on-surface-variant/60 uppercase">
-<th class="p-2 font-label-caps text-[10px]">Symbol</th>
-<th class="p-2 font-label-caps text-[10px]">Entry/TP/SL</th>
-<th class="p-2 font-label-caps text-[10px] text-right">Time</th>
-</tr>
-</thead>
-<tbody class="divide-y divide-stroke-soft">
-<tr class="hover:bg-primary/5 transition-colors group">
-<td class="p-2 terminal-ticker">BTC/USD</td>
-<td class="p-2 terminal-log-text">64.2k / 68.1k / 63.0k</td>
-<td class="p-2 text-right terminal-log-text">14:22:01</td>
-</tr>
-<tr class="hover:bg-primary/5 transition-colors group">
-<td class="p-2 terminal-ticker">COST</td>
-<td class="p-2 terminal-log-text">842.1 / 892.6 / 825.2</td>
-<td class="p-2 text-right terminal-log-text">14:22:00</td>
-</tr>
-<tr class="hover:bg-primary/5 transition-colors group">
-<td class="p-2 terminal-ticker">SPY</td>
-<td class="p-2 terminal-log-text">514.2 / 545.0 / 503.9</td>
-<td class="p-2 text-right terminal-log-text">14:21:58</td>
-</tr>
-<tr class="hover:bg-primary/5 transition-colors group">
-<td class="p-2 terminal-ticker">ETH/USD</td>
-<td class="p-2 terminal-log-text">3,421 / 3,626 / 3,352</td>
-<td class="p-2 text-right terminal-log-text">14:21:55</td>
-</tr>
-<tr class="hover:bg-primary/5 transition-colors group">
-<td class="p-2 terminal-ticker">JPM</td>
-<td class="p-2 terminal-log-text">192.3 / 203.8 / 188.4</td>
-<td class="p-2 text-right terminal-log-text">14:21:50</td>
-</tr>
-</tbody>
-</table>
-</div>
-<!-- Engine Logs -->
-<div class="h-48 border-t border-stroke-soft terminal-bg p-4 font-data-mono text-[10px] space-y-1.5 overflow-y-auto">
-<p class="text-on-surface-variant/40 mb-2 uppercase text-[9px]">Engine Output Log</p>
-<p><span class="terminal-bracket">[Startup]</span> &gt; <span class="terminal-gate">GATE-01</span>: Initializing...</p>
-<p>&gt; Genetic evolution cycle #882 started</p>
-<p class="terminal-status">&gt; SEC Form 4 RSS feed parsed</p>
-<p>&gt; checking_vix_conviction...</p>
-<p>&gt; VIX: 18.4 <span class="terminal-bracket">[CONVICTION: HI]</span></p>
-<p class="terminal-positive">&gt; Executing BUY order: <span class="terminal-ticker">COST</span> @ 842.10</p>
-<p class="terminal-negative">&gt; Recalibrating stop-loss thresholds...</p>
-<p>&gt; Routing to dark pool: <span class="terminal-gate">SIG-X</span></p>
-<p class="flex items-center gap-1">&gt; <span class="bg-primary/40 w-1.5 h-3 block"></span></p>
-</div>
-<!-- System Stats -->
-<div class="p-4 border-t border-stroke-soft liquid-glass">
-<h3 class="font-label-caps text-[10px] text-on-surface-variant mb-4">SYSTEM STATS</h3>
-<div class="grid grid-cols-2 gap-3">
-<div class="liquid-glass p-3 border-stroke-soft">
-<div class="text-[9px] text-on-surface-variant/60 font-label-caps mb-1">CPU LOAD</div>
-<div class="text-xl font-data-mono terminal-gate">12%</div>
-</div>
-<div class="liquid-glass p-3 border-stroke-soft">
-<div class="text-[9px] text-on-surface-variant/60 font-label-caps mb-1">POSITIONS</div>
-<div class="text-xl font-data-mono terminal-bracket">08</div>
-</div>
-</div>
-</div>
-</div>
-</aside>
+
+<main style="max-width:1280px;margin:0 auto;padding:3rem 1.5rem">
+
+  <div style="margin-bottom:2rem">
+    <a href="index.html" class="back-link" data-page="home">← BACK TO HOME</a>
+  </div>
+
+  <div style="margin-bottom:3rem">
+    <span class="slabel">BB-004 · REV A</span>
+    <h1 style="font-family:'Lexend',sans-serif;font-size:clamp(2rem,5vw,3rem);font-weight:600;color:#e4e1e6;line-height:1.1;margin-bottom:.75rem">Live Dashboard</h1>
+    <p style="color:var(--dim);font-size:.9rem;max-width:600px;line-height:1.75">Real-time account snapshot, strategy health, signal feed, and portfolio correlation from the paper trading deployment.</p>
+  </div>
+
+  <!-- § 01 Account Overview -->
+  <div class="csec">
+    <span class="slabel">§ 01 — ACCOUNT OVERVIEW</span>
+    <h2 class="stitle" style="margin-bottom:1.5rem">Portfolio Snapshot</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem">
+      <div class="stat-card">
+        <div class="stat-label">Equity</div>
+        <div class="stat-val">$98,806.38</div>
+        <div class="stat-sub">−$1,193.62 from start</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Buying Power</div>
+        <div class="stat-val">$197,612.76</div>
+        <div class="stat-sub">2× margin available</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Mode</div>
+        <div class="stat-val" style="font-size:1rem;color:var(--warn);margin:.5rem 0 .1rem">PAPER TRADING</div>
+        <div class="stat-sub">Alpaca simulated capital</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Status</div>
+        <div style="display:flex;align-items:center;gap:.5rem;margin:.4rem 0 .1rem">
+          <span class="w-2 h-2 rounded-full bg-success-green status-pulse" style="display:inline-block;width:8px;height:8px"></span>
+          <span class="stat-val" style="font-size:1rem;color:var(--ok)">ACTIVE</span>
+        </div>
+        <div class="stat-sub">All loops running</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- § 02 Startup Health Check -->
+  <div class="csec">
+    <span class="slabel">§ 02 — STARTUP HEALTH CHECK</span>
+    <h2 class="stitle" style="margin-bottom:1rem">System Initialization Log</h2>
+    <div class="terminal">
+      <div><span class="t-br">[Startup]</span> <span class="t-val">===== Strategy Health Check =====</span></div>
+      <div><span class="t-br">[Startup]</span> <span class="t-ticker">COST</span> <span class="t-val">Swing: </span><span class="t-ok">OK</span> <span class="t-val">| Kalman Q=0.001 | Hurst H=</span><span style="color:#c4b5fd">0.71</span> <span class="t-val">trending</span></div>
+      <div><span class="t-br">[Startup]</span> <span class="t-ticker">JPM</span> <span class="t-val">Swing: </span><span class="t-ok">OK</span> <span class="t-val">| Kalman Q=0.001 | Hurst window=60</span></div>
+      <div><span class="t-br">[Startup]</span> <span class="t-ticker">SMB</span> <span class="t-val">Late Scalp: </span><span class="t-ok">OK</span> <span class="t-val">| AVWAP dist=</span><span style="color:#c4b5fd">0.3%</span> <span class="t-val">vol=</span><span style="color:#c4b5fd">1.2x</span></div>
+      <div><span class="t-br">[Startup]</span> <span class="t-ticker">BRK.B</span> <span class="t-val">Swing: </span><span class="t-ok">OK</span> <span class="t-val">| ema=50/200 rsi_period=21</span></div>
+      <div><span class="t-br">[Startup]</span> <span class="t-ticker">SPY</span> <span class="t-val">Swing: </span><span class="t-ok">OK</span> <span class="t-val">| ema=50/200 rsi_period=14</span></div>
+      <div><span class="t-br">[Startup]</span> <span class="t-val">CorrelationGuard: max_corr=</span><span style="color:#c4b5fd">0.70</span> <span class="t-val">lookback=60d</span></div>
+      <div><span class="t-br">[Startup]</span> <span class="t-val">ShortInterest: threshold=</span><span style="color:#c4b5fd">65%</span> <span class="t-val">cache_ttl=12h</span></div>
+      <div><span class="t-br">[Startup]</span> <span class="t-val">Market: </span><span class="t-ok">OPEN</span> <span class="t-val">| next close 16:00 EST</span></div>
+      <div><span class="t-br">[Startup]</span> <span class="t-val">===================================</span></div>
+    </div>
+  </div>
+
+  <!-- § 03 Strategy Health Table -->
+  <div class="csec">
+    <span class="slabel">§ 03 — STRATEGY HEALTH</span>
+    <h2 class="stitle" style="margin-bottom:1rem">Live Strategy Status</h2>
+    <div class="box">
+      <div class="box-head"><span class="box-head-label">7 STRATEGIES · ALL ACTIVE</span><span class="box-head-sub">paper trading mode</span></div>
+      <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Status</th>
+              <th>H Value</th>
+              <th>Regime</th>
+              <th>Noise Ratio</th>
+              <th>Kelly F</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="color:var(--ticker);font-weight:700">COST Swing</td>
+              <td><span style="display:inline-flex;align-items:center;gap:.35rem"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;animation:pulse-soft 2s ease infinite"></span><span style="color:#4ade80;font-size:10px;font-family:'JetBrains Mono',monospace">ACTIVE</span></span></td>
+              <td style="color:#c4b5fd">0.71</td>
+              <td style="color:#4ade80">TRENDING</td>
+              <td>0.28</td>
+              <td style="color:#a78bfa;font-weight:700">4.9%</td>
+            </tr>
+            <tr>
+              <td style="color:var(--ticker);font-weight:700">JPM Swing</td>
+              <td><span style="display:inline-flex;align-items:center;gap:.35rem"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;animation:pulse-soft 2s ease infinite"></span><span style="color:#4ade80;font-size:10px;font-family:'JetBrains Mono',monospace">ACTIVE</span></span></td>
+              <td style="color:#c4b5fd">0.68</td>
+              <td style="color:#4ade80">TRENDING</td>
+              <td>0.31</td>
+              <td style="color:#a78bfa;font-weight:700">3.8%</td>
+            </tr>
+            <tr>
+              <td style="color:var(--ticker);font-weight:700">SMB Late Scalp</td>
+              <td><span style="display:inline-flex;align-items:center;gap:.35rem"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;animation:pulse-soft 2s ease infinite"></span><span style="color:#4ade80;font-size:10px;font-family:'JetBrains Mono',monospace">ACTIVE</span></span></td>
+              <td style="color:var(--dim)">—</td>
+              <td style="color:var(--dim)">—</td>
+              <td>0.22</td>
+              <td style="color:#a78bfa;font-weight:700">2.0%</td>
+            </tr>
+            <tr>
+              <td style="color:var(--ticker);font-weight:700">SPY Swing</td>
+              <td><span style="display:inline-flex;align-items:center;gap:.35rem"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;animation:pulse-soft 2s ease infinite"></span><span style="color:#4ade80;font-size:10px;font-family:'JetBrains Mono',monospace">ACTIVE</span></span></td>
+              <td style="color:#c4b5fd">0.74</td>
+              <td style="color:#4ade80">TRENDING</td>
+              <td>0.19</td>
+              <td style="color:#a78bfa;font-weight:700">5.2%</td>
+            </tr>
+            <tr>
+              <td style="color:var(--ticker);font-weight:700">BRK.B Swing</td>
+              <td><span style="display:inline-flex;align-items:center;gap:.35rem"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;animation:pulse-soft 2s ease infinite"></span><span style="color:#4ade80;font-size:10px;font-family:'JetBrains Mono',monospace">ACTIVE</span></span></td>
+              <td style="color:#c4b5fd">0.65</td>
+              <td style="color:#4ade80">TRENDING</td>
+              <td>0.35</td>
+              <td style="color:#a78bfa;font-weight:700">3.1%</td>
+            </tr>
+            <tr>
+              <td style="color:var(--ticker);font-weight:700">PG Swing</td>
+              <td><span style="display:inline-flex;align-items:center;gap:.35rem"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;animation:pulse-soft 2s ease infinite"></span><span style="color:#4ade80;font-size:10px;font-family:'JetBrains Mono',monospace">ACTIVE</span></span></td>
+              <td style="color:#c4b5fd">0.69</td>
+              <td style="color:#4ade80">TRENDING</td>
+              <td>0.27</td>
+              <td style="color:#a78bfa;font-weight:700">4.2%</td>
+            </tr>
+            <tr>
+              <td style="color:var(--ticker);font-weight:700">V Swing</td>
+              <td><span style="display:inline-flex;align-items:center;gap:.35rem"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;animation:pulse-soft 2s ease infinite"></span><span style="color:#4ade80;font-size:10px;font-family:'JetBrains Mono',monospace">ACTIVE</span></span></td>
+              <td style="color:#c4b5fd">0.72</td>
+              <td style="color:#4ade80">TRENDING</td>
+              <td>0.24</td>
+              <td style="color:#a78bfa;font-weight:700">4.6%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- § 04 Recent Signal Feed -->
+  <div class="csec">
+    <span class="slabel">§ 04 — RECENT SIGNAL FEED</span>
+    <h2 class="stitle" style="margin-bottom:1rem">Last 8 Signals</h2>
+    <div class="box">
+      <div class="box-head">
+        <span class="box-head-label">SIGNAL LOG</span>
+        <span class="box-head-sub">green=executed · red=vetoed · yellow=blocked</span>
+      </div>
+      <div style="overflow-x:auto">
+        <!-- header row -->
+        <div class="sig-row" style="border-bottom:1px solid var(--border);color:var(--br);font-size:10px;letter-spacing:.08em">
+          <div>TICKER</div><div>STRAT</div><div>SIGNAL</div><div>PRICE</div><div>DETAIL</div><div style="text-align:right">OUTCOME</div>
+        </div>
+        <div class="sig-row" style="background:rgba(74,222,128,.03)">
+          <div class="sig-buy" style="font-weight:700">COST</div>
+          <div style="color:var(--dim)">SWING</div>
+          <div class="sig-buy">↑ BUY</div>
+          <div style="color:#ccc3d3">$95.40</div>
+          <div style="color:var(--dim);font-size:10px">noise=0.28 H=0.71 Kelly=4.9%</div>
+          <div style="text-align:right"><span class="badge-exec">EXECUTED</span></div>
+        </div>
+        <div class="sig-row" style="background:rgba(74,222,128,.03)">
+          <div class="sig-buy" style="font-weight:700">SPY</div>
+          <div style="color:var(--dim)">SWING</div>
+          <div class="sig-buy">↑ BUY</div>
+          <div style="color:#ccc3d3">$518.20</div>
+          <div style="color:var(--dim);font-size:10px">noise=0.19 H=0.74 Kelly=5.2%</div>
+          <div style="text-align:right"><span class="badge-exec">EXECUTED</span></div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-block" style="font-weight:700">JPM</div>
+          <div style="color:var(--dim)">SWING</div>
+          <div class="sig-block">BLOCKED</div>
+          <div style="color:var(--dim)">—</div>
+          <div style="color:var(--dim);font-size:10px">Circuit breaker active</div>
+          <div style="text-align:right"><span class="badge-veto">VETOED</span></div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-warn" style="font-weight:700">PG</div>
+          <div style="color:var(--dim)">SWING</div>
+          <div class="sig-warn">BLOCKED</div>
+          <div style="color:var(--dim)">—</div>
+          <div style="color:var(--dim);font-size:10px">Correlation guard: 2 correlated</div>
+          <div style="text-align:right"><span class="badge-block">BLOCKED</span></div>
+        </div>
+        <div class="sig-row" style="background:rgba(74,222,128,.03)">
+          <div class="sig-sell" style="font-weight:700">COST</div>
+          <div style="color:var(--dim)">SMB</div>
+          <div class="sig-sell">↓ SELL</div>
+          <div style="color:#ccc3d3">$98.80</div>
+          <div style="color:var(--dim);font-size:10px">VWAP dist=0.4%</div>
+          <div style="text-align:right"><span class="badge-exec">EXECUTED</span></div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-block" style="font-weight:700">V</div>
+          <div style="color:var(--dim)">SWING</div>
+          <div class="sig-block">BLOCKED</div>
+          <div style="color:var(--dim)">—</div>
+          <div style="color:var(--dim);font-size:10px">Hurst H=0.48 below threshold</div>
+          <div style="text-align:right"><span class="badge-veto">VETOED</span></div>
+        </div>
+        <div class="sig-row" style="background:rgba(74,222,128,.03)">
+          <div class="sig-buy" style="font-weight:700">BRK.B</div>
+          <div style="color:var(--dim)">SWING</div>
+          <div class="sig-buy">↑ BUY</div>
+          <div style="color:#ccc3d3">$192.30</div>
+          <div style="color:var(--dim);font-size:10px">noise=0.31 H=0.66 Kelly=3.1%</div>
+          <div style="text-align:right"><span class="badge-exec">EXECUTED</span></div>
+        </div>
+        <div class="sig-row">
+          <div class="sig-warn" style="font-weight:700">SPY</div>
+          <div style="color:var(--dim)">SWING</div>
+          <div class="sig-warn">BLOCKED</div>
+          <div style="color:var(--dim)">—</div>
+          <div style="color:var(--dim);font-size:10px">SI ratio=68% selling pressure</div>
+          <div style="text-align:right"><span class="badge-block">BLOCKED</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- § 05 Correlation Matrix -->
+  <div class="csec">
+    <span class="slabel">§ 05 — CORRELATION MATRIX</span>
+    <h2 class="stitle" style="margin-bottom:.75rem">60-Day Pearson ρ — Portfolio Symbols</h2>
+    <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.5rem;line-height:1.75">Correlation guard blocks entries when ρ &gt; 0.75 vs any open position. <span style="color:#ec4899">Rose = BLOCKED (&gt; 0.75)</span> · <span style="color:#a78bfa">Purple = WATCH (0.50–0.75)</span> · <span style="color:var(--dim)">Dark = OK (&lt; 0.50)</span></p>
+    <div class="box" style="overflow-x:auto">
+      <div style="padding:1rem;min-width:520px">
+        <table style="border-collapse:collapse;width:100%">
+          <thead>
+            <tr>
+              <th class="mx-head" style="text-align:left;padding-left:.6rem"></th>
+              <th class="mx-head">JPM</th>
+              <th class="mx-head">SPY</th>
+              <th class="mx-head">COST</th>
+              <th class="mx-head">BRK.B</th>
+              <th class="mx-head">PG</th>
+              <th class="mx-head">V</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="mx-head" style="text-align:left;font-weight:700">JPM</td>
+              <td class="mx-cell mx-diag">1.00</td>
+              <td class="mx-cell mx-mid">0.71</td>
+              <td class="mx-cell mx-low">0.43</td>
+              <td class="mx-cell mx-mid">0.65</td>
+              <td class="mx-cell mx-low">0.38</td>
+              <td class="mx-cell mx-high">0.78</td>
+            </tr>
+            <tr>
+              <td class="mx-head" style="text-align:left;font-weight:700">SPY</td>
+              <td class="mx-cell mx-mid">0.71</td>
+              <td class="mx-cell mx-diag">1.00</td>
+              <td class="mx-cell mx-high">0.82</td>
+              <td class="mx-cell mx-low">0.47</td>
+              <td class="mx-cell mx-low">0.41</td>
+              <td class="mx-cell mx-mid">0.68</td>
+            </tr>
+            <tr>
+              <td class="mx-head" style="text-align:left;font-weight:700">COST</td>
+              <td class="mx-cell mx-low">0.43</td>
+              <td class="mx-cell mx-high">0.82</td>
+              <td class="mx-cell mx-diag">1.00</td>
+              <td class="mx-cell mx-low">0.36</td>
+              <td class="mx-cell mx-mid">0.52</td>
+              <td class="mx-cell mx-low">0.44</td>
+            </tr>
+            <tr>
+              <td class="mx-head" style="text-align:left;font-weight:700">BRK.B</td>
+              <td class="mx-cell mx-mid">0.65</td>
+              <td class="mx-cell mx-low">0.47</td>
+              <td class="mx-cell mx-low">0.36</td>
+              <td class="mx-cell mx-diag">1.00</td>
+              <td class="mx-cell mx-low">0.30</td>
+              <td class="mx-cell mx-low">0.48</td>
+            </tr>
+            <tr>
+              <td class="mx-head" style="text-align:left;font-weight:700">PG</td>
+              <td class="mx-cell mx-low">0.38</td>
+              <td class="mx-cell mx-low">0.41</td>
+              <td class="mx-cell mx-mid">0.52</td>
+              <td class="mx-cell mx-low">0.30</td>
+              <td class="mx-cell mx-diag">1.00</td>
+              <td class="mx-cell mx-low">0.35</td>
+            </tr>
+            <tr>
+              <td class="mx-head" style="text-align:left;font-weight:700">V</td>
+              <td class="mx-cell mx-high">0.78</td>
+              <td class="mx-cell mx-mid">0.68</td>
+              <td class="mx-cell mx-low">0.44</td>
+              <td class="mx-cell mx-low">0.48</td>
+              <td class="mx-cell mx-low">0.35</td>
+              <td class="mx-cell mx-diag">1.00</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- § 06 View Live Dashboard CTA -->
+  <div class="csec">
+    <span class="slabel">§ 06 — STREAMLIT DASHBOARD</span>
+    <h2 class="stitle" style="margin-bottom:1rem">Full 7-Tab Live Interface</h2>
+    <p style="color:var(--dim);font-size:.82rem;margin-bottom:1.8rem;max-width:600px;line-height:1.75">The full Streamlit dashboard (port 8501) exposes all 7 tabs: Account Overview, Open Positions, Signal History, Discovery Results, Strategy Approval, Circuit Breakers, and Macro Indicators.</p>
+    <a href="#" style="display:inline-block;background:var(--accent);padding:.8rem 2rem;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.12em;font-weight:700;color:#fff;text-decoration:none;transition:background .2s" onmouseover="this.style.background='#6d28d9'" onmouseout="this.style.background='var(--accent)'">VIEW LIVE DASHBOARD →</a>
+    <div style="margin-top:.9rem;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim)">Live dashboard available when Railway deployment is active · port 8501</div>
+  </div>
+
 </main>
-<!-- Global Ticker Footer -->
-<footer class="h-10 border-t border-stroke-soft liquid-glass shrink-0 flex items-center overflow-hidden">
-<div class="flex items-center gap-12 whitespace-nowrap animate-[marquee_60s_linear_infinite] px-6">
-<span class="font-data-mono text-[10px] uppercase text-on-surface-variant/80">© 2026 BLITHEBOT QUANTITATIVE ENGINE. ALL RIGHTS RESERVED. REV/DOC: 882.Q4</span>
-<div class="flex gap-8 items-center">
-<a class="terminal-log-text hover:terminal-status transition-colors text-[10px] font-data-mono uppercase" href="#">System Logs</a>
-<a class="terminal-log-text hover:terminal-status transition-colors text-[10px] font-data-mono uppercase" href="#">Genetic Engine Docs</a>
-<a class="terminal-log-text hover:terminal-status transition-colors text-[10px] font-data-mono uppercase" href="#">Hurst Analysis</a>
-<a class="terminal-log-text hover:terminal-status transition-colors text-[10px] font-data-mono uppercase" href="#">Risk API</a>
-</div>
-</div>
+
+<footer style="border-top:1px solid var(--bs);padding:1.4rem 1.5rem;display:flex;justify-content:space-between;align-items:center;max-width:1280px;margin:0 auto">
+  <span style="font-family:'Lexend',sans-serif;font-size:.9rem;font-weight:600;color:#d7baff">BlitheBot</span>
+  <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--faint);letter-spacing:.08em">BB-004 · REV A · LIVE DASHBOARD</span>
 </footer>
-<style>
-    @keyframes marquee {
-        0% { transform: translateX(0); }
-        100% { transform: translateX(-50%); }
-    }
-</style>
-<script>
-    // Micro-price variation for "live" feel
-    const priceDisplay = document.getElementById('price-ticker');
-    let currentPrice = 64281.13;
-    
-    setInterval(() => {
-        const change = (Math.random() - 0.5) * 4;
-        currentPrice += change;
-        priceDisplay.textContent = '$' + currentPrice.toLocaleString(undefined, {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        });
-        
-        // Flash effect
-        priceDisplay.classList.remove('terminal-status');
-        priceDisplay.classList.add('text-white');
-        setTimeout(() => {
-            priceDisplay.classList.remove('text-white');
-            priceDisplay.classList.add('terminal-status');
-        }, 80);
-    }, 1500);
-</script>
-</body></html>
+
+</body>
+</html>
