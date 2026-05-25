@@ -273,7 +273,7 @@
 <span class="w-1 h-1 bg-success-green rounded-full"></span>
 <span class="text-on-surface-variant font-data-mono text-[10px]">GATE CHAIN: ARMED</span>
 </div>
-<h1 class="font-display-lg text-headline-lg-mobile md:text-display-lg text-on-surface leading-tight mb-stack-md max-w-4xl mx-auto uppercase tracking-tighter">
+<h1 class="font-display-lg text-headline-lg-mobile md:text-display-lg text-on-surface leading-tight mb-stack-md max-w-4xl uppercase tracking-tighter" style="text-align:left;padding-left:2.5rem">
                 Hybrid Trading <br/>
 <span class="text-primary italic">Intelligence</span> Shell
             </h1>
@@ -320,7 +320,7 @@
                 </p>
 </div>
 <div class="grid grid-cols-1 md:grid-cols-2 gap-gutter">
-<div class="liquid-glass p-gutter rounded-xl">
+<div style="border-left:2px solid #7c3aed;padding-left:1.25rem;background:transparent">
 <div class="flex items-center gap-4 mb-4">
 <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
 <span class="material-symbols-outlined text-primary" data-icon="security">security</span>
@@ -343,7 +343,7 @@
 </div>
 </div>
 </div>
-<div class="liquid-glass p-gutter rounded-xl">
+<div style="border-left:2px solid #7c3aed;padding-left:1.25rem;background:transparent">
 <div class="flex items-center gap-4 mb-4">
 <div class="w-10 h-10 rounded-lg bg-success-green/10 flex items-center justify-center">
 <span class="material-symbols-outlined text-success-green" data-icon="precision_manufacturing">precision_manufacturing</span>
@@ -385,7 +385,7 @@
 </div>
 </div>
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
-<div class="lg:col-span-2 liquid-glass p-gutter rounded-xl">
+<div class="lg:col-span-2" style="border-left:2px solid #7c3aed;padding-left:1.25rem;background:transparent">
 <div class="flex justify-between items-center mb-6">
 <h3 class="font-label-caps text-[12px]">Growth of $100k (24 Months)</h3>
 <div class="flex gap-2">
@@ -404,10 +404,13 @@
 <path d="M0,280 Q100,270 150,230 T300,180 T450,150 T600,80 T800,20" fill="none" stroke="#bd93f9" stroke-width="3"></path>
 <path d="M0,280 Q100,270 150,230 T300,180 T450,150 T600,80 T800,20 V300 H0 Z" fill="url(#chartGradient)"></path>
 </svg>
-<div class="absolute top-0 right-0 p-4 font-data-mono text-headline-lg text-on-surface">$242,105</div>
+<div class="absolute top-0 right-0 p-4" style="text-align:right">
+  <span style="font-family:'JetBrains Mono',monospace;font-size:0.75rem;color:#6b7280;letter-spacing:0.1em;text-transform:uppercase;border:0.5px solid #6b7280;padding:2px 8px;">PAPER TRADING</span>
+  <div style="font-family:'JetBrains Mono',monospace;font-size:0.65rem;color:#6b7280;margin-top:0.4rem">Live stats available at launch · Summer 2026</div>
 </div>
 </div>
-<div class="liquid-glass p-gutter rounded-xl">
+</div>
+<div style="border-left:2px solid #7c3aed;padding-left:1.25rem;background:transparent">
 <h3 class="font-label-caps text-[12px] mb-6">Monthly Return Heatmap (%)</h3>
 <div class="grid grid-cols-4 gap-2">
 <div class="heatmap-cell bg-success-green/80 rounded flex items-center justify-center text-terminal-black font-bold text-[10px]">4.2</div>
@@ -479,93 +482,9 @@
 </div>
 </div>
 </section>
-<!-- Dashboard Preview Section -->
-<section class="py-stack-lg bg-terminal-black relative overflow-hidden" id="dashboard">
-<div class="max-w-container-max mx-auto px-margin-mobile relative z-10 text-center mb-stack-lg">
-<p class="font-label-caps text-label-caps text-primary mb-4">LIVE TERMINAL</p>
-<h2 class="font-display-lg text-headline-lg text-on-surface uppercase tracking-tight">Institutional Alpha Terminal</h2>
-</div>
-<div class="max-w-6xl mx-auto px-margin-mobile relative z-10">
-<div class="liquid-glass p-1 rounded-2xl border border-white/10 shadow-[0_0_100px_rgba(189,147,249,0.1)]">
-<div class="bg-surface-charcoal/40 backdrop-blur-xl rounded-xl overflow-hidden border border-white/5">
-<!-- Dashboard Header -->
-<div class="flex justify-between items-center px-6 py-3 border-b border-white/5 bg-white/2">
-<div class="flex items-center gap-6">
-<div class="flex items-center gap-2">
-<div class="w-2 h-2 rounded-full bg-success-green animate-pulse"></div>
-<span class="text-[10px] font-data-mono text-on-surface-variant">LIVE_ASYNC_CORE</span>
-</div>
-<div class="hidden md:flex gap-4">
-<span class="text-[10px] font-data-mono text-primary">BTC/USD: $64,212.50 (+1.2%)</span>
-<span class="text-[10px] font-data-mono text-on-surface-variant">LOOPS: 19 ACTIVE</span>
-</div>
-</div>
-<div class="flex gap-2">
-<span class="material-symbols-outlined text-[16px] text-on-surface-variant cursor-pointer hover:text-primary transition-colors" data-icon="settings">settings</span>
-<span class="material-symbols-outlined text-[16px] text-on-surface-variant cursor-pointer hover:text-primary transition-colors" data-icon="fullscreen">fullscreen</span>
-</div>
-</div>
-<div class="grid grid-cols-1 lg:grid-cols-4 min-h-[450px]">
-<!-- Sidebar Logs -->
-<div class="border-r border-white/5 p-6 space-y-6 bg-black/20 font-data-mono">
-<div class="space-y-2">
-<p class="text-[9px] font-label-caps text-on-surface-variant opacity-50 uppercase tracking-widest mb-3">Gate Chain Stream</p>
-<div class="text-[10px] space-y-2" id="dashboard-gate-logs">
-<div class="log-line"><span class="gate">INFO:</span> Evaluating Gate 01... <span class="status">PASS</span></div>
-<div class="log-line"><span class="gate">INFO:</span> Evaluating Gate 07... <span class="status">PASS</span></div>
-<div class="log-line"><span class="gate">INFO:</span> Evaluating Gate 10... <span class="status">PASS</span></div>
-<div class="log-line"><span class="status">SUCCESS:</span> All Gates Clear</div>
-</div>
-</div>
-<div class="pt-6 border-t border-white/5">
-<p class="text-[9px] font-label-caps text-on-surface-variant opacity-50 uppercase tracking-widest mb-4">Loop Health</p>
-<div class="space-y-4">
-<div>
-<div class="flex justify-between text-[9px] mb-1">
-<span class="opacity-40">Async Core</span>
-<span class="status">95%</span>
-</div>
-<div class="w-full bg-white/5 h-1 rounded-full overflow-hidden">
-<div class="bg-primary h-full w-[95%]"></div>
-</div>
-</div>
-<div>
-<div class="flex justify-between text-[9px] mb-1">
-<span class="opacity-40">Memory usage</span>
-<span class="status">88%</span>
-</div>
-<div class="w-full bg-white/5 h-1 rounded-full overflow-hidden">
-<div class="bg-success-green h-full w-[88%]"></div>
-</div>
-</div>
-<p class="text-[9px] text-on-surface-variant italic opacity-40 mt-4">system_status: monitoring_19_async_loops</p>
-</div>
-</div>
-</div>
-<!-- Main Chart Area -->
-<div class="lg:col-span-3 relative bg-terminal-black/40">
-<img alt="Trading terminal chart preview" class="w-full h-full object-cover opacity-40 mix-blend-screen grayscale hover:grayscale-0 transition-all duration-1000" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBeIbIZdtKmYWl8Vv8czkIlMPUPOFx9A4UZoA0XUG113y0p0DUSV-LfV-9OJYrSewaSsqAvaAt-ucs0QRRKr1HhH-tusOH522i1d_vOrFzj_bXJ5ahumHggeqaSEQFA4FZF3nez4YVZ1xxZG9J7TUzh7jYBqzD0-GbYbIIczkr2pojrpkmCqTHRhNvtAySDOA1_FaUvyW2izOsDDvrgOGCNfYs7xSmHhzRK5ulJ9GaKtqMTQo31fekSY4mPl1vGO1m9YBuhQFAUne0S"/>
-<div class="absolute inset-0 bg-gradient-to-t from-terminal-black/80 to-transparent pointer-events-none"></div>
-<!-- Floating Metrics Overlay -->
-<div class="absolute bottom-6 left-6 right-6 flex flex-wrap gap-4">
-<div class="bg-white/5 backdrop-blur-md border border-white/10 p-3 rounded-lg min-w-[120px]">
-<span class="block text-[9px] font-label-caps opacity-50 uppercase">Async Status</span>
-<span class="text-[14px] font-data-mono status">19/19 OK</span>
-</div>
-<div class="bg-white/5 backdrop-blur-md border border-white/10 p-3 rounded-lg min-w-[120px]">
-<span class="block text-[9px] font-label-caps opacity-50 uppercase">Active Signals</span>
-<span class="text-[14px] font-data-mono text-primary">09 / 11</span>
-</div>
-<div class="bg-white/5 backdrop-blur-md border border-white/10 p-3 rounded-lg min-w-[120px]">
-<span class="block text-[9px] font-label-caps opacity-50 uppercase">Gate Veto</span>
-<span class="text-[14px] font-data-mono text-caution-amber">04 Today</span>
-</div>
-</div>
-</div>
-</div>
-</div>
-</div>
-</div>
+<section style="height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0a0a0f;">
+  <div style="font-family:'JetBrains Mono',monospace;font-size:clamp(8rem,20vw,18rem);font-weight:300;color:#a78bfa;letter-spacing:-0.04em;line-height:1;">15</div>
+  <div style="font-family:'JetBrains Mono',monospace;font-size:0.85rem;letter-spacing:0.2em;color:rgba(167,139,250,0.4);text-transform:uppercase;margin-top:1rem;">Independent Gates</div>
 </section>
 </main>
 <footer class="bg-terminal-black border-t border-white/5 font-data-mono text-data-mono">
