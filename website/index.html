@@ -662,4 +662,99 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 </script>
 <script src="script.js" defer></script>
+<script>
+const logs = [
+  { time: null, type: 'INFO',    color: '#9d7dea', text: '19 Asyncio Loops Primed...',               status: 'OK',      statusColor: '#4ade80' },
+  { time: null, type: 'GATE-01', color: '#9d7dea', text: 'Daily halt check...',                      status: 'PASS',    statusColor: '#4ade80' },
+  { time: null, type: 'GATE-04', color: '#9d7dea', text: 'Correlation guard ρ ≤ 0.75...', status: 'PASS',    statusColor: '#4ade80' },
+  { time: null, type: 'GATE-05', color: '#9d7dea', text: 'Kalman noise_ratio=0.28...',               status: 'PASS',    statusColor: '#4ade80' },
+  { time: null, type: 'GATE-06', color: '#9d7dea', text: 'Hurst H=0.74...',                          status: 'PASS',    statusColor: '#4ade80' },
+  { time: null, type: 'SIGNAL',  color: '#c4b5fd', text: 'COST SWING_LONG — all gates clear',  status: '',        statusColor: '' },
+  { time: null, type: 'ORDER',   color: '#ffffff', text: '↑ BUY 12 shares COST @ $95.40',       status: '',        statusColor: '' },
+  { time: null, type: 'KELLY',   color: '#9d7dea', text: 'win=61% payoff=1.8x',                      status: 'f=4.9%',  statusColor: '#ffffff' },
+  { time: null, type: 'P&L',     color: '#9d7dea', text: 'closed +$40.80',                           status: '',        statusColor: '#ffffff' },
+  { time: null, type: 'GATE-06', color: '#9d7dea', text: 'Hurst H=0.44 — BELOW THRESHOLD',     status: 'BLOCKED', statusColor: '#ec4899' },
+  { time: null, type: '✗ TRADE', color: '#ec4899', text: 'JPM SWING_LONG — gate failure', status: 'VETOED',  statusColor: '#ec4899' },
+  { time: null, type: 'GATE-01', color: '#9d7dea', text: 'Daily halt check...',                      status: 'PASS',    statusColor: '#4ade80' },
+  { time: null, type: 'GATE-06', color: '#9d7dea', text: 'Hurst H=0.71...',                          status: 'PASS',    statusColor: '#4ade80' },
+  { time: null, type: 'SIGNAL',  color: '#c4b5fd', text: 'SPY SWING_LONG — all gates clear',   status: '',        statusColor: '' },
+  { time: null, type: 'ORDER',   color: '#ffffff', text: '↑ BUY 8 shares SPY @ $518.20',        status: '',        statusColor: '' },
+  { time: null, type: 'P&L',     color: '#9d7dea', text: 'closed +$33.60',                           status: '',        statusColor: '#ffffff' },
+];
+
+function getTimestamp() {
+  const now = new Date();
+  const h = String(now.getHours()).padStart(2,'0');
+  const m = String(now.getMinutes()).padStart(2,'0');
+  const s = String(now.getSeconds()).padStart(2,'0');
+  return `[${h}:${m}:${s}]`;
+}
+
+function getLogContainer() {
+  return document.getElementById('terminal-output');
+}
+
+let currentIndex = 0;
+let displayedLines = [];
+const MAX_LINES = 8;
+
+function addLogLine() {
+  const container = getLogContainer();
+  if (!container) return;
+
+  const log = logs[currentIndex % logs.length];
+  currentIndex++;
+
+  const line = document.createElement('div');
+  line.style.cssText = 'display:flex;gap:8px;align-items:baseline;font-family:\'JetBrains Mono\',monospace;font-size:0.8rem;line-height:1.8;opacity:0;transition:opacity 0.3s ease;';
+
+  const timestamp = document.createElement('span');
+  timestamp.style.color = '#4b5563';
+  timestamp.textContent = getTimestamp();
+
+  const type = document.createElement('span');
+  type.style.color = log.color;
+  type.style.fontWeight = log.type === 'ORDER' ? '700' : '400';
+  type.textContent = log.type + ':';
+
+  const text = document.createElement('span');
+  text.style.color = '#6b7280';
+  text.style.flex = '1';
+  text.textContent = log.text;
+
+  line.appendChild(timestamp);
+  line.appendChild(type);
+  line.appendChild(text);
+
+  if (log.status) {
+    const status = document.createElement('span');
+    status.style.color = log.statusColor;
+    status.style.fontWeight = '600';
+    status.textContent = log.status;
+    line.appendChild(status);
+  }
+
+  displayedLines.push(line);
+  if (displayedLines.length > MAX_LINES) {
+    const old = displayedLines.shift();
+    old.style.opacity = '0';
+    setTimeout(() => old.remove(), 300);
+  }
+
+  container.appendChild(line);
+  requestAnimationFrame(() => { line.style.opacity = '1'; });
+
+  const delay = log.type === '✗ TRADE' ? 2000 :
+                (log.type === 'GATE-06' && log.status === 'BLOCKED') ? 1500 : 700;
+  setTimeout(addLogLine, delay);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const container = getLogContainer();
+  if (container) {
+    container.innerHTML = '';
+    setTimeout(addLogLine, 500);
+  }
+});
+</script>
 </body></html>
