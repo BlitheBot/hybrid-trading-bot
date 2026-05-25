@@ -31,6 +31,7 @@ function navigateTo(page) {
           document.body.style.opacity = '1';
         }));
         attachRouting();
+        initReveal();
       });
   }, 200);
 }
@@ -44,10 +45,28 @@ function attachRouting() {
   });
 }
 
+function initReveal() {
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.classList.add('visible');
+        observer.unobserve(e.target);
+      }
+    });
+  }, { threshold: 0.12 });
+
+  document.querySelectorAll('.reveal').forEach(el => {
+    observer.observe(el);
+  });
+}
+
 window.addEventListener('popstate', e => {
   const page = (e.state && e.state.page) || 'home';
   if (page === 'home') { window.location.href = 'index.html'; return; }
   navigateTo(page);
 });
 
-document.addEventListener('DOMContentLoaded', attachRouting);
+document.addEventListener('DOMContentLoaded', () => {
+  attachRouting();
+  initReveal();
+});
