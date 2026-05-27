@@ -1005,6 +1005,10 @@ body::before {
   .footer-links { justify-content: center; }
   .footer-strip { flex-direction: column; gap: 0.3rem; align-items: center; }
   h2 { font-size: 24px !important; }
+
+  #log-section { padding: 0 24px; }
+  .log-scroll-hint { left: 24px !important; }
+  #terminal-output > div { font-size: 0.7rem !important; }
 }
 
 @media (max-width: 480px) {
