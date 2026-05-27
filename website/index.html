@@ -271,7 +271,7 @@
 </section>
 <section id="log-section" style="height:100vh;display:flex;flex-direction:column;justify-content:center;padding:0 64px;position:relative;background:#0a0a0f;">
   <div style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.12em;color:#8b82b8;text-transform:uppercase;margin-bottom:32px;">GATE_CHAIN_EXECUTION_V1.LOG</div>
-  <div id="terminal-output" style="background:transparent;border:none;padding:0;height:480px;overflow:hidden;position:relative;"></div>
+  <div id="terminal-output" style="background:transparent;border:none;padding:0;height:560px;overflow:hidden;position:relative;"></div>
   <div class="log-scroll-hint" style="position:absolute;bottom:32px;font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.12em;color:rgba(139,130,184,0.4);text-transform:uppercase;">SCROLL ↓</div>
 </section>
 <!-- Strategy Section -->
@@ -516,9 +516,6 @@ function getTimestamp() {
                String(n.getSeconds()).padStart(2,'0') + ']';
 }
 
-const MAX_LINES = 10;
-const displayedLines = [];
-
 function buildLine(log) {
   const row = document.createElement('div');
   row.style.cssText = "display:flex;gap:8px;align-items:baseline;font-family:'JetBrains Mono',monospace;font-size:0.8rem;line-height:1.8;";
@@ -545,14 +542,7 @@ function buildLine(log) {
 }
 
 function pushLine(container, el) {
-  displayedLines.push(el);
   container.appendChild(el);
-  if (displayedLines.length > MAX_LINES) {
-    const old = displayedLines.shift();
-    old.style.transition = 'opacity 0.3s';
-    old.style.opacity = '0';
-    setTimeout(() => old.remove(), 300);
-  }
 }
 
 function typewrite(span, text, speed, onDone) {
