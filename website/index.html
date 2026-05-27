@@ -151,17 +151,6 @@
                 inset 0 1px 0 0 rgba(255, 255, 255, 0.3),
                 0 4px 15px rgba(189, 147, 249, 0.3);
         }
-        .liquid-glass-button-primary::after {
-            content: '';
-            position: absolute;
-            top: 0; left: -100%; width: 100%; height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
-            transition: 0.5s;
-        }
-        .liquid-glass-button-primary:hover::after {
-            left: 100%;
-        }
-
         .liquid-glass-button-outline {
             background: rgba(189, 147, 249, 0.03);
             backdrop-filter: blur(12px);
@@ -212,12 +201,6 @@
 
         .heatmap-cell {
             aspect-ratio: 1;
-            transition: all 0.3s ease;
-        }
-        .heatmap-cell:hover {
-            transform: scale(1.1);
-            z-index: 10;
-            box-shadow: 0 0 15px rgba(189, 147, 249, 0.4);
         }
 
         /* Log Styling */
@@ -264,23 +247,18 @@
 <div class="quant-bg-container">
 <div class="moving-gradient" id="hero-gradient"></div>
 <div class="quant-grid"></div>
-<canvas class="quant-engine-canvas" id="hero-quant-engine"></canvas>
 </div>
 <div class="absolute inset-0 scanline pointer-events-none opacity-20"></div>
-<div class="relative z-10 max-w-container-max mx-auto px-margin-mobile text-center">
-<div class="inline-flex items-center gap-2 mb-stack-md px-3 py-1 bg-surface-charcoal/30 backdrop-blur-md border border-white/5 rounded-full">
-<span class="text-success-green font-data-mono text-[10px]">19 ASYNC LOOPS ACTIVE</span>
-<span class="w-1 h-1 bg-success-green rounded-full"></span>
-<span class="text-on-surface-variant font-data-mono text-[10px]">GATE CHAIN: ARMED</span>
-</div>
+<div class="relative z-10 max-w-container-max mx-auto px-margin-mobile">
+<div style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.12em;color:#8b82b8;margin-bottom:32px;text-transform:uppercase;">19 ASYNC LOOPS ACTIVE · GATE CHAIN: ARMED</div>
 <h1 class="font-display-lg text-headline-lg-mobile md:text-display-lg text-on-surface leading-tight mb-stack-md max-w-4xl uppercase tracking-tighter" style="text-align:left !important;padding-left:2.5rem">
                 Hybrid Trading <br/>
 <span class="text-primary italic">Intelligence</span> Shell
             </h1>
-<p class="text-on-surface-variant text-body-md max-w-2xl mx-auto mb-stack-lg">
+<p class="text-on-surface-variant text-body-md max-w-2xl mb-stack-lg">
                 Production-grade algorithmic trading running 24/7. 19 concurrent loops spanning crypto, equity swing, NLP news, and insider filings — funneling through a multi-stage deterministic gate chain.
             </p>
-<div class="flex flex-col sm:flex-row gap-gutter justify-center items-center mb-stack-lg">
+<div class="flex flex-col sm:flex-row gap-4 justify-start items-start mb-stack-lg">
 <button class="liquid-glass-button-primary text-terminal-black px-8 py-4 font-label-caps text-label-caps rounded-xl w-full sm:w-auto hover:opacity-95 transition-all flex items-center justify-center gap-2 group" onclick="navigateTo('architecture')">
                     Institutional Access
                     <span class="material-symbols-outlined text-[18px] group-hover:translate-x-1 transition-transform" data-icon="chevron_right">chevron_right</span>
@@ -292,7 +270,7 @@
 </div>
 <div class="relative z-10 w-full max-w-4xl mx-auto px-margin-mobile">
 <div class="liquid-glass rounded-xl p-6 font-data-mono text-[11px] text-on-surface-variant overflow-hidden shadow-2xl backdrop-blur-3xl bg-terminal-black/80">
-<div class="flex gap-2 border-b border-white/5 pb-3 mb-4">
+<div class="flex gap-2 border-b border-white/5 pb-2 mb-4">
 <div class="w-3 h-3 rounded-full bg-error/20 border border-error/40"></div>
 <div class="w-3 h-3 rounded-full bg-caution-amber/20 border border-caution-amber/40"></div>
 <div class="w-3 h-3 rounded-full bg-success-green/20 border border-success-green/40"></div>
@@ -320,7 +298,7 @@
                 </p>
 </div>
 <div class="grid grid-cols-1 md:grid-cols-2 gap-gutter">
-<div class="reveal" style="border-left:2px solid #7c3aed;padding-left:1.25rem;background:transparent">
+<div class="reveal" style="border-left:2px solid #7c3aed;padding-left:16px;background:transparent">
 <div class="flex items-center gap-4 mb-4">
 <div class="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
 <span class="material-symbols-outlined text-primary" data-icon="security">security</span>
@@ -328,7 +306,7 @@
 <h3 class="font-label-caps text-on-surface">Execution Safeguards</h3>
 </div>
 <p class="text-on-surface-variant text-[14px] leading-relaxed mb-4">Every trade is validated against live macro data and sector concentration limits.</p>
-<div class="space-y-3 font-data-mono text-[11px]">
+<div class="space-y-2 font-data-mono text-[11px]">
 <div class="flex justify-between items-center border-b border-white/5 pb-2">
 <span class="opacity-60">CORRELATION_GUARD</span>
 <span class="text-success-green">ρ ≤ 0.75</span>
@@ -343,7 +321,7 @@
 </div>
 </div>
 </div>
-<div class="reveal" style="border-left:2px solid #7c3aed;padding-left:1.25rem;background:transparent">
+<div class="reveal" style="border-left:2px solid #7c3aed;padding-left:16px;background:transparent">
 <div class="flex items-center gap-4 mb-4">
 <div class="w-10 h-10 rounded-lg bg-success-green/10 flex items-center justify-center">
 <span class="material-symbols-outlined text-success-green" data-icon="precision_manufacturing">precision_manufacturing</span>
@@ -352,11 +330,11 @@
 </div>
 <p class="text-on-surface-variant text-[14px] leading-relaxed mb-4">A unified asyncio gather system processes WebSocket crypto, SEC EDGAR filings, and Reddit/X sentiment in parallel.</p>
 <div class="grid grid-cols-2 gap-2">
-<div class="bg-terminal-black/40 p-3 rounded border border-white/5 text-[10px] font-data-mono">
+<div class="bg-terminal-black/40 p-2 rounded border border-white/5 text-[10px] font-data-mono">
 <span class="block text-on-surface mb-1 uppercase opacity-40">Active Threads</span>
 <span class="text-success-green">19 Async Loops</span>
 </div>
-<div class="bg-terminal-black/40 p-3 rounded border border-white/5 text-[10px] font-data-mono">
+<div class="bg-terminal-black/40 p-2 rounded border border-white/5 text-[10px] font-data-mono">
 <span class="block text-on-surface mb-1 uppercase opacity-40">Execution Path</span>
 <span class="text-primary">Alpaca REST/WS</span>
 </div>
@@ -387,7 +365,7 @@
 </div>
 </div>
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
-<div class="lg:col-span-2 reveal" style="border-left:2px solid #7c3aed;padding-left:1.25rem;background:transparent">
+<div class="lg:col-span-2 reveal" style="border-left:2px solid #7c3aed;padding-left:16px;background:transparent">
 <div class="flex justify-between items-center mb-6">
 <h3 class="font-label-caps text-[12px]">Growth of $100k (24 Months)</h3>
 <div class="flex gap-2">
@@ -412,7 +390,7 @@
 </div>
 </div>
 </div>
-<div class="reveal" style="border-left:2px solid #7c3aed;padding-left:1.25rem;background:transparent">
+<div class="reveal" style="border-left:2px solid #7c3aed;padding-left:16px;background:transparent">
 <h3 class="font-label-caps text-[12px] mb-6">Monthly Return Heatmap (%)</h3>
 <div class="grid grid-cols-4 gap-2">
 <div class="heatmap-cell rounded flex items-center justify-center text-on-surface-variant opacity-30 font-bold text-[10px]">—</div>
@@ -469,18 +447,7 @@
 </div>
 </div>
 </div>
-<div class="relative group reveal">
-<div class="absolute -inset-1 bg-gradient-to-r from-primary to-secondary rounded-2xl blur opacity-25 group-hover:opacity-40 transition duration-1000"></div>
-<div class="relative bg-terminal-black liquid-glass p-0 rounded-2xl overflow-hidden aspect-square flex items-center justify-center">
-<canvas class="w-full h-full opacity-60" id="research-quant-engine"></canvas>
-<div class="absolute inset-0 flex items-center justify-center">
-<div class="text-center">
-<span class="font-data-mono text-headline-lg text-primary block">IC &gt; 0.05</span>
-<span class="font-label-caps text-[10px] text-on-surface-variant uppercase tracking-widest">Graduation Threshold</span>
-</div>
-</div>
-</div>
-</div>
+<div class="reveal" style="font-family:'JetBrains Mono',monospace;font-size:clamp(3rem,8vw,6rem);font-weight:300;color:rgba(157,122,234,0.15);letter-spacing:-0.03em;line-height:1;text-align:right;">IC > 0.05</div>
 </div>
 </div>
 </section>
@@ -534,133 +501,6 @@
 </div>
 </div>
 </footer>
-<script>
-/**
- * Adaptive Radial Morphing Engine
- */
-class MorphingQuantEngine {
-    constructor(canvasId, scaleFactor = 1) {
-        this.canvas = document.getElementById(canvasId);
-        if (!this.canvas) return;
-        this.ctx = this.canvas.getContext('2d');
-        this.width = 0;
-        this.height = 0;
-        this.nodes = [];
-        this.nodeCount = 42; 
-        this.scaleFactor = scaleFactor;
-        
-        this.init();
-        this.resize();
-        window.addEventListener('resize', () => this.resize());
-    }
-
-    resize() {
-        this.width = this.canvas.width = this.canvas.offsetWidth * window.devicePixelRatio;
-        this.height = this.canvas.height = this.canvas.offsetHeight * window.devicePixelRatio;
-        this.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-    }
-
-    init() {
-        const baseRadius = 250 * this.scaleFactor;
-        for (let i = 0; i < this.nodeCount; i++) {
-            const angle = Math.random() * Math.PI * 2;
-            this.nodes.push({
-                angle: angle,
-                radius: Math.random() * baseRadius,
-                baseRadius: baseRadius,
-                x: 0, y: 0, z: (Math.random() - 0.5) * 500,
-                targetRadius: Math.random() * baseRadius,
-                morphSpeed: 0.002 + Math.random() * 0.01,
-                rotationSpeed: (Math.random() - 0.5) * 0.005,
-                size: 2.5
-            });
-        }
-    }
-
-    project(x, y, z) {
-        const perspective = 1000 / (1000 + z);
-        return {
-            x: x * perspective + (this.canvas.offsetWidth / 2),
-            y: y * perspective + (this.canvas.offsetHeight / 2),
-            scale: perspective
-        };
-    }
-
-    draw() {
-        if (!this.canvas) return;
-        const currentWidth = this.canvas.offsetWidth;
-        const currentHeight = this.canvas.offsetHeight;
-        this.ctx.clearRect(0, 0, currentWidth, currentHeight);
-        
-        const time = Date.now() * 0.001;
-
-        this.nodes.forEach(node => {
-            const diff = node.targetRadius - node.radius;
-            node.radius += diff * node.morphSpeed;
-            if (Math.abs(diff) < 1) {
-                node.targetRadius = Math.random() * node.baseRadius * (1 + Math.sin(time) * 0.2);
-            }
-            node.angle += node.rotationSpeed;
-            node.x = Math.cos(node.angle) * node.radius;
-            node.y = Math.sin(node.angle) * node.radius;
-        });
-
-        this.ctx.beginPath();
-        this.ctx.strokeStyle = '#bd93f9';
-        this.ctx.lineWidth = 0.65;
-        const maxDist = 200 * this.scaleFactor;
-
-        for (let i = 0; i < this.nodes.length; i++) {
-            for (let j = i + 1; j < this.nodes.length; j++) {
-                const dx = this.nodes[i].x - this.nodes[j].x;
-                const dy = this.nodes[i].y - this.nodes[j].y;
-                const dz = this.nodes[i].z - this.nodes[j].z;
-                const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-
-                if (dist < maxDist) {
-                    const p1 = this.project(this.nodes[i].x, this.nodes[i].y, this.nodes[i].z);
-                    const p2 = this.project(this.nodes[j].x, this.nodes[j].y, this.nodes[j].z);
-                    const opacity = (1 - dist / maxDist) * 0.3;
-                    this.ctx.globalAlpha = opacity;
-                    this.ctx.moveTo(p1.x, p1.y);
-                    this.ctx.lineTo(p2.x, p2.y);
-                }
-            }
-        }
-        this.ctx.stroke();
-
-        this.nodes.forEach(node => {
-            const p = this.project(node.x, node.y, node.z);
-            if (p.scale > 0) {
-                this.ctx.globalAlpha = p.scale * 0.6;
-                this.ctx.fillStyle = '#bd93f9';
-                this.ctx.beginPath();
-                this.ctx.arc(p.x, p.y, node.size * p.scale, 0, Math.PI * 2);
-                this.ctx.fill();
-            }
-        });
-        requestAnimationFrame(() => this.draw());
-    }
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        const heroEngine = new MorphingQuantEngine('hero-quant-engine', 1.2);
-        heroEngine.draw();
-
-        const researchEngine = new MorphingQuantEngine('research-quant-engine', 0.6);
-        researchEngine.draw();
-
-        document.addEventListener('mousemove', (e) => {
-            const grad = document.getElementById('hero-gradient');
-            if (!grad) return;
-            const x = (e.clientX / window.innerWidth) * 20 - 10;
-            const y = (e.clientY / window.innerHeight) * 20 - 10;
-            grad.style.transform = `translate(${x}px, ${y}px)`;
-        });
-    }
-});
-</script>
 <script src="script.js" defer></script>
 <script>
 const logs = [
@@ -709,7 +549,7 @@ function addLogLine() {
   line.style.cssText = 'display:flex;gap:8px;align-items:baseline;font-family:\'JetBrains Mono\',monospace;font-size:0.8rem;line-height:1.8;opacity:0;transition:opacity 0.3s ease;';
 
   const timestamp = document.createElement('span');
-  timestamp.style.color = '#4b5563';
+  timestamp.style.color = '#6b7280';
   timestamp.textContent = getTimestamp();
 
   const type = document.createElement('span');
