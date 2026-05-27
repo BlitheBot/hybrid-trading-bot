@@ -276,7 +276,7 @@
 <div class="w-3 h-3 rounded-full bg-success-green/20 border border-success-green/40"></div>
 <div class="ml-auto text-[10px] opacity-40 uppercase tracking-widest">gate_chain_execution_v1.log</div>
 </div>
-<div class="space-y-2" id="terminal-output" style="height:320px;overflow:hidden;">
+<div class="space-y-2" id="terminal-output" style="min-height:368px;">
 <div class="log-line"><span class="bracket">[</span>08:44:21<span class="bracket">]</span> <span class="gate">INFO:</span> 19 Asyncio Loops Primed... <span class="status">OK</span></div>
 <div class="log-line"><span class="bracket">[</span>08:44:22<span class="bracket">]</span> <span class="gate">INFO:</span> Evaluating Gate 01: Daily loss limits... <span class="status">PASS</span></div>
 <div class="log-line"><span class="bracket">[</span>08:44:23<span class="bracket">]</span> <span class="gate">INFO:</span> Evaluating Gate 07: FINRA short interest veto... <span class="status">PROCEED</span></div>
@@ -522,9 +522,6 @@ const logs = [
   { type: 'P&L',     color: '#9d7dea', text: 'closed +$33.60',                       status: '',        statusColor: '' },
 ];
 
-const MAX_LINES = 8;
-const displayedLines = [];
-
 function getTimestamp() {
   const n = new Date();
   return '[' + String(n.getHours()).padStart(2,'0') + ':' +
@@ -558,8 +555,6 @@ function buildLine(log) {
 }
 
 function pushLine(container, el) {
-  displayedLines.push(el);
-  if (displayedLines.length > MAX_LINES) displayedLines.shift().remove();
   container.appendChild(el);
 }
 
