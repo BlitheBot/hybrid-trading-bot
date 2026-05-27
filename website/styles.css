@@ -933,6 +933,48 @@ body::before {
   letter-spacing: 0.06em;
 }
 
+/* ── Gate status board ───────────────────────────────────────────────────── */
+.gate-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 0.5px solid rgba(139,130,184,0.1);
+}
+.gate-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4ade80;
+  flex-shrink: 0;
+  animation: gateDotPulse 2s ease-in-out infinite;
+}
+.gate-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.gate-id {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #8b82b8;
+}
+.gate-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: #9d92c4;
+}
+.gate-status {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: #4ade80;
+}
+@keyframes gateDotPulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px rgba(74,222,128,0.5); }
+  50%       { opacity: 0.35; box-shadow: none; }
+}
+
 /* ── MOBILE ──────────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .nav-center { display: none; }
@@ -1006,8 +1048,7 @@ body::before {
   .footer-strip { flex-direction: column; gap: 0.3rem; align-items: center; }
   h2 { font-size: 24px !important; }
 
-  #log-section { padding: 0 24px; }
-  .log-scroll-hint { left: 24px !important; }
+  #log-section { grid-template-columns: 1fr !important; height: auto !important; padding: 48px 24px !important; gap: 48px !important; }
   #terminal-output > div { font-size: 0.7rem !important; }
 }
 

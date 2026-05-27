@@ -269,10 +269,31 @@
 </div>
 </div>
 </section>
-<section id="log-section" style="height:100vh;display:flex;flex-direction:column;justify-content:center;padding:0 64px;position:relative;background:#0a0a0f;">
-  <div style="font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.12em;color:#8b82b8;text-transform:uppercase;margin-bottom:32px;">GATE_CHAIN_EXECUTION_V1.LOG</div>
-  <div id="terminal-output" style="background:transparent;border:none;padding:0;height:560px;overflow:hidden;position:relative;"></div>
-  <div class="log-scroll-hint" style="position:absolute;bottom:32px;font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.12em;color:rgba(139,130,184,0.4);text-transform:uppercase;">SCROLL ↓</div>
+<section id="log-section" style="height:100vh;display:grid;grid-template-columns:1fr 1fr;align-items:center;padding:0 64px;gap:64px;background:#0a0a0f;">
+  <div id="gate-board">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.12em;color:#8b82b8;text-transform:uppercase;margin-bottom:32px;">GATE STATUS · ARMED</div>
+    <div id="gate-list">
+      <div class="gate-row"><div class="gate-dot" id="gdot-01"></div><div class="gate-info"><span class="gate-id">GATE-01</span><span class="gate-name">Daily halt check</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-02"></div><div class="gate-info"><span class="gate-id">GATE-02</span><span class="gate-name">Hold signal filter</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-03"></div><div class="gate-info"><span class="gate-id">GATE-03</span><span class="gate-name">One position per symbol</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-04"></div><div class="gate-info"><span class="gate-id">GATE-04</span><span class="gate-name">Portfolio heat cap</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-05"></div><div class="gate-info"><span class="gate-id">GATE-05</span><span class="gate-name">Correlation guard</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-06"></div><div class="gate-info"><span class="gate-id">GATE-06</span><span class="gate-name">Short interest veto</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-07"></div><div class="gate-info"><span class="gate-id">GATE-07</span><span class="gate-name">Kalman noise gate</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-08"></div><div class="gate-info"><span class="gate-id">GATE-08</span><span class="gate-name">Hurst regime gate</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-09"></div><div class="gate-info"><span class="gate-id">GATE-09</span><span class="gate-name">Pre-execute hook</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-10"></div><div class="gate-info"><span class="gate-id">GATE-10</span><span class="gate-name">Confluence check</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-11"></div><div class="gate-info"><span class="gate-id">GATE-11</span><span class="gate-name">Circuit breaker</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-12"></div><div class="gate-info"><span class="gate-id">GATE-12</span><span class="gate-name">Performance brain</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-13"></div><div class="gate-info"><span class="gate-id">GATE-13</span><span class="gate-name">Kelly sizing</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-14"></div><div class="gate-info"><span class="gate-id">GATE-14</span><span class="gate-name">Buying power check</span></div><span class="gate-status">ARMED</span></div>
+      <div class="gate-row"><div class="gate-dot" id="gdot-15"></div><div class="gate-info"><span class="gate-id">GATE-15</span><span class="gate-name">Order submission</span></div><span class="gate-status">ARMED</span></div>
+    </div>
+  </div>
+  <div id="log-column">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:0.12em;color:#8b82b8;text-transform:uppercase;margin-bottom:32px;">GATE_CHAIN_EXECUTION_V1.LOG</div>
+    <div id="terminal-output" style="background:transparent;border:none;padding:0;"></div>
+  </div>
 </section>
 <!-- Strategy Section -->
 <section class="py-stack-lg bg-surface border-b border-stroke-soft relative overflow-hidden" id="strategy">
@@ -568,6 +589,21 @@ function showCursor(container) {
   pushLine(container, row);
 }
 
+function flashGate(type) {
+  const m = type.match(/^GATE-(\d+)$/);
+  if (!m) return;
+  const dot = document.getElementById('gdot-' + m[1].padStart(2, '0'));
+  if (!dot) return;
+  dot.style.background = '#ffffff';
+  dot.style.boxShadow = '0 0 8px rgba(255,255,255,0.8)';
+  dot.style.animation = 'none';
+  setTimeout(() => {
+    dot.style.background = '';
+    dot.style.boxShadow = '';
+    dot.style.animation = '';
+  }, 400);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const container = document.getElementById('terminal-output');
   if (!container) return;
@@ -576,6 +612,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function runAt(i) {
     if (i >= logs.length) { showCursor(container); return; }
     const log = logs[i];
+    flashGate(log.type);
     const line = buildLine(log);
     pushLine(container, line);
     const spans = line.querySelectorAll('span');
