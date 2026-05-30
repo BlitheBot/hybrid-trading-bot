@@ -2159,7 +2159,7 @@ class TradingBot:
     async def news_loop(self):
         """Continuously polls Benzinga news via Alpaca and routes signals to Slack / trade execution."""
         print("📰 Starting Benzinga News Sentiment Loop...")
-        strategy = NewsStrategy()
+        strategy = NewsStrategy(db_engine=self._db_engine)
         while True:
             signals: list[dict] = []
             try:
@@ -2776,6 +2776,20 @@ class TradingBot:
             except Exception as e:
                 print(f"[CloseDigest] Error: {e}")
 
+    async def prioritizer_loop(self):
+        """Loop 20 — refreshes active_tickers table every 30 min for news scorer."""
+        if not self._db_engine:
+            print("[TickerPrioritizer] No DB engine — loop disabled")
+            return
+        from discovery.ticker_prioritizer import refresh_active_tickers
+        print("📊 Starting Ticker Prioritizer Loop (30-min refresh)...")
+        while True:
+            try:
+                await asyncio.to_thread(refresh_active_tickers, self._db_engine, self.stock_data_client)
+            except Exception as e:
+                print(f"[TickerPrioritizer] Refresh error: {e}")
+            await asyncio.sleep(30 * 60)
+
     async def symbol_universe_loop(self):
         """Loop 15 — refreshes symbol_universe table every Sunday at midnight EST."""
         if not self._db_engine:
@@ -3078,9 +3092,17 @@ class TradingBot:
             "PG":    SwingStrategy("PG Swing",    db_engine=self._db_engine, base_capital=_initial_capital),
         }
         await self._log_startup_health()
+        if self._db_engine:
+            print("[TickerPrioritizer] Pre-populating active_tickers before loop startup...")
+            try:
+                from discovery.ticker_prioritizer import refresh_active_tickers
+                await asyncio.to_thread(refresh_active_tickers, self._db_engine, self.stock_data_client)
+            except Exception as _tp_e:
+                print(f"[TickerPrioritizer] Pre-populate error: {_tp_e}")
         await asyncio.gather(
             self.scalp_loop(),
             self.swing_loop(),
+            self.prioritizer_loop(),
             self.news_loop(),
             self.truth_social_loop(),
             self.sec_edgar_loop(),

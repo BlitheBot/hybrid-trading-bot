@@ -7,7 +7,6 @@ from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import NewsRequest
 
 from config import Config
-from data.sp500_tickers import SP500_TICKERS
 from strategies.base_strategy import BaseStrategy
 from llm_client import call_llm, call_llm_with_model, LLMError, MODEL_FLASH_FREE, MODEL_FLASH
 
@@ -90,8 +89,9 @@ class NewsStrategy(BaseStrategy):
     strategy falls back to keyword scoring for the rest of the calendar day.
     """
 
-    def __init__(self, name: str = "News Sentiment"):
+    def __init__(self, name: str = "News Sentiment", db_engine=None):
         super().__init__(name)
+        self._db_engine = db_engine
         self.news_client = NewsClient(
             api_key=Config.ALPACA_API_KEY,
             secret_key=Config.ALPACA_SECRET_KEY,
@@ -124,6 +124,13 @@ class NewsStrategy(BaseStrategy):
 
     def _over_daily_limit(self) -> bool:
         return self._claude_calls_today >= Config.CLAUDE_DAILY_CALL_LIMIT
+
+    def _get_active_tickers_sync(self) -> list[str]:
+        from discovery.ticker_prioritizer import get_active_tickers
+        tickers = get_active_tickers(self._db_engine)
+        if not tickers:
+            print("[NewsStrategy] active_tickers is empty or stale (>35 min) — skipping scan")
+        return tickers
 
     # ── Batch Claude scoring ─────────────────────────────────────────────────
 
@@ -204,11 +211,16 @@ class NewsStrategy(BaseStrategy):
         """
         signals = []
         try:
+            active_tickers = await asyncio.to_thread(self._get_active_tickers_sync)
+            if not active_tickers:
+                return signals
+            active_ticker_set = set(active_tickers)
+
             # ── Pass 1: fetch articles ────────────────────────────────────────
             batch_size = Config.NEWS_BATCH_SIZE
             all_articles = []
-            for i in range(0, len(SP500_TICKERS), batch_size):
-                batch = SP500_TICKERS[i : i + batch_size]
+            for i in range(0, len(active_tickers), batch_size):
+                batch = active_tickers[i : i + batch_size]
                 req = NewsRequest(
                     symbols=",".join(batch),
                     start=datetime.now(pytz.utc) - timedelta(hours=Config.NEWS_DEDUP_HOURS),
@@ -238,7 +250,7 @@ class NewsStrategy(BaseStrategy):
                             break
 
             self._last_articles_scanned = len(all_articles)
-            print(f"[NewsStrategy] scan complete — {len(all_articles)} articles across {len(SP500_TICKERS)//batch_size} batches")
+            print(f"[NewsStrategy] scan complete — {len(all_articles)} articles across {len(active_tickers)//batch_size} batches")
 
             # ── Pass 2: collect candidates ────────────────────────────────────
             self._reset_daily_counter_if_needed()
@@ -253,7 +265,7 @@ class NewsStrategy(BaseStrategy):
                 kw_score, kw_sentiment = _keyword_score(headline)
 
                 for ticker in tickers:
-                    if ticker not in SP500_TICKERS:
+                    if ticker not in active_ticker_set:
                         continue
                     if self._is_on_cooldown(ticker):
                         elapsed = (datetime.now(pytz.utc) - self._last_seen[ticker]).total_seconds() / 60
