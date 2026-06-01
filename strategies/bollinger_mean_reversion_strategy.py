@@ -159,6 +159,11 @@ class BollingerMeanReversionStrategy(BaseStrategy):
 
         if signal["signal"] == "sell":
             try:
+                trading_client.get_open_position(symbol)
+            except Exception:
+                print(f"[DEBUG] BB MeanRev sell skipped for {symbol} — no open position.")
+                return
+            try:
                 trading_client.close_position(symbol)
                 print(f"✅ BB MeanRev Position Closed for {symbol}")
             except Exception as e:

@@ -391,6 +391,11 @@ class SwingStrategy(BaseStrategy):
         # Handle Exit Signals
         if signal["signal"] == "sell":
             try:
+                trading_client.get_open_position(symbol)
+            except Exception:
+                print(f"[DEBUG] Swing sell skipped for {symbol} — no open position.")
+                return
+            try:
                 trading_client.close_position(symbol)
                 print(f"✅ Swing Position Closed for {symbol} due to exit signal.")
             except Exception as e:

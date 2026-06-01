@@ -147,12 +147,17 @@ class SMBStrategy(BaseStrategy):
         if not signal:
             return
         symbol = signal["symbol"]
-        
-        # 1. SAFETY CHECK: Are we already in this position?
-        if self.is_already_in_position(symbol, trading_client):
-            return
-
         side = OrderSide.BUY if signal["signal"] == "buy" else OrderSide.SELL
+
+        # 1. SAFETY CHECK: position guard (buy = avoid doubling up; sell = must have position)
+        if side == OrderSide.SELL:
+            try:
+                trading_client.get_open_position(symbol)
+            except Exception:
+                print(f"[DEBUG] SMB sell skipped for {symbol} — no open position.")
+                return
+        elif self.is_already_in_position(symbol, trading_client):
+            return
         entry_price, stop_price, target_price = signal["entry_price"], signal["stop_price"], signal["target_price"]
 
         account = trading_client.get_account()

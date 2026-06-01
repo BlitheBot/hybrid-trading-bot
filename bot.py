@@ -2287,13 +2287,18 @@ class TradingBot:
                                 asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "Symbol on cooldown (news)"))
                                 continue
 
-                        # Guard: one position per symbol
+                        # Guard: buy requires no existing position; sell requires one
                         try:
                             await asyncio.to_thread(self.trading_client.get_open_position, ticker)
+                            has_position = True
+                        except Exception:
+                            has_position = False
+                        if action == "sell" and not has_position:
+                            print(f"[DEBUG] News sell skipped for {ticker} — no open position.")
+                            continue
+                        elif action == "buy" and has_position:
                             asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "One position per symbol limit (news)"))
                             continue
-                        except Exception:
-                            pass  # No open position — proceed
 
                         # Execute using swing risk parameters (stack_mult = 1.3 when stacked)
                         try:
@@ -2372,13 +2377,18 @@ class TradingBot:
                                 asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "Symbol on cooldown (TS)"))
                                 continue
 
-                        # Guard: one position per symbol
+                        # Guard: buy requires no existing position; sell requires one
                         try:
                             await asyncio.to_thread(self.trading_client.get_open_position, ticker)
+                            has_position = True
+                        except Exception:
+                            has_position = False
+                        if action == "sell" and not has_position:
+                            print(f"[DEBUG] TruthSocial sell skipped for {ticker} — no open position.")
+                            continue
+                        elif action == "buy" and has_position:
                             asyncio.create_task(notifications.notify_trade_skipped(ticker, strategy.name, "One position per symbol limit (TS)"))
                             continue
-                        except Exception:
-                            pass
 
                         # Execute using Truth Social risk overrides (50% size, 2% SL, 8% TP)
                         try:
