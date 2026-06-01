@@ -1411,6 +1411,11 @@ class TradingBot:
             print("[Scalp] Disabled via config — skipping crypto scalp loop.")
             return
         print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS} (Websocket)...")
+        # Alpaca paper tier allows 1 concurrent WebSocket connection.
+        # Ghost connections from a previous process can take several minutes to
+        # expire server-side. This floor ensures we never retry sooner than that.
+        _WS_CONN_LIMIT_WAIT = 300  # seconds — minimum wait on connection limit errors
+
         retry_delay = 5
         consecutive_failures = 0
         while True:
@@ -1436,24 +1441,31 @@ class TradingBot:
                 await self.crypto_stream._run_forever()
                 _health_state["websocket_connected"] = False
                 print("WebSocket stream exited _run_forever().")
-            except ValueError as e:
+            except (ValueError, Exception) as e:
                 _health_state["websocket_connected"] = False
-                if "connection limit" in str(e).lower():
-                    print("[WebSocket] Connection limit exceeded — waiting 10 minutes for stale connections to expire...")
+                if "connection limit" in str(e).lower() or "concurrent connection" in str(e).lower():
+                    # Separate path for connection limit — mandatory long wait regardless of
+                    # normal backoff state. After the pause, use max backoff (60s) so the
+                    # reconnect attempt is also slow in case the ghost hasn't cleared yet.
+                    print(
+                        f"[WebSocket] Connection limit exceeded — waiting {_WS_CONN_LIMIT_WAIT}s "
+                        f"for Alpaca server-side ghost connection to expire..."
+                    )
                     asyncio.create_task(notifications.notify_alert(
-                        "[WebSocket] Connection limit exceeded — waiting 10 minutes for stale connections to expire..."
+                        f"[WebSocket] Connection limit exceeded — waiting {_WS_CONN_LIMIT_WAIT}s "
+                        f"for ghost connection to expire before reconnecting."
                     ))
-                    await asyncio.sleep(600)
-                    retry_delay = 5
+                    await asyncio.sleep(_WS_CONN_LIMIT_WAIT)
+                    retry_delay = 60   # stay at max backoff after a limit error
                     consecutive_failures = 0
                     continue
-                print(f"WebSocket ValueError: {e}")
-                asyncio.create_task(notifications.notify_alert(f"WebSocket ValueError: {e} Retrying in {retry_delay}s..."))
-            except Exception as e:
-                _health_state["websocket_connected"] = False
-                msg = f"WebSocket error: {e}"
-                print(msg)
-                asyncio.create_task(notifications.notify_alert(f"{msg} Retrying in {retry_delay}s..."))
+                elif isinstance(e, ValueError):
+                    print(f"WebSocket ValueError: {e}")
+                    asyncio.create_task(notifications.notify_alert(f"WebSocket ValueError: {e} Retrying in {retry_delay}s..."))
+                else:
+                    msg = f"WebSocket error: {e}"
+                    print(msg)
+                    asyncio.create_task(notifications.notify_alert(f"{msg} Retrying in {retry_delay}s..."))
 
             if time.time() - connect_time > 60:
                 retry_delay = 5
