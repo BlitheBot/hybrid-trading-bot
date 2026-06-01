@@ -70,6 +70,9 @@ def get_historical_bars(symbol, timeframe, days_back, data_client, is_crypto=Fal
                 df = df.set_index('timestamp')
             elif 'level_1' in df.columns: # Sometimes it resets differently
                 df = df.set_index('level_1')
+
+        # Guarantee ascending order — pandas_ta.vwap() requires a sorted DatetimeIndex
+        df = df.sort_index()
         
         # Only use Finnhub for stocks (Finnhub free tier crypto is limited)
         if not is_crypto:
