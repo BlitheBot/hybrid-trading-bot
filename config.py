@@ -36,7 +36,7 @@ class Config:
     MIN_PRICE_MOVEMENT_PCT = 0.0015
 
     # Scalping Bot Parameters (Crypto)
-    SCALP_ENABLED = False  # set True to re-enable WebSocket crypto scalping
+    SCALP_ENABLED = True  # set True to re-enable WebSocket crypto scalping
     SCALP_SYMBOLS = ["BTC/USD", "ETH/USD"]
     CRYPTO_SCALP_STOP_LOSS_PERCENT = 4.0 # Wider stop losses for crypto scalp trades (4-8%)
 
