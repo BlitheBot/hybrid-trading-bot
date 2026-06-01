@@ -116,6 +116,8 @@ class Config:
 
     # Grok (xAI) X/Twitter crypto sentiment (alert-only)
     GROK_API_KEY         = os.getenv("GROK_API_KEY")
+    # xAI API key for Grok stock sentiment scorer (grok-3-mini-fast)
+    XAI_API_KEY          = os.getenv("XAI_API_KEY")
     GROK_ENABLED         = True
     GROK_ALERT_THRESHOLD = 7   # score ≥ 7 (bullish) or ≤ 3 (bearish) fires alert
 

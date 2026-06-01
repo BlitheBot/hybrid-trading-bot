@@ -45,6 +45,7 @@ from strategies.short_interest_signal import ShortInterestSignal
 from strategies.grok_strategy import GrokStrategy
 from strategies.webull_strategy import WebullStrategy
 from discovery.regime_adapter import apply_to_swing_strategy
+from discovery.grok_sentiment import refresh_grok_sentiment, get_grok_sentiment
 from utils import get_historical_bars, get_finnhub_price
 
 # ── Sentry error monitoring (optional — omit SENTRY_DSN to disable) ─────────
@@ -1251,6 +1252,25 @@ class TradingBot:
                             )
                             print(f"[Sentiment] {symbol}: bearish {_sscr}/10 → 0.5× reduction")
 
+                # Grok X/Twitter sentiment gate — same weighting as news sentiment
+                grok_mult = 1.0
+                grok_note = None
+                if signal.get('signal') == 'buy':
+                    _grok = await asyncio.to_thread(
+                        get_grok_sentiment, self._db_engine, symbol
+                    )
+                    if _grok:
+                        _gdir = _grok.get('direction', 'neutral')
+                        _gscr = int(_grok.get('score', 0))
+                        if _gdir == 'bullish' and _gscr >= 7:
+                            grok_mult = 1.2
+                            grok_note = f"🐦 Grok X/Twitter bullish (score {_gscr}/10) → size +20%"
+                            print(f"[GrokSentiment] {symbol}: bullish {_gscr}/10 → 1.2× boost")
+                        elif _gdir == 'bearish' and _gscr >= 7:
+                            grok_mult = 0.5
+                            grok_note = f"🐦 Grok X/Twitter bearish (score {_gscr}/10) → size −50%"
+                            print(f"[GrokSentiment] {symbol}: bearish {_gscr}/10 → 0.5× reduction")
+
                 _notes = [n for n in [
                     getattr(strategy, 'discovery_size_note', None),
                     getattr(strategy, 'earnings_size_note', None),
@@ -1260,6 +1280,7 @@ class TradingBot:
                     perf_note,
                     kelly_note,
                     sentiment_note,
+                    grok_note,
                 ] if n]
                 asyncio.create_task(notifications.notify_trade_decision(
                     symbol, strategy.name, signal,
@@ -1274,7 +1295,7 @@ class TradingBot:
                     scaled_risk_percent = (
                         risk_percent * self.risk_multiplier
                         * earnings_mult * vix_risk_mult * confidence_mult
-                        * perf_mult * debate_mult * sentiment_mult
+                        * perf_mult * debate_mult * sentiment_mult * grok_mult
                     )
                     # Floor: no trade can go below 10% of normal size regardless of stacked multipliers
                     scaled_risk_percent = max(
@@ -2881,6 +2902,26 @@ class TradingBot:
                 print(f"[GrokLoop] Unexpected error: {e}")
             await asyncio.sleep(30 * 60)
 
+    async def grok_sentiment_loop(self):
+        """Loop 20 — scores top-50 S&P 500 tickers via Grok xAI every 30 min, writes to grok_sentiment."""
+        if not Config.XAI_API_KEY:
+            print("[GrokSentiment] No XAI_API_KEY — exiting loop.")
+            return
+        if not self._db_engine:
+            print("[GrokSentiment] No DB engine — exiting loop.")
+            return
+        print("🐦 Starting Grok X/Twitter Stock Sentiment Loop (30-min polling, top-50 tickers)...")
+        while True:
+            try:
+                if not _bot_paused:
+                    scored = await asyncio.to_thread(
+                        refresh_grok_sentiment, self._db_engine
+                    )
+                    print(f"🐦 Grok sentiment refresh complete — {scored} tickers scored")
+            except Exception as e:
+                print(f"[GrokSentimentLoop] Unexpected error: {e}")
+            await asyncio.sleep(30 * 60)
+
     async def webull_loop(self):
         """Loop 18 — polls Webull top-active/top-gainer every 15 min on weekdays (alert-only)."""
         if not Config.WEBULL_ENABLED:
@@ -3156,6 +3197,7 @@ class TradingBot:
             self.grok_loop(),
             self.webull_loop(),
             self.indicator_discovery_loop(),
+            self.grok_sentiment_loop(),
         )
 
 if __name__ == "__main__":
