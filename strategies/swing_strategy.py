@@ -1,13 +1,17 @@
+import asyncio
+import json
 import traceback
 import pandas as pd
 import numpy as np
 from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
+from sqlalchemy import text as sql_text
 from .base_strategy import BaseStrategy
 from .kalman_signal import KalmanTrendSignal
 from .hurst_signal import HurstSignal
 from .kelly_sizer import KellySizer
 from config import Config
+from llm_client import call_llm_with_model, LLMError, MODEL_GEMINI_FLASH
 
 import pandas_ta as ta
 
@@ -27,6 +31,7 @@ class SwingStrategy(BaseStrategy):
         self.rsi_entry_high = rsi_entry_high
         self.drawdown_threshold_pct = drawdown_threshold_pct
         self.drawdown_window_days = drawdown_window_days
+        self._db_engine = db_engine
         self._kelly = KellySizer(db_engine=db_engine, base_capital=base_capital) if db_engine else None
         # Kalman noise gate — suppresses entries when noise_ratio >= 0.4 (40% of price
         # movement is unexplained noise). Q/R tuned for daily equity bars.
@@ -38,6 +43,134 @@ class SwingStrategy(BaseStrategy):
         # Hurst regime gate — only trades when H > 0.6 (statistically trending market).
         # 60-bar warmup: first 60 rows default to H=0.5 (random walk → gate blocks).
         self._hurst = HurstSignal(rolling_window=60)
+
+    # ── Gemini 2.5 Flash bull/bear debate gate ───────────────────────────────
+
+    def _ensure_debate_log_table(self) -> None:
+        with self._db_engine.begin() as conn:
+            conn.execute(sql_text("""
+                CREATE TABLE IF NOT EXISTS debate_log (
+                    id             SERIAL PRIMARY KEY,
+                    ticker         VARCHAR(10),
+                    bull_argument  TEXT,
+                    bear_argument  TEXT,
+                    trade_approved BOOLEAN,
+                    created_at     TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+
+    def _log_debate_sync(self, ticker: str, bull_argument: str,
+                         bear_argument: str, trade_approved: bool) -> None:
+        """Write one debate record to debate_log. Sync — called via asyncio.to_thread."""
+        if not self._db_engine:
+            return
+        try:
+            self._ensure_debate_log_table()
+            with self._db_engine.begin() as conn:
+                conn.execute(sql_text("""
+                    INSERT INTO debate_log
+                        (ticker, bull_argument, bear_argument, trade_approved, created_at)
+                    VALUES (:ticker, :bull, :bear, :approved, NOW())
+                """), {
+                    "ticker":   ticker,
+                    "bull":     bull_argument,
+                    "bear":     bear_argument,
+                    "approved": trade_approved,
+                })
+        except Exception as e:
+            print(f"[SwingDebate] debate_log write failed for {ticker}: {e}")
+
+    async def run_debate(self, symbol: str, signal: dict) -> tuple[bool, str]:
+        """
+        Sequential Gemini 2.5 Flash (thinking enabled) bull/bear debate gate.
+
+        Flow:
+          1. Bull call — strongest case FOR the trade using price/indicator context.
+          2. Bear call — structured JSON objections rebutting the bull case.
+        Trade is BLOCKED when the bear raises > 2 concrete objections.
+        Both arguments are always logged to debate_log.
+        Returns (approved, slack_summary).
+        """
+        _thinking = {"thinking": {"type": "enabled", "budget_tokens": 5000}}
+        context = (
+            f"Symbol: {symbol} | "
+            f"Price: ${float(signal.get('entry_price', 0)):.2f} | "
+            f"RSI({self.rsi_period}): {signal.get('rsi_at_entry', 'N/A')} | "
+            f"MACD: {signal.get('macd_at_entry', 'N/A')} | "
+            f"EMA{self.ema_short}/{self.ema_long} bullish crossover | "
+            f"Kalman noise_ratio: {signal.get('noise_ratio', 'N/A')} | "
+            f"Hurst H: {signal.get('hurst', 'N/A')} | "
+            f"Signal detail: {signal.get('reasoning', '')}"
+        )
+
+        # ── Bull call ────────────────────────────────────────────────────────
+        bull_text = "Bull case unavailable (LLM error)"
+        try:
+            bull_resp = await call_llm_with_model(
+                MODEL_GEMINI_FLASH,
+                (
+                    f"You are a bullish equity analyst. Make the strongest possible case FOR buying "
+                    f"{symbol} right now. Be specific — cite at least 3 concrete reasons from "
+                    f"the technical data provided.\n\nData: {context}"
+                ),
+                max_tokens=600,
+                extra_body=_thinking,
+            )
+            bull_text = bull_resp.text
+        except LLMError as e:
+            print(f"[SwingDebate] {symbol} bull call failed: {e} — using placeholder")
+
+        # ── Bear call (sequential — explicitly rebutting bull) ────────────────
+        bear_text = "Bear case unavailable (LLM error)"
+        bear_objections: list[str] = []
+        bear_summary = "Bear analysis unavailable"
+        try:
+            bear_resp = await call_llm_with_model(
+                MODEL_GEMINI_FLASH,
+                (
+                    f"You are a bearish equity analyst. Identify concrete risks AGAINST buying "
+                    f"{symbol} right now. Rebut the bull case where you can.\n\n"
+                    f"Data: {context}\n\nBull case to rebut:\n{bull_text[:500]}\n\n"
+                    "Respond with JSON only: "
+                    '{"objections": ["<risk 1>", "<risk 2>", ...], "summary": "<one sentence>"}'
+                ),
+                response_format={"type": "json_object"},
+                max_tokens=600,
+                extra_body=_thinking,
+            )
+            bear_text = bear_resp.text
+            parsed = json.loads(bear_resp.text)
+            bear_objections = [str(o) for o in parsed.get("objections", []) if o]
+            bear_summary = parsed.get("summary", bear_resp.text[:200])
+        except LLMError as e:
+            print(f"[SwingDebate] {symbol} bear call failed: {e} — defaulting to 0 objections")
+        except Exception as e:
+            print(f"[SwingDebate] {symbol} bear JSON parse failed: {e} — defaulting to 0 objections")
+
+        approved = len(bear_objections) <= 2
+        n = len(bear_objections)
+        objection_lines = "\n".join(f"  {i+1}. {o}" for i, o in enumerate(bear_objections))
+        summary = (
+            f"*Bull:* {bull_text[:400]}\n"
+            f"*Bear ({n} objection{'s' if n != 1 else ''}):* {bear_summary}"
+        )
+        if not approved:
+            summary += f"\n*Objections that blocked the trade:*\n{objection_lines}"
+        summary += f"\n*Verdict:* {'✅ APPROVED' if approved else '🚫 BLOCKED (>2 bear objections)'}"
+
+        print(
+            f"[SwingDebate] {symbol}: {n} bear objection(s) → "
+            f"{'APPROVED' if approved else 'BLOCKED'}"
+        )
+
+        if self._db_engine:
+            await asyncio.to_thread(
+                self._log_debate_sync, symbol, bull_text, bear_text, approved
+            )
+
+        return approved, summary
+
+    # ── Candlestick confirmation ─────────────────────────────────────────────
 
     def _check_candlestick_patterns(self, df: pd.DataFrame) -> tuple:
         """

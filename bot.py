@@ -944,15 +944,23 @@ class TradingBot:
             asyncio.create_task(notifications.notify_trade_skipped(symbol, "Fundamentals", reason))
             return False, f"Fundamentals: {reason}"
 
-        # Task 2 — Bull/Bear debate (can be disabled via config to save API credits)
+        # Bull/Bear debate (can be disabled via config to save API credits)
         if not Config.BULL_BEAR_DEBATE_ENABLED:
             print(f"[Debate] Disabled via config — proceeding without debate.")
             return True, "Debate disabled"
 
-        proceed, debate_summary = await self._debate_trade(symbol, signal, strategy)
+        # SwingStrategy: Gemini 2.5 Flash sequential debate in swing_strategy.py
+        # Other strategies (BollingerMeanReversion etc.): existing DeepSeek debate
+        if isinstance(strategy, SwingStrategy):
+            proceed, debate_summary = await strategy.run_debate(symbol, signal)
+            debate_label = "Gemini Swing Debate"
+        else:
+            proceed, debate_summary = await self._debate_trade(symbol, signal, strategy)
+            debate_label = "Bull/Bear Debate"
+
         action_label = "BUY" if proceed else "SKIP"
         asyncio.create_task(notifications.notify_trade_decision(
-            symbol, "Bull/Bear Debate",
+            symbol, debate_label,
             {"signal": "buy" if proceed else "hold",
              "reasoning": f"[{action_label}] {debate_summary}",
              "confidence": 0.0},

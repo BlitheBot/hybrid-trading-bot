@@ -23,6 +23,7 @@ MODEL_FLASH_FREE    = "deepseek/deepseek-v4-flash:free"   # news scoring (free t
 MODEL_FLASH         = "deepseek/deepseek-v4-flash"         # debate + news fallback
 MODEL_PRO           = "deepseek/deepseek-v4-pro"           # discovery debate
 MODEL_DEEPSEEK_CHAT = "deepseek/deepseek-chat"             # Chat V3 — sentiment aggregation
+MODEL_GEMINI_FLASH  = "google/gemini-2.5-flash"            # Gemini 2.5 Flash — swing debate (thinking)
 
 # Approximate cost per million tokens (input, output) in USD — updated May 2026
 _COST_TABLE = {
@@ -30,6 +31,7 @@ _COST_TABLE = {
     MODEL_FLASH:         (0.14, 0.28),
     MODEL_PRO:           (0.27, 1.10),
     MODEL_DEEPSEEK_CHAT: (0.07, 0.28),
+    MODEL_GEMINI_FLASH:  (0.15, 0.60),
     "_default":          (0.5, 1.5),
 }
 
@@ -53,6 +55,7 @@ async def call_llm_with_model(
     response_format: dict = None,
     plugins: list = None,
     max_tokens: int = 1000,
+    extra_body: dict = None,
 ) -> LLMResponse:
     """
     Call any OpenRouter-hosted model by explicit model_id.
@@ -77,6 +80,8 @@ async def call_llm_with_model(
         body["response_format"] = response_format
     if plugins:
         body["plugins"] = plugins
+    if extra_body:
+        body.update(extra_body)
 
     headers = {
         "Authorization": f"Bearer {api_key}",
