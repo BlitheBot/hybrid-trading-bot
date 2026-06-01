@@ -2078,6 +2078,7 @@ class TradingBot:
             print(f"[Swing] Time-of-day multiplier: {tod_mult}x ({_eval_now.strftime('%H:%M')} EST)")
 
             for symbol in Config.SWING_SYMBOLS:
+                print(f"DEBUG: swing evaluation started for {symbol}")
                 if symbol in _no_edge:
                     print(f"[Swing] {symbol}: no statistically validated edge (p>0.05 across all 243 discovery combos) — monitoring only")
 
