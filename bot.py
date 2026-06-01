@@ -367,12 +367,10 @@ class TradingBot:
             secret_key=Config.ALPACA_SECRET_KEY
         )
         
-        # FIX: CryptoDataStream does not take a 'paper' argument in some SDK versions.
-        # It determines the environment from the keys or uses a default.
-        self.crypto_stream = CryptoDataStream(
-            api_key=Config.ALPACA_API_KEY,
-            secret_key=Config.ALPACA_SECRET_KEY
-        )
+        # Lazily initialised by scalp_loop — None until the first connection attempt.
+        # Keeping it None here prevents a phantom connection being opened at startup
+        # before scalp_loop has a chance to manage the lifecycle.
+        self.crypto_stream = None
         self.scalp_strategies = []
         self.swing_strategies = []
         self.swing_symbol_strategies: dict[str, SwingStrategy] = {}
@@ -1396,6 +1394,18 @@ class TradingBot:
             current_price=price
         )
 
+    def _close_websocket(self) -> None:
+        """Explicitly close the Alpaca crypto WebSocket. Safe to call when stream is None."""
+        if self.crypto_stream is not None:
+            try:
+                self.crypto_stream.stop()
+                print("[WebSocket] Stream stopped cleanly.")
+            except Exception as e:
+                print(f"[WebSocket] stop() raised: {e}")
+            finally:
+                self.crypto_stream = None
+        _health_state["websocket_connected"] = False
+
     async def scalp_loop(self):
         if not Config.SCALP_ENABLED:
             print("[Scalp] Disabled via config — skipping crypto scalp loop.")
@@ -1404,7 +1414,12 @@ class TradingBot:
         retry_delay = 5
         consecutive_failures = 0
         while True:
-            print(f"WebSocket retry in {retry_delay}s...")
+            # Always close the previous stream before opening a new one.
+            # This prevents stale half-open connections from accumulating against
+            # Alpaca's 1-connection-per-account limit on the paper trading tier.
+            self._close_websocket()
+
+            print(f"WebSocket connecting in {retry_delay}s...")
             await asyncio.sleep(retry_delay)
 
             connect_time = time.time()
@@ -3095,6 +3110,25 @@ class TradingBot:
 
     async def start_dual_engine(self):
         print("🚀 Hybrid Trading Bot starting...")
+
+        # ── SIGTERM handler: close WebSocket before Railway kills the process ──────
+        # Railway sends SIGTERM on redeploy. Without this, the Alpaca WebSocket
+        # connection lingers open on their side for minutes, causing "connection
+        # limit exceeded" on the next startup (paper tier allows 1 concurrent WS).
+        import signal as _signal
+
+        def _on_sigterm():
+            print("[Shutdown] SIGTERM received — closing WebSocket before exit...")
+            self._close_websocket()
+            for _task in asyncio.all_tasks():
+                _task.cancel()
+
+        try:
+            asyncio.get_event_loop().add_signal_handler(_signal.SIGTERM, _on_sigterm)
+            print("[Shutdown] SIGTERM handler registered.")
+        except (NotImplementedError, RuntimeError):
+            # Windows dev environment — signal handlers not supported in asyncio event loop
+            pass
 
         # ── Validate Slack webhooks synchronously so Railway logs show result immediately ──
         _webhook_vars = {
