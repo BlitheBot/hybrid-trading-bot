@@ -22,10 +22,10 @@ class LLMResponse:
 MODEL_FLASH_FREE    = "deepseek/deepseek-v4-flash:free"   # news scoring (free tier)
 MODEL_FLASH         = "deepseek/deepseek-v4-flash"         # debate + news fallback
 MODEL_PRO           = "deepseek/deepseek-v4-pro"           # discovery debate
-MODEL_DEEPSEEK_CHAT = "deepseek/deepseek-chat"             # Chat V3 — sentiment aggregation
+MODEL_DEEPSEEK_CHAT = "deepseek/deepseek-v3.2"             # DeepSeek V3.2 — sentiment aggregation
 MODEL_GEMINI_FLASH  = "google/gemini-2.5-flash"            # Gemini 2.5 Flash — swing debate (thinking)
 
-# Approximate cost per million tokens (input, output) in USD — updated May 2026
+# Approximate cost per million tokens (input, output) in USD — updated June 2026
 _COST_TABLE = {
     MODEL_FLASH_FREE:    (0.0, 0.0),
     MODEL_FLASH:         (0.14, 0.28),
@@ -34,6 +34,16 @@ _COST_TABLE = {
     MODEL_GEMINI_FLASH:  (0.15, 0.60),
     "_default":          (0.5, 1.5),
 }
+
+
+def log_model_config() -> None:
+    """Log all configured OpenRouter model IDs at startup so 404s are caught immediately."""
+    print("[LLMClient] Configured OpenRouter models:")
+    print(f"  MODEL_FLASH_FREE    = {MODEL_FLASH_FREE}")
+    print(f"  MODEL_FLASH         = {MODEL_FLASH}")
+    print(f"  MODEL_PRO           = {MODEL_PRO}")
+    print(f"  MODEL_DEEPSEEK_CHAT = {MODEL_DEEPSEEK_CHAT}")
+    print(f"  MODEL_GEMINI_FLASH  = {MODEL_GEMINI_FLASH}")
 
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _OPENROUTER_SITE_HEADERS = {

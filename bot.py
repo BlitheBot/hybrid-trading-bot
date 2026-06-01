@@ -20,7 +20,7 @@ os.environ.pop("ALPACA_OAUTH_TOKEN", None)
 os.environ.pop("GITHUB_TOKEN", None)
 
 import requests as _requests
-from llm_client import call_llm, call_llm_with_model, LLMError, MODEL_FLASH
+from llm_client import call_llm, call_llm_with_model, LLMError, MODEL_FLASH, log_model_config
 
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
@@ -3129,6 +3129,8 @@ class TradingBot:
         except (NotImplementedError, RuntimeError):
             # Windows dev environment — signal handlers not supported in asyncio event loop
             pass
+
+        log_model_config()
 
         # ── Validate Slack webhooks synchronously so Railway logs show result immediately ──
         _webhook_vars = {
