@@ -19,16 +19,18 @@ class LLMResponse:
 
 
 # Task-specific model IDs (OpenRouter path)
-MODEL_FLASH_FREE = "deepseek/deepseek-v4-flash:free"   # news scoring
-MODEL_FLASH      = "deepseek/deepseek-v4-flash"         # debate + news fallback
-MODEL_PRO        = "deepseek/deepseek-v4-pro"           # discovery debate
+MODEL_FLASH_FREE    = "deepseek/deepseek-v4-flash:free"   # news scoring (free tier)
+MODEL_FLASH         = "deepseek/deepseek-v4-flash"         # debate + news fallback
+MODEL_PRO           = "deepseek/deepseek-v4-pro"           # discovery debate
+MODEL_DEEPSEEK_CHAT = "deepseek/deepseek-chat"             # Chat V3 — sentiment aggregation
 
 # Approximate cost per million tokens (input, output) in USD — updated May 2026
 _COST_TABLE = {
-    MODEL_FLASH_FREE: (0.0, 0.0),
-    MODEL_FLASH:      (0.14, 0.28),
-    MODEL_PRO:        (0.27, 1.10),
-    "_default":       (0.5, 1.5),
+    MODEL_FLASH_FREE:    (0.0, 0.0),
+    MODEL_FLASH:         (0.14, 0.28),
+    MODEL_PRO:           (0.27, 1.10),
+    MODEL_DEEPSEEK_CHAT: (0.07, 0.28),
+    "_default":          (0.5, 1.5),
 }
 
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"

@@ -35,7 +35,7 @@ from strategies.base_strategy import BaseStrategy
 from strategies.smb_strategy import SMBStrategy
 from strategies.swing_strategy import SwingStrategy
 from strategies.bollinger_mean_reversion_strategy import BollingerMeanReversionStrategy
-from strategies.news_strategy import NewsStrategy, _get_scan_sleep_seconds
+from strategies.news_strategy import NewsStrategy, _get_scan_sleep_seconds, get_sentiment_score
 from strategies.truth_social_strategy import TruthSocialStrategy
 from strategies.sec_edgar_strategy import SECEdgarStrategy
 from strategies.congressional_trading_strategy import CongressionalTradingStrategy
@@ -1217,6 +1217,32 @@ class TradingBot:
                                     f"{_kr['shares']} shares | {_kr['note']}"
                                 )
 
+                # Sentiment gate: adjust position size based on news sentiment_scores table
+                sentiment_mult = 1.0
+                sentiment_note = None
+                if signal.get('signal') == 'buy':
+                    _sent = await asyncio.to_thread(
+                        get_sentiment_score, self._db_engine, symbol
+                    )
+                    if _sent:
+                        _sdir = _sent.get('direction', 'neutral')
+                        _sscr = int(_sent.get('score', 0))
+                        _scnt = int(_sent.get('headline_count', 0))
+                        if _sdir == 'bullish' and _sscr >= 7:
+                            sentiment_mult = 1.2
+                            sentiment_note = (
+                                f"📰 News sentiment bullish (score {_sscr}/10, "
+                                f"{_scnt} headline{'s' if _scnt != 1 else ''}) → size +20%"
+                            )
+                            print(f"[Sentiment] {symbol}: bullish {_sscr}/10 → 1.2× size boost")
+                        elif _sdir == 'bearish' and _sscr >= 7:
+                            sentiment_mult = 0.5
+                            sentiment_note = (
+                                f"📰 News sentiment bearish (score {_sscr}/10, "
+                                f"{_scnt} headline{'s' if _scnt != 1 else ''}) → size −50%"
+                            )
+                            print(f"[Sentiment] {symbol}: bearish {_sscr}/10 → 0.5× reduction")
+
                 _notes = [n for n in [
                     getattr(strategy, 'discovery_size_note', None),
                     getattr(strategy, 'earnings_size_note', None),
@@ -1225,6 +1251,7 @@ class TradingBot:
                     vix_note,
                     perf_note,
                     kelly_note,
+                    sentiment_note,
                 ] if n]
                 asyncio.create_task(notifications.notify_trade_decision(
                     symbol, strategy.name, signal,
@@ -1238,7 +1265,8 @@ class TradingBot:
                     confidence_mult = signal.get('confidence_multiplier', 1.0)
                     scaled_risk_percent = (
                         risk_percent * self.risk_multiplier
-                        * earnings_mult * vix_risk_mult * confidence_mult * perf_mult * debate_mult
+                        * earnings_mult * vix_risk_mult * confidence_mult
+                        * perf_mult * debate_mult * sentiment_mult
                     )
                     # Floor: no trade can go below 10% of normal size regardless of stacked multipliers
                     scaled_risk_percent = max(

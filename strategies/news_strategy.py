@@ -5,10 +5,11 @@ import pytz
 
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import NewsRequest
+from sqlalchemy import text as sql_text
 
 from config import Config
 from strategies.base_strategy import BaseStrategy
-from llm_client import call_llm, call_llm_with_model, LLMError, MODEL_FLASH_FREE, MODEL_FLASH
+from llm_client import call_llm, call_llm_with_model, LLMError, MODEL_FLASH_FREE, MODEL_FLASH, MODEL_DEEPSEEK_CHAT
 
 # ── Trusted source multipliers ──────────────────────────────────────────────
 HIGH_TRUST_SOURCES = {"bloomberg", "reuters", "wsj", "cnbc", "wall street journal", "financial times", "ft.com"}
@@ -25,7 +26,29 @@ BEARISH_KEYWORDS = {
     "bankruptcy": 1, "fraud": 1, "weak quarter": 3,
 }
 
-_CLAUDE_BATCH_SIZE = 5   # headlines per Claude API call
+_CLAUDE_BATCH_SIZE = 5   # headlines per LLM batch call
+
+
+def get_sentiment_score(db_engine, ticker: str) -> dict | None:
+    """Return the stored sentiment record for a ticker if updated within the last 35 minutes.
+
+    Sync — call via asyncio.to_thread. Returns None when the table is absent,
+    the ticker has no entry, or the entry is stale.
+    """
+    if db_engine is None:
+        return None
+    cutoff = datetime.utcnow() - timedelta(minutes=35)
+    try:
+        with db_engine.connect() as conn:
+            row = conn.execute(sql_text("""
+                SELECT ticker, direction, score, headline_count
+                FROM sentiment_scores
+                WHERE ticker = :ticker AND last_updated > :cutoff
+            """), {"ticker": ticker, "cutoff": cutoff}).mappings().fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"[SentimentScore] read error for {ticker}: {e}")
+        return None
 
 
 def _get_scan_sleep_seconds() -> float:
@@ -131,6 +154,47 @@ class NewsStrategy(BaseStrategy):
         if not tickers:
             print("[NewsStrategy] active_tickers is empty or stale (>35 min) — skipping scan")
         return tickers
+
+    # ── Sentiment score persistence ──────────────────────────────────────────
+
+    def _ensure_sentiment_table(self) -> None:
+        with self._db_engine.begin() as conn:
+            conn.execute(sql_text("""
+                CREATE TABLE IF NOT EXISTS sentiment_scores (
+                    ticker         VARCHAR(10) PRIMARY KEY,
+                    direction      VARCHAR(10),
+                    score          INT,
+                    headline_count INT,
+                    last_updated   TIMESTAMPTZ DEFAULT NOW()
+                )
+            """))
+
+    def _write_sentiment_scores_sync(self, scores_by_ticker: dict) -> None:
+        """Upsert per-ticker aggregate sentiment to the sentiment_scores table. Sync."""
+        if not self._db_engine or not scores_by_ticker:
+            return
+        try:
+            self._ensure_sentiment_table()
+            with self._db_engine.begin() as conn:
+                for ticker, agg in scores_by_ticker.items():
+                    conn.execute(sql_text("""
+                        INSERT INTO sentiment_scores
+                            (ticker, direction, score, headline_count, last_updated)
+                        VALUES (:ticker, :direction, :score, :headline_count, NOW())
+                        ON CONFLICT (ticker) DO UPDATE SET
+                            direction      = EXCLUDED.direction,
+                            score          = EXCLUDED.score,
+                            headline_count = EXCLUDED.headline_count,
+                            last_updated   = EXCLUDED.last_updated
+                    """), {
+                        "ticker":        ticker,
+                        "direction":     agg["direction"],
+                        "score":         agg["score"],
+                        "headline_count": agg["headline_count"],
+                    })
+            print(f"[NewsStrategy] sentiment_scores: updated {len(scores_by_ticker)} tickers")
+        except Exception as e:
+            print(f"[NewsStrategy] _write_sentiment_scores_sync error: {e}")
 
     # ── Batch Claude scoring ─────────────────────────────────────────────────
 
@@ -360,6 +424,34 @@ class NewsStrategy(BaseStrategy):
                         "reasoning":  reasoning,
                         "auto_trade": strength >= Config.NEWS_SIGNAL_AUTO_TRADE_THRESHOLD,
                     })
+
+            # ── Pass 5: aggregate per-ticker scores → sentiment_scores table ─────
+            if self._db_engine and candidates:
+                raw_by_ticker: dict[str, dict] = {}
+                for item in candidates:
+                    result = item.get("result") or {}
+                    ticker = item["ticker"]
+                    raw_score = int(result.get("score", 0))
+                    direction = result.get("sentiment", "neutral")
+                    if ticker not in raw_by_ticker:
+                        raw_by_ticker[ticker] = {"scores": [], "directions": [], "count": 0}
+                    raw_by_ticker[ticker]["scores"].append(raw_score)
+                    raw_by_ticker[ticker]["directions"].append(direction)
+                    raw_by_ticker[ticker]["count"] += 1
+
+                agg_by_ticker: dict[str, dict] = {}
+                for ticker, data in raw_by_ticker.items():
+                    avg_score = round(sum(data["scores"]) / len(data["scores"]))
+                    bull = data["directions"].count("bullish")
+                    bear = data["directions"].count("bearish")
+                    agg_direction = "bullish" if bull > bear else ("bearish" if bear > bull else "neutral")
+                    agg_by_ticker[ticker] = {
+                        "direction":     agg_direction,
+                        "score":         avg_score,
+                        "headline_count": data["count"],
+                    }
+
+                await asyncio.to_thread(self._write_sentiment_scores_sync, agg_by_ticker)
 
         except Exception as e:
             print(f"[NewsStrategy] scan_once error: {e}")
