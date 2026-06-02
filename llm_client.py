@@ -19,7 +19,7 @@ class LLMResponse:
 
 
 # Task-specific model IDs (OpenRouter path)
-MODEL_FLASH_FREE    = "deepseek/deepseek-v4-flash:free"   # news scoring (free tier)
+MODEL_FLASH_FREE    = "meta-llama/llama-3.3-70b-instruct:free"  # news scoring (free tier — no DeepSeek free tier exists on OpenRouter)
 MODEL_FLASH         = "deepseek/deepseek-v4-flash"         # debate + news fallback
 MODEL_PRO           = "deepseek/deepseek-v4-pro"           # discovery debate
 MODEL_DEEPSEEK_CHAT = "deepseek/deepseek-v3.2"             # DeepSeek V3.2 — sentiment aggregation
