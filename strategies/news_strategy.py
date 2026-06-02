@@ -9,7 +9,7 @@ from sqlalchemy import text as sql_text
 
 from config import Config
 from strategies.base_strategy import BaseStrategy
-from llm_client import call_llm, call_llm_with_model, LLMError, MODEL_FLASH_FREE, MODEL_FLASH, MODEL_DEEPSEEK_CHAT
+from llm_client import call_llm, call_llm_with_model, LLMError, MODEL_FLASH, MODEL_DEEPSEEK_CHAT
 
 # ── Trusted source multipliers ──────────────────────────────────────────────
 HIGH_TRUST_SOURCES = {"bloomberg", "reuters", "wsj", "cnbc", "wall street journal", "financial times", "ft.com"}
@@ -223,21 +223,19 @@ class NewsStrategy(BaseStrategy):
         )
 
         raw = None
-        for model_id, label in [(MODEL_FLASH_FREE, "free"), (MODEL_FLASH, "paid")]:
-            try:
-                resp = await call_llm_with_model(
-                    model_id, prompt,
-                    response_format={"type": "json_object"},
-                    max_tokens=400,
-                )
-                raw = resp.text
-                break
-            except LLMError as e:
-                print(f"[NewsStrategy] {label} tier failed: {e}" + (", trying paid tier" if label == "free" else ""))
+        try:
+            resp = await call_llm_with_model(
+                MODEL_DEEPSEEK_CHAT, prompt,
+                response_format={"type": "json_object"},
+                max_tokens=400,
+            )
+            raw = resp.text
+        except LLMError as e:
+            print(f"[NewsStrategy] LLM call failed: {e}")
 
         if raw is None:
-            print(f"[NewsStrategy] Both LLM tiers failed. Keyword fallback for {len(items)} items.")
-            return [_keyword_result(item["headline"], "Keyword fallback (all LLM tiers failed).") for item in items]
+            print(f"[NewsStrategy] LLM failed. Keyword fallback for {len(items)} items.")
+            return [_keyword_result(item["headline"], "Keyword fallback (LLM failed).") for item in items]
 
         try:
             parsed_root = json.loads(raw)

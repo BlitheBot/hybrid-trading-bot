@@ -22,7 +22,7 @@ load_dotenv()
 
 from llm_client import (
     call_llm_with_model, LLMError, LLMResponse,
-    MODEL_FLASH_FREE, MODEL_FLASH, MODEL_PRO,
+    MODEL_FLASH, MODEL_PRO, MODEL_DEEPSEEK_CHAT,
 )
 
 
@@ -33,11 +33,11 @@ def _hr(label: str):
 
 
 async def test_model_tiers():
-    _hr("Test 1 — All three model tiers")
+    _hr("Test 1 — Model tiers")
     for model_id, label in [
-        (MODEL_FLASH_FREE, "Free Flash"),
-        (MODEL_FLASH,      "Paid Flash"),
-        (MODEL_PRO,        "Pro"),
+        (MODEL_DEEPSEEK_CHAT, "DeepSeek Chat (default)"),
+        (MODEL_FLASH,         "DeepSeek Flash"),
+        (MODEL_PRO,           "DeepSeek Pro"),
     ]:
         try:
             resp = await call_llm_with_model(
@@ -62,7 +62,7 @@ async def test_news_batch():
     )
     try:
         resp = await call_llm_with_model(
-            MODEL_FLASH_FREE, prompt,
+            MODEL_DEEPSEEK_CHAT, prompt,
             response_format={"type": "json_object"},
             max_tokens=300,
         )
