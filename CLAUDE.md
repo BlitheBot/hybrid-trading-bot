@@ -14,7 +14,7 @@
 
 ## Architecture Overview
 
-A Python asyncio trading bot running 24/7 on Railway with 19 concurrent loops. Equity swing trades run daily at 10:30 AM EST across 6 symbols using EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly position sizing, and a 15-gate risk chain including correlation guard, FINRA short interest veto, fundamentals check, and a 3-call Claude bull/bear debate before every entry. Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy. An overnight Discovery Engine runs walk-forward grid search + genetic programming to find new validated strategy parameters.
+A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. Equity swing trades run daily at 10:30 AM EST across 6 symbols using EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly position sizing, and a 15-gate risk chain including correlation guard, FINRA short interest veto, fundamentals check, and a 3-call Claude bull/bear debate before every entry. Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy. An overnight Discovery Engine runs walk-forward grid search + genetic programming to find new validated strategy parameters.
 
 ---
 
@@ -22,7 +22,7 @@ A Python asyncio trading bot running 24/7 on Railway with 19 concurrent loops. E
 
 | File | Purpose |
 |---|---|
-| `bot.py` | Main TradingBot class — 19 async loops, full gate chain, all trade execution |
+| `bot.py` | Main TradingBot class — 21 async loops, full gate chain, all trade execution |
 | `config.py` | All config constants; reads `.env` via `load_dotenv()` at import time (critical) |
 | `llm_client.py` | Unified LLM abstraction — routes to Anthropic, OpenRouter, or Moonshot |
 | `notifications.py` | Slack webhook functions for alerts/decisions/health/performance channels |
@@ -77,29 +77,31 @@ A Python asyncio trading bot running 24/7 on Railway with 19 concurrent loops. E
 
 ---
 
-## 19 Async Loops
+## 21 Async Loops
 
 | # | Method | Status |
 |---|---|---|
-| 1 | `scalp_loop` | **Disabled** (`SCALP_ENABLED=False`) |
+| 1 | `scalp_loop` | Active (`SCALP_ENABLED=True`) |
 | 2 | `swing_loop` | Active |
-| 3 | `news_loop` | Active |
-| 4 | `truth_social_loop` | **Disabled** (`TRUTH_SOCIAL_ENABLED=False`) |
-| 5 | `sec_edgar_loop` | Active |
-| 6 | `fred_loop` | Active |
-| 7 | `congressional_trading_loop` | **Disabled** (`CONGRESSIONAL_ENABLED=False`) |
-| 8 | `health_report_loop` | Active |
-| 9 | `performance_report_loop` | Active |
-| 10 | `trailing_stop_monitor_loop` | Active |
-| 11 | `_exit_monitor_loop` | Active |
-| 12 | `market_open_notification_loop` | Active |
-| 13 | `discovery_loop` | Active |
-| 14 | `reddit_loop` | Active |
-| 15 | `symbol_universe_loop` | Active |
-| 16 | `market_close_digest_loop` | Active |
-| 17 | `grok_loop` | Active |
-| 18 | `webull_loop` | **Disabled** (417 error) |
-| 19 | `indicator_discovery_loop` | Active |
+| 3 | `prioritizer_loop` | Active |
+| 4 | `news_loop` | Active |
+| 5 | `truth_social_loop` | **Disabled** (`TRUTH_SOCIAL_ENABLED=False`) |
+| 6 | `sec_edgar_loop` | Active |
+| 7 | `fred_loop` | Active |
+| 8 | `congressional_trading_loop` | **Disabled** (`CONGRESSIONAL_ENABLED=False`) |
+| 9 | `health_report_loop` | Active |
+| 10 | `performance_report_loop` | Active |
+| 11 | `trailing_stop_monitor_loop` | Active |
+| 12 | `_exit_monitor_loop` | Active |
+| 13 | `market_open_notification_loop` | Active |
+| 14 | `discovery_loop` | Active |
+| 15 | `reddit_loop` | Active |
+| 16 | `symbol_universe_loop` | Active |
+| 17 | `market_close_digest_loop` | Active |
+| 18 | `grok_loop` | Active |
+| 19 | `webull_loop` | **Disabled** (417 error) |
+| 20 | `indicator_discovery_loop` | Active |
+| 21 | `grok_sentiment_loop` | Active (requires `XAI_API_KEY`) |
 
 ---
 

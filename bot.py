@@ -28,6 +28,25 @@ from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.data.live import CryptoDataStream
 
+# Throttled subclass: the SDK's _run_forever() catches ValueError internally and
+# retries immediately because self._running=True by default, so our outer 300s wait
+# is never reached. Sleeping here, inside _auth(), throttles the SDK's own retry
+# loop before it can re-raise — ensuring a 300s gap between every connection attempt.
+_WS_CONN_LIMIT_WAIT = 300
+
+class _ThrottledCryptoDataStream(CryptoDataStream):
+    async def _auth(self):
+        try:
+            await super()._auth()
+        except ValueError as e:
+            if "connection limit" in str(e).lower() or "concurrent" in str(e).lower():
+                print(
+                    f"[WebSocket] Connection limit hit — sleeping {_WS_CONN_LIMIT_WAIT}s "
+                    f"inside SDK retry loop before Alpaca ghost connection expires."
+                )
+                await asyncio.sleep(_WS_CONN_LIMIT_WAIT)
+            raise
+
 from sqlalchemy import create_engine, text as sql_text
 
 from config import Config
@@ -1411,10 +1430,7 @@ class TradingBot:
             print("[Scalp] Disabled via config — skipping crypto scalp loop.")
             return
         print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS} (Websocket)...")
-        # Alpaca paper tier allows 1 concurrent WebSocket connection.
-        # Ghost connections from a previous process can take several minutes to
-        # expire server-side. This floor ensures we never retry sooner than that.
-        _WS_CONN_LIMIT_WAIT = 300  # seconds — minimum wait on connection limit errors
+        print(f"[Scalp] Crypto scalper initialized for {', '.join(Config.SCALP_SYMBOLS)}")
 
         retry_delay = 5
         consecutive_failures = 0
@@ -1429,7 +1445,7 @@ class TradingBot:
 
             connect_time = time.time()
             try:
-                self.crypto_stream = CryptoDataStream(
+                self.crypto_stream = _ThrottledCryptoDataStream(
                     api_key=Config.ALPACA_API_KEY,
                     secret_key=Config.ALPACA_SECRET_KEY
                 )
