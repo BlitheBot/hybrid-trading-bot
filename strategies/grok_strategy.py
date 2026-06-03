@@ -21,7 +21,7 @@ from datetime import datetime
 from config import Config
 from strategies.base_strategy import BaseStrategy
 
-_GROK_URL = "https://api.x.ai/v1/chat/completions"
+_GROK_URL = "https://api.x.ai/v1/responses"
 _GROK_MODEL = "grok-3-mini"
 
 _PROMPT = """You are a financial market analyst monitoring crypto sentiment on X (Twitter).
@@ -65,13 +65,10 @@ class GrokStrategy(BaseStrategy):
         try:
             payload = {
                 "model": _GROK_MODEL,
-                "messages": [{"role": "user", "content": _PROMPT}],
-                "max_tokens": 512,
+                "input": [{"role": "user", "content": _PROMPT}],
+                "max_output_tokens": 512,
                 "temperature": 0.1,
-                "search_parameters": {
-                    "mode": "auto",
-                    "sources": [{"type": "x"}],
-                },
+                "tools": [{"type": "x_search"}],
             }
             resp = requests.post(
                 _GROK_URL,
@@ -89,7 +86,12 @@ class GrokStrategy(BaseStrategy):
                 print("[GrokStrategy] 403 FORBIDDEN — API key may lack live search access")
                 return None
             resp.raise_for_status()
-            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            data = resp.json()
+            msg_item = next((o for o in data.get("output", []) if o.get("type") == "message"), None)
+            if not msg_item:
+                print("[GrokStrategy] No message item in response output")
+                return None
+            raw = msg_item["content"][0]["text"].strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):

@@ -18,7 +18,7 @@ from sqlalchemy import text as sql_text
 
 from config import Config
 
-_XAI_URL   = "https://api.x.ai/v1/chat/completions"
+_XAI_URL   = "https://api.x.ai/v1/responses"
 _XAI_MODEL = "grok-3-mini-fast"
 _BATCH_SIZE    = 10   # tickers per Grok API call
 _TOP_N         = 50   # only rank 1-50 from active_tickers
@@ -84,8 +84,8 @@ def _call_grok_batch(tickers: list[str]) -> list[dict]:
             },
             json={
                 "model": _XAI_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 900,
+                "input": [{"role": "user", "content": prompt}],
+                "max_output_tokens": 900,
                 "temperature": 0.1,
             },
             timeout=30,
@@ -98,7 +98,12 @@ def _call_grok_batch(tickers: list[str]) -> list[dict]:
             return []
         resp.raise_for_status()
 
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
+        data = resp.json()
+        msg_item = next((o for o in data.get("output", []) if o.get("type") == "message"), None)
+        if not msg_item:
+            print("[GrokSentiment] No message item in response output")
+            return []
+        raw = msg_item["content"][0]["text"].strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
