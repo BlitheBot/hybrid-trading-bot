@@ -109,6 +109,8 @@ class AnchoredVWAPSignal:
         if missing:
             raise ValueError(f"DataFrame missing columns: {missing}")
 
+        df = df.sort_index()
+
         tp = (df["high"] + df["low"] + df["close"]) / 3  # typical price
         tp_vol = tp * df["volume"]
 

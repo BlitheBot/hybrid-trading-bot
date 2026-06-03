@@ -54,6 +54,7 @@ def _hurst_exponent(bars_df: pd.DataFrame) -> pd.Series:
 def _vwap_distance(bars_df: pd.DataFrame) -> pd.Series:
     try:
         from strategies.vwap_signal import AnchoredVWAPSignal
+        bars_df = bars_df.sort_index()
         return AnchoredVWAPSignal().compute(bars_df)["distance_pct"]
     except Exception:
         return pd.Series(np.nan, index=bars_df.index)

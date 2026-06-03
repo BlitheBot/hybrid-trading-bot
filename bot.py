@@ -1011,16 +1011,16 @@ class TradingBot:
 
         if current_price is not None:
             current_bar = pd.DataFrame([{
-                'timestamp': datetime.now(pytz.utc),
                 'open': current_price,
                 'high': current_price,
                 'low': current_price,
                 'close': current_price,
                 'volume': 0,
                 'vwap': current_price,
-                'symbol': symbol  # Add symbol to the current bar as well
-            }])
-            data = pd.concat([data, current_bar], ignore_index=True)
+                'symbol': symbol,
+            }], index=pd.DatetimeIndex([datetime.now(pytz.utc)]))
+            data = pd.concat([data, current_bar])
+            data.sort_index(inplace=True)
 
         for strategy in strategies:
             print(f"Running strategy: {strategy.name} for {symbol}")

@@ -57,16 +57,7 @@ class SMBStrategy(BaseStrategy):
         if market_data is None or len(market_data) < 30:
             return None
         df = market_data.copy()
-
-        # pandas_ta.vwap() requires an ordered DatetimeIndex.
-        # bot.py._process_symbol appends the live-price bar with pd.concat(ignore_index=True),
-        # which resets the index to integers and promotes 'timestamp' to a plain column.
-        # Restore the DatetimeIndex here before any pandas_ta call.
-        if 'timestamp' in df.columns:
-            df = df.set_index('timestamp')
-        if not isinstance(df.index, pd.DatetimeIndex):
-            df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
+        df.sort_index(inplace=True)
 
         df["VWAP"] = ta.vwap(high=df["high"], low=df["low"], close=df["close"], volume=df["volume"])
         df["ATR"] = ta.atr(high=df["high"], low=df["low"], close=df["close"], length=14)

@@ -841,6 +841,7 @@ def fetch_live_signal_state() -> dict:
         except Exception:
             entry["hurst_h"] = entry["hurst_regime"] = None
         try:
+            bars.sort_index(inplace=True)
             v = AnchoredVWAPSignal().compute(bars)
             entry["vwap_dist_pct"] = round(float(v["distance_pct"].iloc[-1]), 3)
         except Exception:
