@@ -41,7 +41,7 @@ def refresh_active_tickers(db_engine, stock_data_client) -> None:
     """
     from alpaca.data.requests import StockSnapshotRequest
 
-    tickers = [t for t in SP500_TICKERS if t and "." not in t and "/" not in t]
+    tickers = [t.replace("-", ".") for t in SP500_TICKERS if t and "/" not in t]
     vol_map: dict[str, int] = {}
 
     for i in range(0, len(tickers), BATCH_SIZE):
