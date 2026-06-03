@@ -120,6 +120,8 @@ class Config:
     XAI_API_KEY          = os.getenv("XAI_API_KEY")
     GROK_ENABLED         = True
     GROK_ALERT_THRESHOLD = 7   # score ≥ 7 (bullish) or ≤ 3 (bearish) fires alert
+    GROK_STRATEGY_INTERVAL_MINUTES  = int(os.getenv("GROK_STRATEGY_INTERVAL_MINUTES",  "120"))
+    GROK_SENTIMENT_INTERVAL_MINUTES = int(os.getenv("GROK_SENTIMENT_INTERVAL_MINUTES", "120"))
 
     # Webull contrarian retail-crowding signal (alert-only)
     WEBULL_ENABLED         = False  # endpoint returns 417; disabled until a working source is found

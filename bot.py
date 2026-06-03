@@ -3128,14 +3128,15 @@ class TradingBot:
                 print(f"[SymbolUniverse] Refresh error: {e}")
 
     async def grok_loop(self):
-        """Loop 17 — polls Grok xAI X/Twitter every 30 min for BTC/ETH sentiment (alert-only)."""
+        """Loop 17 — polls Grok xAI X/Twitter for BTC/ETH sentiment (alert-only)."""
         if not Config.GROK_ENABLED:
             print("[Grok] Disabled (GROK_ENABLED=False) — exiting loop.")
             return
         if not Config.GROK_API_KEY:
             print("[Grok] No GROK_API_KEY — exiting loop.")
             return
-        print("🐦 Starting Grok X/Twitter Sentiment Loop (30-min polling, alert-only)...")
+        interval_min = Config.GROK_STRATEGY_INTERVAL_MINUTES
+        print(f"🐦 Starting Grok X/Twitter Sentiment Loop ({interval_min}-min polling, alert-only)...")
         strategy = GrokStrategy()
         while True:
             try:
@@ -3153,17 +3154,18 @@ class TradingBot:
                         ))
             except Exception as e:
                 print(f"[GrokLoop] Unexpected error: {e}")
-            await asyncio.sleep(30 * 60)
+            await asyncio.sleep(interval_min * 60)
 
     async def grok_sentiment_loop(self):
-        """Loop 20 — scores top-50 S&P 500 tickers via Grok xAI every 30 min, writes to grok_sentiment."""
+        """Loop 20 — scores top-50 S&P 500 tickers via Grok xAI, writes to grok_sentiment."""
         if not Config.XAI_API_KEY:
             print("[GrokSentiment] No XAI_API_KEY — exiting loop.")
             return
         if not self._db_engine:
             print("[GrokSentiment] No DB engine — exiting loop.")
             return
-        print("🐦 Starting Grok X/Twitter Stock Sentiment Loop (30-min polling, top-50 tickers)...")
+        interval_min = Config.GROK_SENTIMENT_INTERVAL_MINUTES
+        print(f"🐦 Starting Grok X/Twitter Stock Sentiment Loop ({interval_min}-min polling, top-50 tickers)...")
         while True:
             try:
                 if not _bot_paused:
@@ -3173,7 +3175,7 @@ class TradingBot:
                     print(f"🐦 Grok sentiment refresh complete — {scored} tickers scored")
             except Exception as e:
                 print(f"[GrokSentimentLoop] Unexpected error: {e}")
-            await asyncio.sleep(30 * 60)
+            await asyncio.sleep(interval_min * 60)
 
     async def webull_loop(self):
         """Loop 18 — polls Webull top-active/top-gainer every 15 min on weekdays (alert-only)."""
