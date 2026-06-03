@@ -19,7 +19,8 @@ class SwingStrategy(BaseStrategy):
     def __init__(self, name, ema_short=50, ema_long=200, macd_fast=12, macd_slow=26, macd_signal=9,
                  rsi_period=14, rsi_entry_low=40, rsi_entry_high=60,
                  db_engine=None, base_capital: float = 0.0,
-                 drawdown_threshold_pct: float = 10.0, drawdown_window_days: int = 14):
+                 drawdown_threshold_pct: float = 10.0, drawdown_window_days: int = 14,
+                 min_bars: int = None):
         super().__init__(name)
         self.ema_short = ema_short
         self.ema_long = ema_long
@@ -27,6 +28,7 @@ class SwingStrategy(BaseStrategy):
         self.macd_slow = macd_slow
         self.macd_signal = macd_signal
         self.rsi_period = rsi_period
+        self.min_bars = min_bars  # overrides the formula-based minimum when set
         self.rsi_entry_low = rsi_entry_low
         self.rsi_entry_high = rsi_entry_high
         self.drawdown_threshold_pct = drawdown_threshold_pct
@@ -211,7 +213,9 @@ class SwingStrategy(BaseStrategy):
 
     def generate_signals(self, market_data):
         try:
-            _required = self.ema_long + self.macd_slow + self.macd_signal + self.rsi_period
+            _required = self.min_bars if self.min_bars is not None else (
+                self.ema_long + self.macd_slow + self.macd_signal + self.rsi_period
+            )
             _actual   = 0 if market_data is None else len(market_data)
             if market_data is None or _actual < _required:
                 print(f"[SwingVerbose] {self.name}: insufficient data ({_actual} bars, need {_required})")

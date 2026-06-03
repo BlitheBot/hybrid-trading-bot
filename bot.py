@@ -3234,6 +3234,7 @@ class TradingBot:
                                    db_engine=self._db_engine, base_capital=_initial_capital),
             # 24/243 combos validated, best test Sharpe 0.90 — RSI21 + wide upper band required
             "BRK.B": SwingStrategy("BRK.B Swing", rsi_period=21, rsi_entry_low=40, rsi_entry_high=65,
+                                   min_bars=240,
                                    db_engine=self._db_engine, base_capital=_initial_capital),
             # 9/243 combos validated — EMA50/200 with RSI upper=60 already matches defaults
             "SPY":   SwingStrategy("SPY Swing",   db_engine=self._db_engine, base_capital=_initial_capital),
