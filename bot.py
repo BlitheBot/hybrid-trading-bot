@@ -426,6 +426,9 @@ class TradingBot:
             squeeze_price_change_threshold=0.02,
             cache_ttl_hours=12.0,
         )
+        # Per-symbol 4-hour cooldown for the 5-min swing screener.
+        # Updated when a signal actually fires to prevent re-entering the same daily candle.
+        self._swing_signal_times: dict[str, datetime] = {}
 
     def add_scalp_strategy(self, strategy: BaseStrategy):
         if not isinstance(strategy, BaseStrategy):
@@ -1304,65 +1307,99 @@ class TradingBot:
                     discovery_note="\n".join(_notes) if _notes else None,
                 ))
 
-                entry_time = datetime.now(pytz.utc)
-                try:
-                    earnings_mult   = getattr(strategy, 'earnings_override_multiplier', 1.0)
-                    debate_mult     = getattr(strategy, 'debate_size_multiplier', 1.0)
-                    confidence_mult = signal.get('confidence_multiplier', 1.0)
-                    scaled_risk_percent = (
-                        risk_percent * self.risk_multiplier
-                        * earnings_mult * vix_risk_mult * confidence_mult
-                        * perf_mult * debate_mult * sentiment_mult * grok_mult
-                    )
-                    # Floor: no trade can go below 10% of normal size regardless of stacked multipliers
-                    scaled_risk_percent = max(
-                        scaled_risk_percent,
-                        Config.SWING_EQUITY_RISK_PERCENT * Config.POSITION_SIZE_FLOOR,
-                    )
-                    await asyncio.to_thread(
-                        strategy.execute_trade,
-                        signal,
-                        self.trading_client,
-                        scaled_risk_percent,
-                        stop_loss_percent,
-                        Config.TAKE_PROFIT_PERCENT,
-                        Config.MAX_BUYING_POWER_UTILIZATION_PERCENT,
-                    )
-
-                    # Prometheus counter: confirmed buy execution
-                    if signal['signal'] == 'buy':
-                        _health_state["signals_fired_total"] += 1
-
-                    # Log entry to signal_outcomes after successful execute_trade
-                    if signal['signal'] == 'buy' and signal_type:
-                        regime = await self._get_market_regime()
-                        row_id = await asyncio.to_thread(
-                            self._log_trade_entry,
-                            symbol, signal_type, float(signal.get('entry_price', 0)),
-                            getattr(strategy, 'ema_short', 50), getattr(strategy, 'ema_long', 200),
-                            float(signal.get('rsi_at_entry', 0)), float(signal.get('macd_at_entry', 0)),
-                            regime, entry_time,
+                # Short selling: when a sell signal fires with no open long position,
+                # execute a short sale instead of silently skipping.
+                _skip_execute_trade = False
+                if signal['signal'] == 'sell':
+                    _has_long = False
+                    try:
+                        _pos      = await asyncio.to_thread(
+                            self.trading_client.get_open_position, symbol
                         )
-                        if row_id:
-                            async with self._trade_ids_lock:
-                                self._open_trade_ids[symbol] = (row_id, float(signal.get('entry_price', 0)), entry_time)
-                            asyncio.create_task(notion_journal.post_trade_to_notion({
-                                "symbol":        symbol,
-                                "signal_type":   signal_type,
-                                "entry_price":   float(signal.get('entry_price', 0)),
-                                "entry_time":    entry_time,
-                                "stop_price":    float(signal.get('stop_price', 0)),
-                                "target_price":  float(signal.get('target_price', 0)),
-                                "position_size": round(scaled_risk_percent, 4),
-                                "market_regime": regime,
-                                "signal_source": strategy.name,
-                                "reasoning":     signal.get('reasoning', ''),
-                            }))
+                        _has_long = getattr(_pos, 'side', 'long') == 'long'
+                    except Exception:
+                        _has_long = False
 
-                except Exception as e:
-                    msg = f"Error executing trade for {symbol}: {e}"
-                    print(msg)
-                    asyncio.create_task(notifications.notify_alert(msg))
+                    if not _has_long:
+                        _skip_execute_trade = True
+                        if not Config.SHORT_SELLING_ENABLED:
+                            print(
+                                f"[Swing] SHORT skipped for {symbol} "
+                                "— SHORT_SELLING_ENABLED=False"
+                            )
+                        else:
+                            try:
+                                await self._execute_short(
+                                    symbol, signal, strategy,
+                                    risk_percent, stop_loss_percent, data,
+                                )
+                            except Exception as _se:
+                                import traceback as _tb
+                                print(
+                                    f"[Swing] {symbol}: _execute_short raised "
+                                    f"— {_se}\n{_tb.format_exc()}"
+                                )
+
+                entry_time = datetime.now(pytz.utc)
+                if not _skip_execute_trade:
+                    try:
+                        earnings_mult   = getattr(strategy, 'earnings_override_multiplier', 1.0)
+                        debate_mult     = getattr(strategy, 'debate_size_multiplier', 1.0)
+                        confidence_mult = signal.get('confidence_multiplier', 1.0)
+                        scaled_risk_percent = (
+                            risk_percent * self.risk_multiplier
+                            * earnings_mult * vix_risk_mult * confidence_mult
+                            * perf_mult * debate_mult * sentiment_mult * grok_mult
+                        )
+                        # Floor: no trade can go below 10% of normal size regardless of stacked multipliers
+                        scaled_risk_percent = max(
+                            scaled_risk_percent,
+                            Config.SWING_EQUITY_RISK_PERCENT * Config.POSITION_SIZE_FLOOR,
+                        )
+                        await asyncio.to_thread(
+                            strategy.execute_trade,
+                            signal,
+                            self.trading_client,
+                            scaled_risk_percent,
+                            stop_loss_percent,
+                            Config.TAKE_PROFIT_PERCENT,
+                            Config.MAX_BUYING_POWER_UTILIZATION_PERCENT,
+                        )
+
+                        # Prometheus counter: confirmed buy execution
+                        if signal['signal'] == 'buy':
+                            _health_state["signals_fired_total"] += 1
+
+                        # Log entry to signal_outcomes after successful execute_trade
+                        if signal['signal'] == 'buy' and signal_type:
+                            regime = await self._get_market_regime()
+                            row_id = await asyncio.to_thread(
+                                self._log_trade_entry,
+                                symbol, signal_type, float(signal.get('entry_price', 0)),
+                                getattr(strategy, 'ema_short', 50), getattr(strategy, 'ema_long', 200),
+                                float(signal.get('rsi_at_entry', 0)), float(signal.get('macd_at_entry', 0)),
+                                regime, entry_time,
+                            )
+                            if row_id:
+                                async with self._trade_ids_lock:
+                                    self._open_trade_ids[symbol] = (row_id, float(signal.get('entry_price', 0)), entry_time)
+                                asyncio.create_task(notion_journal.post_trade_to_notion({
+                                    "symbol":        symbol,
+                                    "signal_type":   signal_type,
+                                    "entry_price":   float(signal.get('entry_price', 0)),
+                                    "entry_time":    entry_time,
+                                    "stop_price":    float(signal.get('stop_price', 0)),
+                                    "target_price":  float(signal.get('target_price', 0)),
+                                    "position_size": round(scaled_risk_percent, 4),
+                                    "market_regime": regime,
+                                    "signal_source": strategy.name,
+                                    "reasoning":     signal.get('reasoning', ''),
+                                }))
+
+                    except Exception as e:
+                        msg = f"Error executing trade for {symbol}: {e}"
+                        print(msg)
+                        asyncio.create_task(notifications.notify_alert(msg))
 
                 # Record the time the signal was generated
                 self.active_signals[signal_key] = datetime.now(pytz.utc)
@@ -2041,35 +2078,181 @@ class TradingBot:
             print(f"[PerfBrain] Weekly stats query failed: {e}")
             return {}
 
+    # ── Swing screener helpers ────────────────────────────────────────────────
+
+    def _get_swing_symbols(self) -> list[str]:
+        """Pull top 250 from active_tickers by volume, always including the 6 priority symbols."""
+        from discovery.ticker_prioritizer import get_active_tickers
+        _PRIORITY = list(Config.SWING_SYMBOLS)
+        try:
+            db_tickers = get_active_tickers(self._db_engine)[:250]
+        except Exception as _e:
+            import traceback as _tb
+            print(f"[Swing] active_tickers fetch failed — using priority symbols only\n{_tb.format_exc()}")
+            db_tickers = []
+        # Append any priority symbols that didn't appear in the top-250 volume ranking
+        ticker_set = set(db_tickers)
+        extras = [s for s in _PRIORITY if s not in ticker_set]
+        return db_tickers + extras
+
+    async def _execute_short(
+        self,
+        symbol: str,
+        signal: dict,
+        strategy,
+        risk_percent: float,
+        stop_loss_percent: float,
+        data,
+    ) -> None:
+        """Execute a short sale with the full protection stack."""
+        import traceback as _tb
+        import pandas_ta as _ta
+
+        entry_price = float(signal.get("entry_price", 0))
+        if entry_price <= 0:
+            print(f"[Swing] {symbol}: SHORT skipped — no valid entry price in signal")
+            return
+
+        # Fundamentals gate
+        fund_proceed, fund_reason = await self._check_fundamentals(symbol)
+        if not fund_proceed:
+            print(f"[Swing] {symbol}: SHORT blocked by fundamentals — {fund_reason}")
+            asyncio.create_task(notifications.notify_trade_skipped(
+                symbol, strategy.name, f"SHORT fundamentals: {fund_reason}"
+            ))
+            return
+
+        # Bull/bear debate gate
+        debate_proceed, debate_summary = await self._debate_trade(symbol, signal, strategy)
+        if not debate_proceed:
+            print(f"[Swing] {symbol}: SHORT blocked by debate — {debate_summary}")
+            asyncio.create_task(notifications.notify_trade_skipped(
+                symbol, strategy.name, f"SHORT debate SKIP — {debate_summary}"
+            ))
+            return
+
+        # Sentiment gate (bearish boosts short conviction, bullish reduces it)
+        sentiment_mult = 1.0
+        try:
+            _sent = await asyncio.to_thread(get_sentiment_score, self._db_engine, symbol)
+            if _sent:
+                _sdir = _sent.get("direction", "neutral")
+                _sscr = int(_sent.get("score", 0))
+                if _sdir == "bearish" and _sscr >= 7:
+                    sentiment_mult = 1.2
+                    print(f"[Swing] {symbol}: bearish sentiment → short size +20%")
+                elif _sdir == "bullish" and _sscr >= 7:
+                    sentiment_mult = 0.5
+                    print(f"[Swing] {symbol}: bullish sentiment → short size −50%")
+        except Exception as _se:
+            print(f"[Swing] {symbol}: sentiment check failed (non-fatal): {_se}\n{_tb.format_exc()}")
+
+        # ATR-based stop (above entry) and target (below entry)
+        _atr: float | None = None
+        try:
+            _atr_s = _ta.atr(data["high"], data["low"], data["close"], length=14)
+            if _atr_s is not None and not _atr_s.empty and not pd.isna(_atr_s.iloc[-1]):
+                _atr = float(_atr_s.iloc[-1])
+        except Exception as _ae:
+            print(f"[Swing] {symbol}: ATR calculation failed (non-fatal): {_ae}\n{_tb.format_exc()}")
+
+        if _atr and _atr > 0:
+            short_stop   = round(entry_price + 2.0 * _atr, 2)
+            short_target = round(entry_price - 3.0 * _atr, 2)
+        else:
+            short_stop   = round(entry_price * (1 + stop_loss_percent / 100), 2)
+            short_target = round(entry_price * (1 - Config.TAKE_PROFIT_PERCENT / 100), 2)
+
+        # Minimum 1:2 R/R check
+        short_risk   = short_stop - entry_price
+        short_reward = entry_price - short_target
+        if short_risk <= 0 or (short_reward / short_risk) < Config.SWING_MIN_RR_RATIO:
+            rr = round(short_reward / max(short_risk, 1e-9), 2)
+            print(f"[Swing] {symbol}: SHORT skipped — R/R {rr:.2f} < {Config.SWING_MIN_RR_RATIO}")
+            return
+
+        # Position sizing
+        try:
+            account      = await asyncio.to_thread(self.trading_client.get_account)
+            equity       = float(account.equity)
+            risk_dollars = equity * (risk_percent * self.risk_multiplier * sentiment_mult / 100.0)
+            shares       = max(1, int(risk_dollars / short_risk))
+            max_dollars  = float(account.buying_power) * (Config.MAX_BUYING_POWER_UTILIZATION_PERCENT / 100.0)
+            shares       = min(shares, max(1, int(max_dollars / entry_price)))
+        except Exception as _acct_e:
+            print(f"[Swing] {symbol}: SHORT skipped — account fetch failed: {_acct_e}\n{_tb.format_exc()}")
+            return
+
+        # Submit short order
+        try:
+            from alpaca.trading.requests import MarketOrderRequest
+            from alpaca.trading.enums import OrderSide, TimeInForce
+            await asyncio.to_thread(
+                self.trading_client.submit_order,
+                MarketOrderRequest(
+                    symbol=symbol,
+                    qty=shares,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY,
+                ),
+            )
+            print(
+                f"[Swing] SHORT entered for {symbol} at {entry_price:.2f} | "
+                f"stop={short_stop:.2f} target={short_target:.2f} | size={shares}"
+            )
+            asyncio.create_task(notifications.notify_alert(
+                f"🩳 SHORT entered: {symbol} @ ${entry_price:.2f} | "
+                f"stop=${short_stop:.2f} target=${short_target:.2f} | {shares} shares",
+                level="INFO",
+            ))
+            _health_state["signals_fired_total"] += 1
+        except Exception as _ord_e:
+            print(f"[Swing] {symbol}: SHORT order failed — {_ord_e}\n{_tb.format_exc()}")
+
     async def swing_loop(self):
-        print(f"📈 Starting Stock Swing Bot for {Config.SWING_SYMBOLS} (10:30 AM EST Polling)...")
-        # Symbols with no statistically validated edge — evaluated but flagged in logs
+        print("📈 Starting Stock Swing Screener — 5-min cadence, 250-symbol universe, market hours only...")
         _no_edge = {"JPM", "PG"}
+        _est     = pytz.timezone('America/New_York')
+        _cycle   = 0
+
         while True:
-            now = datetime.now(pytz.timezone('America/New_York'))
-            target = now.replace(hour=10, minute=30, second=0, microsecond=0)
+            now     = datetime.now(_est)
+            tod_min = now.hour * 60 + now.minute
+            # Market hours: Mon–Fri 9:30 AM – 4:00 PM EDT (570–960 minutes)
+            is_market = now.weekday() < 5 and 570 <= tod_min < 960
 
-            # If it's past 10:30 AM, move to tomorrow.
-            if now >= target:
-                target += timedelta(days=1)
-            # Skip weekends
-            while target.weekday() > 4: # 5=Sat, 6=Sun
-                target += timedelta(days=1)
+            if not is_market:
+                # Sleep until 9:30 AM on the next trading weekday
+                next_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+                if tod_min >= 960 or now.weekday() >= 5:
+                    next_open += timedelta(days=1)
+                while next_open.weekday() >= 5:
+                    next_open += timedelta(days=1)
+                sleep_s = max((next_open - now).total_seconds(), 1)
+                print(
+                    f"[Swing] Market closed — next open "
+                    f"{next_open.strftime('%Y-%m-%d %H:%M %Z')} ({sleep_s/3600:.1f}h)"
+                )
+                await asyncio.sleep(sleep_s)
+                continue
 
-            sleep_seconds = (target - now).total_seconds()
-            await asyncio.sleep(sleep_seconds)
+            _cycle += 1
+
+            # --- Symbol universe: top 250 by volume + 6 priority symbols ---
+            symbols = await asyncio.to_thread(self._get_swing_symbols)
+            top3    = ", ".join(symbols[:3]) if symbols else "—"
+            print(f"[Swing] Cycle {_cycle} | {now.strftime('%H:%M')} EDT | screening {len(symbols)} symbols")
+            print(f"[Swing] Screening {len(symbols)} symbols — top 3 by volume: {top3}")
 
             await self._check_account_status()
-            print(f"📈 Swing evaluation starting at {datetime.now(pytz.timezone('America/New_York')).strftime('%Y-%m-%d %I:%M:%S %p')} EST")
             spy_bars = None
             try:
                 spy_bars = get_historical_bars("SPY", TimeFrame.Day, 365, self.stock_data_client)
-            except Exception:
-                pass
+            except Exception as _spy_e:
+                print(f"[Swing] SPY bars fetch failed (non-fatal): {_spy_e}")
 
             swing_regime = await self._get_market_regime()
 
-            # ADX regime → preferred discovery strategy type
             adx_regime = self._get_market_regime_adx(spy_bars)
             preferred_strategy_type = {
                 "trending": "ema_trend",
@@ -2078,42 +2261,49 @@ class TradingBot:
             if preferred_strategy_type:
                 print(f"[ADX] Market is {adx_regime} — preferring {preferred_strategy_type} strategies")
 
-            # 5-window time-of-day multiplier (minutes since midnight, EST)
-            _eval_now = datetime.now(pytz.timezone('America/New_York'))
-            _tod_min = _eval_now.hour * 60 + _eval_now.minute
-            if 570 <= _tod_min < 630:    # 9:30–10:30am — market open momentum window
-                tod_mult = 1.2
-            elif 630 <= _tod_min < 720:  # 10:30am–12pm — prime swing entry window
-                tod_mult = 1.0
-            elif 720 <= _tod_min < 840:  # 12–2pm — midday chop, reduce size
-                tod_mult = 0.7
-            elif 840 <= _tod_min < 960:  # 2–4pm — afternoon trend resumes
-                tod_mult = 1.0
-            else:                        # outside regular hours — safety floor
+            # 5-window time-of-day multiplier
+            if 570 <= tod_min < 630:
+                tod_mult = 1.2   # 9:30–10:30 — open momentum
+            elif 630 <= tod_min < 720:
+                tod_mult = 1.0   # 10:30–12:00 — prime window
+            elif 720 <= tod_min < 840:
+                tod_mult = 0.7   # 12:00–14:00 — midday chop
+            elif 840 <= tod_min < 960:
+                tod_mult = 1.0   # 14:00–16:00 — afternoon trend
+            else:
                 tod_mult = 0.5
-            print(f"[Swing] Time-of-day multiplier: {tod_mult}x ({_eval_now.strftime('%H:%M')} EST)")
+            print(f"[Swing] Time-of-day multiplier: {tod_mult}x ({now.strftime('%H:%M')} EST)")
 
-            for symbol in Config.SWING_SYMBOLS:
-                print(f"DEBUG: swing evaluation started for {symbol}")
-                if symbol in _no_edge:
-                    print(f"[Swing] {symbol}: no statistically validated edge (p>0.05 across all 243 discovery combos) — monitoring only")
-
-                strategy = self.swing_symbol_strategies.get(symbol)
-                if strategy is None:
-                    print(f"[Swing] {symbol}: no strategy configured, skipping")
+            for symbol in symbols:
+                # 4-hour per-symbol cooldown — skip if a signal already fired recently
+                _last_sig = self._swing_signal_times.get(symbol)
+                if _last_sig and (datetime.now(pytz.utc) - _last_sig) < timedelta(hours=4):
                     continue
 
-                # Check for an approved discovery strategy; upgrade when recognized type found.
-                # Preferred type from ADX regime is tried first; falls back to best overall.
-                # Hardcoded strategies always use 100% size — no change to existing behavior.
-                discovery   = apply_to_swing_strategy(symbol, spy_bars,
-                                                       preferred_strategy_type=preferred_strategy_type)
+                print(f"DEBUG: swing evaluation started for {symbol}")
+                if symbol in _no_edge:
+                    print(
+                        f"[Swing] {symbol}: no statistically validated edge "
+                        "(p>0.05 across all 243 discovery combos) — monitoring only"
+                    )
+
+                # Use configured strategy for priority symbols; default for the rest
+                strategy = self.swing_symbol_strategies.get(symbol)
+                if strategy is None:
+                    strategy = SwingStrategy(
+                        f"{symbol} Swing",
+                        db_engine=self._db_engine,
+                        base_capital=self.start_of_day_equity or 0.0,
+                    )
+
+                discovery   = apply_to_swing_strategy(
+                    symbol, spy_bars, preferred_strategy_type=preferred_strategy_type
+                )
                 risk_to_use = Config.SWING_EQUITY_RISK_PERCENT
 
                 if discovery is not None:
                     s_type, s_params = discovery
                     upgraded = None
-
                     if s_type == "ema_trend":
                         rsi_gate = s_params.get("rsi_gate", [40, 60])
                         upgraded = SwingStrategy(
@@ -2124,7 +2314,6 @@ class TradingBot:
                             rsi_entry_low=rsi_gate[0],
                             rsi_entry_high=rsi_gate[1],
                         )
-
                     elif s_type == "bb_mean_reversion":
                         upgraded = BollingerMeanReversionStrategy(
                             f"{symbol} Discovery[{s_type}]",
@@ -2134,17 +2323,14 @@ class TradingBot:
                             rsi_entry=s_params.get("rsi_entry", 30),
                             rsi_exit=s_params.get("rsi_exit", 65),
                         )
-
                     if upgraded is not None:
                         upgraded.discovery_strategy_type = s_type
                         strategy = upgraded
-
-                        # Fetch backtest win_rate for this approved combo
                         backtest_win_rate = None
                         if self._db_engine:
                             try:
-                                with self._db_engine.connect() as conn:
-                                    bwr = conn.execute(sql_text("""
+                                with self._db_engine.connect() as _conn:
+                                    _bwr = _conn.execute(sql_text("""
                                         SELECT win_rate FROM discovery_results
                                         WHERE symbol = :sym
                                           AND strategy_type = :st
@@ -2152,10 +2338,9 @@ class TradingBot:
                                         ORDER BY test_sharpe DESC NULLS LAST
                                         LIMIT 1
                                     """), {"sym": symbol, "st": s_type}).scalar()
-                                backtest_win_rate = float(bwr) if bwr is not None else None
-                            except Exception:
-                                pass
-
+                                backtest_win_rate = float(_bwr) if _bwr is not None else None
+                            except Exception as _bwr_e:
+                                print(f"[Swing] {symbol}: discovery WR query failed — {_bwr_e}")
                         disc_mult, disc_reason = await self._get_discovery_risk_multiplier(
                             symbol, s_type, backtest_win_rate
                         )
@@ -2167,7 +2352,6 @@ class TradingBot:
                                 "for first 50 trades as validation period."
                             )
 
-                # Skip new entries entirely if earnings today or tomorrow
                 if Config.EARNINGS_FILTER_ENABLED:
                     has_earnings_soon, report_date_soon = await self._check_upcoming_earnings(
                         symbol, days_ahead=1
@@ -2180,25 +2364,40 @@ class TradingBot:
                         ))
                         continue
 
-                # Bear market position size reduction
                 if swing_regime == 'bear':
                     risk_to_use *= Config.BEAR_MARKET_SIZE_REDUCTION
                     strategy.bear_market_note = "🐻 Bear market mode — position size reduced 50%"
                     print(f"[Swing] {symbol}: bear market mode — risk_to_use={risk_to_use:.3f}%")
 
-                # Time-of-day safety multiplier
                 risk_to_use *= tod_mult
-
                 print(f"Evaluating {symbol} for swing signals [{strategy.name}]")
-                await self._process_symbol(
-                    symbol,
-                    [strategy],
-                    is_crypto=False,
-                    risk_percent=risk_to_use,
-                    stop_loss_percent=Config.STOP_LOSS_PERCENT,
-                    pre_execute_hook=self._swing_pre_trade_hook,
-                )
-            print(f"📈 Swing evaluation complete for {len(Config.SWING_SYMBOLS)} symbols.")
+
+                try:
+                    # Snapshot active_signals keys for this symbol before processing;
+                    # a new key after the call means a signal fired → update 4h cooldown
+                    _keys_before = {k for k in self.active_signals if k.startswith(f"{symbol}-")}
+
+                    await self._process_symbol(
+                        symbol,
+                        [strategy],
+                        is_crypto=False,
+                        risk_percent=risk_to_use,
+                        stop_loss_percent=Config.STOP_LOSS_PERCENT,
+                        pre_execute_hook=self._swing_pre_trade_hook,
+                    )
+
+                    _keys_after = {k for k in self.active_signals if k.startswith(f"{symbol}-")}
+                    if _keys_after - _keys_before:
+                        self._swing_signal_times[symbol] = datetime.now(pytz.utc)
+
+                except Exception as _sym_err:
+                    import traceback as _tb
+                    print(
+                        f"[Swing] {symbol}: evaluation error — {_sym_err}\n{_tb.format_exc()}"
+                    )
+
+            print(f"📈 Swing cycle {_cycle} complete — {len(symbols)} symbols screened.")
+            await asyncio.sleep(300)  # 5-minute cadence
 
     async def health_report_loop(self):
         import datetime as _dt_module

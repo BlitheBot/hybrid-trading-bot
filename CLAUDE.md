@@ -14,7 +14,7 @@
 
 ## Architecture Overview
 
-A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. Equity swing trades run daily at 10:30 AM EST across 6 symbols using EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly position sizing, and a 15-gate risk chain including correlation guard, FINRA short interest veto, fundamentals check, and a 3-call Claude bull/bear debate before every entry. Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy. An overnight Discovery Engine runs walk-forward grid search + genetic programming to find new validated strategy parameters.
+A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. The swing screener runs every 5 minutes during market hours (9:30 AM–4:00 PM EDT, Mon–Fri) across up to 250 symbols pulled by volume from the `active_tickers` PostgreSQL table (6 priority symbols — JPM, SPY, COST, BRK.B, PG, V — always included). Per-symbol 4-hour cooldown prevents re-entering the same daily candle. Short selling is enabled (`SHORT_SELLING_ENABLED=True`): a SELL signal with no open long executes a short sale with ATR-based stop/target, full debate + fundamentals gate, and 1:2 minimum R/R. The Discovery Engine uses the same 250-symbol universe from `active_tickers`. All positions use EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly sizing, and a 15-gate risk chain. Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy.
 
 ---
 

@@ -125,6 +125,9 @@ class Config:
     WEBULL_ENABLED         = False  # endpoint returns 417; disabled until a working source is found
     WEBULL_ALERT_THRESHOLD = 5.0  # minimum intraday gain % to flag as crowded
 
+    # Short selling
+    SHORT_SELLING_ENABLED = os.getenv("SHORT_SELLING_ENABLED", "true").lower() != "false"
+
     # Diagnostic / verbose logging flags
     SWING_VERBOSE_LOGGING = True   # log EMA/RSI/MACD values + exact hold reason each evaluation
     BULL_BEAR_DEBATE_ENABLED = True      # DeepSeek Flash via OpenRouter with web search

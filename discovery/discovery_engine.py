@@ -434,6 +434,31 @@ class DiscoveryEngine:
             secret_key=Config.ALPACA_SECRET_KEY,
         )
 
+    def _load_symbols(self) -> list[str]:
+        """Pull top-250 tickers by volume from active_tickers, falling back to DISCOVERY_SYMBOLS."""
+        import traceback as _tb
+        try:
+            from sqlalchemy import create_engine, text as _sql_text
+            url = Config.DATABASE_URL
+            if not url:
+                raise ValueError("DATABASE_URL not set")
+            engine = create_engine(url)
+            with engine.connect() as conn:
+                rows = conn.execute(_sql_text(
+                    "SELECT ticker FROM active_tickers ORDER BY rank ASC LIMIT 250"
+                )).mappings().fetchall()
+            symbols = [r["ticker"] for r in rows] if rows else []
+            if not symbols:
+                raise ValueError("active_tickers is empty")
+            print(f"[DiscoveryEngine] Symbol universe: {len(symbols)} tickers from active_tickers")
+            return symbols
+        except Exception as e:
+            print(
+                f"[DiscoveryEngine] active_tickers fetch failed — falling back to "
+                f"DISCOVERY_SYMBOLS: {e}\n{_tb.format_exc()}"
+            )
+            return list(Config.DISCOVERY_SYMBOLS)
+
     def _slack(self, message: str):
         webhook = Config.SLACK_DECISIONS_WEBHOOK
         if not webhook:
@@ -487,7 +512,9 @@ class DiscoveryEngine:
                 pass
 
     async def run(self):
-        symbols    = Config.DISCOVERY_SYMBOLS
+        # Pull top-250 symbols by volume from active_tickers so Discovery Engine
+        # and the swing screener always work on the same universe.
+        symbols = self._load_symbols()
         all_combos = list(itertools.product(
             PARAM_GRID["ema_short"],
             PARAM_GRID["ema_long"],
