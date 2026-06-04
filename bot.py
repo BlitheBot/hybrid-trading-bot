@@ -2108,6 +2108,7 @@ class TradingBot:
         import traceback as _tb
         import pandas_ta as _ta
 
+        print(f"[Swing] SHORT debug — signal keys: {signal.keys()} values: {signal}")
         entry_price = float(signal.get("entry_price", 0))
         if entry_price <= 0:
             print(f"[Swing] {symbol}: SHORT skipped — no valid entry price in signal")

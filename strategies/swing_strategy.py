@@ -386,6 +386,7 @@ class SwingStrategy(BaseStrategy):
                     "symbol": market_data["symbol"].iloc[-1] if "symbol" in market_data.columns else "UNKNOWN",
                     "signal": signal,
                     "confidence": confidence,
+                    "entry_price": current_price,
                     "reasoning": reasoning
                 }
             return None
