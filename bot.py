@@ -869,38 +869,81 @@ class TradingBot:
     async def _debate_trade(self, symbol: str, signal: dict, strategy) -> tuple[bool, str]:
         import json as _json
         try:
+            is_short = signal.get('signal', '') == 'sell'
+            ema_short = getattr(strategy, 'ema_short', 50)
+            ema_long  = getattr(strategy, 'ema_long', 200)
+            crossover_desc = (
+                f"EMA{ema_short}/EMA{ema_long} bearish configuration."
+                if is_short else
+                f"EMA{ema_short} crossed above EMA{ema_long}."
+            )
             shared_data = (
                 f"Symbol: {symbol}  Price: ${signal.get('entry_price', 0):.2f}  "
                 f"RSI({getattr(strategy, 'rsi_period', 14)}): {signal.get('rsi_at_entry', 'N/A')}  "
                 f"MACD: {signal.get('macd_at_entry', 'N/A')}  "
-                f"EMA{getattr(strategy, 'ema_short', 50)} crossed above EMA{getattr(strategy, 'ema_long', 200)}.  "
+                f"{crossover_desc}  "
                 f"Signal detail: {signal.get('reasoning', '')}"
             )
             web_plugin = [{"id": "web", "max_results": 1}]
 
-            bull_resp, bear_resp = await asyncio.gather(
-                call_llm_with_model(
-                    MODEL_FLASH,
-                    f"You are a bullish stock analyst. Search for the latest news on {symbol} "
-                    f"and make the strongest 2-sentence case FOR buying it now. Data: {shared_data}",
-                    max_tokens=200,
-                    plugins=web_plugin,
-                ),
-                call_llm_with_model(
-                    MODEL_FLASH,
-                    f"You are a bearish stock analyst. Search for the latest news on {symbol} "
-                    f"and make the strongest 2-sentence case AGAINST buying it now. Data: {shared_data}",
-                    max_tokens=200,
-                    plugins=web_plugin,
-                ),
-            )
+            if is_short:
+                # For SHORT signals: bear argues FOR the trade; bull must OVERRIDE to block it.
+                resp_a, resp_b = await asyncio.gather(
+                    call_llm_with_model(
+                        MODEL_FLASH,
+                        f"You are a bearish analyst evaluating a SHORT SALE signal on {symbol}. "
+                        f"A technical sell signal has fired. Make the strongest 2-sentence case that "
+                        f"this bearish signal is correct and the stock should be shorted now. "
+                        f"Data: {shared_data}",
+                        max_tokens=200,
+                        plugins=web_plugin,
+                    ),
+                    call_llm_with_model(
+                        MODEL_FLASH,
+                        f"You are a bullish analyst. A SHORT SALE signal has fired on {symbol}. "
+                        f"Make the strongest 2-sentence case that fundamentals or recent news OVERRIDE "
+                        f"this bearish technical signal and the stock should NOT be shorted. "
+                        f"Data: {shared_data}",
+                        max_tokens=200,
+                        plugins=web_plugin,
+                    ),
+                )
+                synthesis_prompt = (
+                    f"A bearish technical sell signal has fired for a SHORT SALE on {symbol}.\n"
+                    f"Short case (signal is correct): {resp_a.text}\n"
+                    f"Override case (argues against shorting): {resp_b.text}\n\n"
+                    f"The technical signal is the default. Proceed with the short unless the override "
+                    f"case is overwhelmingly compelling and directly contradicts the technical signal. "
+                    f"When in doubt, proceed with the short.\n"
+                    'Return JSON only: {"verdict":"proceed"|"skip"|"reduce_size",'
+                    '"conviction":0.0-1.0,"reasoning":"one sentence"}'
+                )
+                label_a, label_b = "Short case", "Override case"
+            else:
+                resp_a, resp_b = await asyncio.gather(
+                    call_llm_with_model(
+                        MODEL_FLASH,
+                        f"You are a bullish stock analyst. Search for the latest news on {symbol} "
+                        f"and make the strongest 2-sentence case FOR buying it now. Data: {shared_data}",
+                        max_tokens=200,
+                        plugins=web_plugin,
+                    ),
+                    call_llm_with_model(
+                        MODEL_FLASH,
+                        f"You are a bearish stock analyst. Search for the latest news on {symbol} "
+                        f"and make the strongest 2-sentence case AGAINST buying it now. Data: {shared_data}",
+                        max_tokens=200,
+                        plugins=web_plugin,
+                    ),
+                )
+                synthesis_prompt = (
+                    f"Bull case: {resp_a.text}\nBear case: {resp_b.text}\n\n"
+                    f"Should we buy {symbol} right now?\n"
+                    'Return JSON only: {"verdict":"proceed"|"skip"|"reduce_size",'
+                    '"conviction":0.0-1.0,"reasoning":"one sentence"}'
+                )
+                label_a, label_b = "Bull", "Bear"
 
-            synthesis_prompt = (
-                f"Bull case: {bull_resp.text}\nBear case: {bear_resp.text}\n\n"
-                f"Should we buy {symbol} right now?\n"
-                'Return JSON only: {"verdict":"proceed"|"skip"|"reduce_size",'
-                '"conviction":0.0-1.0,"reasoning":"one sentence"}'
-            )
             verdict_resp = await call_llm_with_model(
                 MODEL_FLASH,
                 synthesis_prompt,
@@ -918,8 +961,7 @@ class TradingBot:
                 conviction = 0.5
                 reasoning = verdict_resp.text
 
-            # Collect citation URLs from both debate calls
-            all_citations = bull_resp.citations + bear_resp.citations
+            all_citations = resp_a.citations + resp_b.citations
             source_lines = "\n".join(
                 f"  • <{c['url']}|{c['title'] or c['url']}>" for c in all_citations[:4]
             )
@@ -930,7 +972,7 @@ class TradingBot:
                 print(f"[Debate] {symbol} reduce_size verdict — setting 50% position size")
 
             summary = (
-                f"*Bull:* {bull_resp.text}\n*Bear:* {bear_resp.text}\n"
+                f"*{label_a}:* {resp_a.text}\n*{label_b}:* {resp_b.text}\n"
                 f"*Verdict:* {verdict.upper()} (conviction {conviction:.0%}) — {reasoning}"
             )
             if source_lines:

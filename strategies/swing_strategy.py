@@ -84,90 +84,154 @@ class SwingStrategy(BaseStrategy):
 
     async def run_debate(self, symbol: str, signal: dict) -> tuple[bool, str]:
         """
-        Sequential Gemini 2.5 Flash (thinking enabled) bull/bear debate gate.
-
-        Flow:
-          1. Bull call — strongest case FOR the trade using price/indicator context.
-          2. Bear call — structured JSON objections rebutting the bull case.
-        Trade is BLOCKED when the bear raises > 2 concrete objections.
-        Both arguments are always logged to debate_log.
-        Returns (approved, slack_summary).
+        Sequential Gemini 2.5 Flash (thinking enabled) debate gate.
+        Direction-aware: for LONG signals the bear must raise > 2 objections to block;
+        for SHORT signals the bull override must raise > 2 objections to block.
         """
         _thinking = {"thinking": {"type": "enabled", "budget_tokens": 5000}}
+        is_short = signal.get('signal', '') == 'sell'
+        crossover_desc = (
+            f"EMA{self.ema_short}/{self.ema_long} bearish configuration"
+            if is_short else
+            f"EMA{self.ema_short}/{self.ema_long} bullish crossover"
+        )
         context = (
             f"Symbol: {symbol} | "
             f"Price: ${float(signal.get('entry_price', 0)):.2f} | "
             f"RSI({self.rsi_period}): {signal.get('rsi_at_entry', 'N/A')} | "
             f"MACD: {signal.get('macd_at_entry', 'N/A')} | "
-            f"EMA{self.ema_short}/{self.ema_long} bullish crossover | "
+            f"{crossover_desc} | "
             f"Kalman noise_ratio: {signal.get('noise_ratio', 'N/A')} | "
             f"Hurst H: {signal.get('hurst', 'N/A')} | "
             f"Signal detail: {signal.get('reasoning', '')}"
         )
 
-        # ── Bull call ────────────────────────────────────────────────────────
-        bull_text = "Bull case unavailable (LLM error)"
-        try:
-            bull_resp = await call_llm_with_model(
-                MODEL_GEMINI_FLASH,
-                (
-                    f"You are a bullish equity analyst. Make the strongest possible case FOR buying "
-                    f"{symbol} right now. Be specific — cite at least 3 concrete reasons from "
-                    f"the technical data provided.\n\nData: {context}"
-                ),
-                max_tokens=600,
-                extra_body=_thinking,
+        primary_text = ""
+        rebuttal_text = ""
+        approved = True
+
+        if is_short:
+            # ── Short case (bear supports the signal) ────────────────────────
+            short_text = "Short case unavailable (LLM error)"
+            try:
+                short_resp = await call_llm_with_model(
+                    MODEL_GEMINI_FLASH,
+                    (
+                        f"You are a bearish equity analyst evaluating a SHORT SALE signal on {symbol}. "
+                        f"A technical sell signal has fired. Make the strongest possible case that "
+                        f"this bearish signal is correct and the stock should be shorted now. "
+                        f"Be specific — cite at least 3 concrete reasons from the technical data.\n\nData: {context}"
+                    ),
+                    max_tokens=600,
+                    extra_body=_thinking,
+                )
+                short_text = short_resp.text
+            except LLMError as e:
+                print(f"[SwingDebate] {symbol} short case call failed: {e} — using placeholder")
+
+            # ── Override call (bull argues against shorting, rebutting short case) ──
+            override_text = "Override case unavailable (LLM error)"
+            override_objections: list[str] = []
+            override_summary = "Override analysis unavailable"
+            try:
+                override_resp = await call_llm_with_model(
+                    MODEL_GEMINI_FLASH,
+                    (
+                        f"You are a bullish equity analyst. A SHORT SALE signal has fired on {symbol}. "
+                        f"Make the case that fundamentals or recent news OVERRIDE this bearish signal "
+                        f"and the stock should NOT be shorted. Rebut the short case where you can.\n\n"
+                        f"Data: {context}\n\nShort case to rebut:\n{short_text[:500]}\n\n"
+                        "Respond with JSON only: "
+                        '{"objections": ["<reason 1>", "<reason 2>", ...], "summary": "<one sentence>"}'
+                    ),
+                    response_format={"type": "json_object"},
+                    max_tokens=600,
+                    extra_body=_thinking,
+                )
+                override_text = override_resp.text
+                parsed = json.loads(override_resp.text)
+                override_objections = [str(o) for o in parsed.get("objections", []) if o]
+                override_summary = parsed.get("summary", override_resp.text[:200])
+            except LLMError as e:
+                print(f"[SwingDebate] {symbol} override call failed: {e} — defaulting to 0 objections")
+            except Exception as e:
+                print(f"[SwingDebate] {symbol} override JSON parse failed: {e} — defaulting to 0 objections")
+
+            # Short proceeds unless the bull override raises > 2 compelling objections
+            approved = len(override_objections) <= 2
+            n = len(override_objections)
+            objection_lines = "\n".join(f"  {i+1}. {o}" for i, o in enumerate(override_objections))
+            summary = (
+                f"*Short case:* {short_text[:400]}\n"
+                f"*Bull override ({n} objection{'s' if n != 1 else ''}):* {override_summary}"
             )
-            bull_text = bull_resp.text
-        except LLMError as e:
-            print(f"[SwingDebate] {symbol} bull call failed: {e} — using placeholder")
+            if not approved:
+                summary += f"\n*Override objections that blocked the short:*\n{objection_lines}"
+            summary += f"\n*Verdict:* {'✅ SHORT APPROVED' if approved else '🚫 SHORT BLOCKED (>2 bull override objections)'}"
+            print(f"[SwingDebate] {symbol} SHORT: {n} bull override objection(s) → {'APPROVED' if approved else 'BLOCKED'}")
+            primary_text, rebuttal_text = short_text, override_text
 
-        # ── Bear call (sequential — explicitly rebutting bull) ────────────────
-        bear_text = "Bear case unavailable (LLM error)"
-        bear_objections: list[str] = []
-        bear_summary = "Bear analysis unavailable"
-        try:
-            bear_resp = await call_llm_with_model(
-                MODEL_GEMINI_FLASH,
-                (
-                    f"You are a bearish equity analyst. Identify concrete risks AGAINST buying "
-                    f"{symbol} right now. Rebut the bull case where you can.\n\n"
-                    f"Data: {context}\n\nBull case to rebut:\n{bull_text[:500]}\n\n"
-                    "Respond with JSON only: "
-                    '{"objections": ["<risk 1>", "<risk 2>", ...], "summary": "<one sentence>"}'
-                ),
-                response_format={"type": "json_object"},
-                max_tokens=600,
-                extra_body=_thinking,
+        else:
+            # ── Bull call ────────────────────────────────────────────────────
+            bull_text = "Bull case unavailable (LLM error)"
+            try:
+                bull_resp = await call_llm_with_model(
+                    MODEL_GEMINI_FLASH,
+                    (
+                        f"You are a bullish equity analyst. Make the strongest possible case FOR buying "
+                        f"{symbol} right now. Be specific — cite at least 3 concrete reasons from "
+                        f"the technical data provided.\n\nData: {context}"
+                    ),
+                    max_tokens=600,
+                    extra_body=_thinking,
+                )
+                bull_text = bull_resp.text
+            except LLMError as e:
+                print(f"[SwingDebate] {symbol} bull call failed: {e} — using placeholder")
+
+            # ── Bear call (sequential — explicitly rebutting bull) ────────────
+            bear_text = "Bear case unavailable (LLM error)"
+            bear_objections: list[str] = []
+            bear_summary = "Bear analysis unavailable"
+            try:
+                bear_resp = await call_llm_with_model(
+                    MODEL_GEMINI_FLASH,
+                    (
+                        f"You are a bearish equity analyst. Identify concrete risks AGAINST buying "
+                        f"{symbol} right now. Rebut the bull case where you can.\n\n"
+                        f"Data: {context}\n\nBull case to rebut:\n{bull_text[:500]}\n\n"
+                        "Respond with JSON only: "
+                        '{"objections": ["<risk 1>", "<risk 2>", ...], "summary": "<one sentence>"}'
+                    ),
+                    response_format={"type": "json_object"},
+                    max_tokens=600,
+                    extra_body=_thinking,
+                )
+                bear_text = bear_resp.text
+                parsed = json.loads(bear_resp.text)
+                bear_objections = [str(o) for o in parsed.get("objections", []) if o]
+                bear_summary = parsed.get("summary", bear_resp.text[:200])
+            except LLMError as e:
+                print(f"[SwingDebate] {symbol} bear call failed: {e} — defaulting to 0 objections")
+            except Exception as e:
+                print(f"[SwingDebate] {symbol} bear JSON parse failed: {e} — defaulting to 0 objections")
+
+            approved = len(bear_objections) <= 2
+            n = len(bear_objections)
+            objection_lines = "\n".join(f"  {i+1}. {o}" for i, o in enumerate(bear_objections))
+            summary = (
+                f"*Bull:* {bull_text[:400]}\n"
+                f"*Bear ({n} objection{'s' if n != 1 else ''}):* {bear_summary}"
             )
-            bear_text = bear_resp.text
-            parsed = json.loads(bear_resp.text)
-            bear_objections = [str(o) for o in parsed.get("objections", []) if o]
-            bear_summary = parsed.get("summary", bear_resp.text[:200])
-        except LLMError as e:
-            print(f"[SwingDebate] {symbol} bear call failed: {e} — defaulting to 0 objections")
-        except Exception as e:
-            print(f"[SwingDebate] {symbol} bear JSON parse failed: {e} — defaulting to 0 objections")
-
-        approved = len(bear_objections) <= 2
-        n = len(bear_objections)
-        objection_lines = "\n".join(f"  {i+1}. {o}" for i, o in enumerate(bear_objections))
-        summary = (
-            f"*Bull:* {bull_text[:400]}\n"
-            f"*Bear ({n} objection{'s' if n != 1 else ''}):* {bear_summary}"
-        )
-        if not approved:
-            summary += f"\n*Objections that blocked the trade:*\n{objection_lines}"
-        summary += f"\n*Verdict:* {'✅ APPROVED' if approved else '🚫 BLOCKED (>2 bear objections)'}"
-
-        print(
-            f"[SwingDebate] {symbol}: {n} bear objection(s) → "
-            f"{'APPROVED' if approved else 'BLOCKED'}"
-        )
+            if not approved:
+                summary += f"\n*Objections that blocked the trade:*\n{objection_lines}"
+            summary += f"\n*Verdict:* {'✅ APPROVED' if approved else '🚫 BLOCKED (>2 bear objections)'}"
+            print(f"[SwingDebate] {symbol}: {n} bear objection(s) → {'APPROVED' if approved else 'BLOCKED'}")
+            primary_text, rebuttal_text = bull_text, bear_text
 
         if self._db_engine:
             await asyncio.to_thread(
-                self._log_debate_sync, symbol, bull_text, bear_text, approved
+                self._log_debate_sync, symbol, primary_text, rebuttal_text, approved
             )
 
         return approved, summary
