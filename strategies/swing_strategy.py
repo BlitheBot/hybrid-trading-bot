@@ -96,6 +96,7 @@ class SwingStrategy(BaseStrategy):
             f"EMA{self.ema_short}/{self.ema_long} bullish crossover"
         )
         context = (
+            f"Signal direction: {'SHORT SALE' if is_short else 'LONG BUY'} | "
             f"Symbol: {symbol} | "
             f"Price: ${float(signal.get('entry_price', 0)):.2f} | "
             f"RSI({self.rsi_period}): {signal.get('rsi_at_entry', 'N/A')} | "
@@ -129,7 +130,7 @@ class SwingStrategy(BaseStrategy):
             except LLMError as e:
                 print(f"[SwingDebate] {symbol} short case call failed: {e} — using placeholder")
 
-            # ── Override call (bull argues against shorting, rebutting short case) ──
+            # ── Override call (bull must raise 2+ concrete fundamental/macro reasons to block) ──
             override_text = "Override case unavailable (LLM error)"
             override_objections: list[str] = []
             override_summary = "Override analysis unavailable"
@@ -137,12 +138,14 @@ class SwingStrategy(BaseStrategy):
                 override_resp = await call_llm_with_model(
                     MODEL_GEMINI_FLASH,
                     (
-                        f"You are a bullish equity analyst. A SHORT SALE signal has fired on {symbol}. "
-                        f"Make the case that fundamentals or recent news OVERRIDE this bearish signal "
-                        f"and the stock should NOT be shorted. Rebut the short case where you can.\n\n"
-                        f"Data: {context}\n\nShort case to rebut:\n{short_text[:500]}\n\n"
+                        f"A technical SELL signal has fired for {symbol} with the following bearish "
+                        f"evidence: {context}. You are a bullish analyst. Make a compelling case for "
+                        f"why this bearish signal should be IGNORED and the stock will rise. "
+                        f"Provide only concrete fundamental or macro reasons — vague optimism does not count. "
+                        f"Rebut the short case where you can.\n\n"
+                        f"Short case to rebut:\n{short_text[:500]}\n\n"
                         "Respond with JSON only: "
-                        '{"objections": ["<reason 1>", "<reason 2>", ...], "summary": "<one sentence>"}'
+                        '{"objections": ["<concrete fundamental/macro reason 1>", "<reason 2>", ...], "summary": "<one sentence>"}'
                     ),
                     response_format={"type": "json_object"},
                     max_tokens=600,
@@ -157,18 +160,21 @@ class SwingStrategy(BaseStrategy):
             except Exception as e:
                 print(f"[SwingDebate] {symbol} override JSON parse failed: {e} — defaulting to 0 objections")
 
-            # Short proceeds unless the bull override raises > 2 compelling objections
-            approved = len(override_objections) <= 2
+            # Short proceeds unless bull raises 2+ concrete fundamental/macro override reasons
+            approved = len(override_objections) < 2
             n = len(override_objections)
             objection_lines = "\n".join(f"  {i+1}. {o}" for i, o in enumerate(override_objections))
             summary = (
                 f"*Short case:* {short_text[:400]}\n"
-                f"*Bull override ({n} objection{'s' if n != 1 else ''}):* {override_summary}"
+                f"*Bull override ({n} reason{'s' if n != 1 else ''}):* {override_summary}"
             )
             if not approved:
-                summary += f"\n*Override objections that blocked the short:*\n{objection_lines}"
-            summary += f"\n*Verdict:* {'✅ SHORT APPROVED' if approved else '🚫 SHORT BLOCKED (>2 bull override objections)'}"
-            print(f"[SwingDebate] {symbol} SHORT: {n} bull override objection(s) → {'APPROVED' if approved else 'BLOCKED'}")
+                summary += f"\n*Override reasons that blocked the short:*\n{objection_lines}"
+            summary += f"\n*Verdict:* {'✅ SHORT PROCEEDS (bull override failed)' if approved else '🚫 SHORT BLOCKED (bull raised 2+ concrete override reasons)'}"
+            if approved:
+                print(f"[Debate] SHORT {symbol} — bull override FAILED ({n} reason(s)) — short proceeds")
+            else:
+                print(f"[Debate] SHORT {symbol} — bull override SUCCEEDED ({n} reason(s)) — short blocked")
             primary_text, rebuttal_text = short_text, override_text
 
         else:

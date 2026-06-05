@@ -878,6 +878,7 @@ class TradingBot:
                 f"EMA{ema_short} crossed above EMA{ema_long}."
             )
             shared_data = (
+                f"Signal direction: {'SHORT SALE' if is_short else 'LONG BUY'} | "
                 f"Symbol: {symbol}  Price: ${signal.get('entry_price', 0):.2f}  "
                 f"RSI({getattr(strategy, 'rsi_period', 14)}): {signal.get('rsi_at_entry', 'N/A')}  "
                 f"MACD: {signal.get('macd_at_entry', 'N/A')}  "
@@ -887,40 +888,74 @@ class TradingBot:
             web_plugin = [{"id": "web", "max_results": 1}]
 
             if is_short:
-                # For SHORT signals: bear argues FOR the trade; bull must OVERRIDE to block it.
-                resp_a, resp_b = await asyncio.gather(
+                # SHORT path: bear defends the signal; bull must raise 2+ concrete fundamental/macro
+                # reasons to override it. No synthesis call — outcome is determined by counting.
+                bear_resp, bull_resp = await asyncio.gather(
                     call_llm_with_model(
                         MODEL_FLASH,
-                        f"You are a bearish analyst evaluating a SHORT SALE signal on {symbol}. "
-                        f"A technical sell signal has fired. Make the strongest 2-sentence case that "
-                        f"this bearish signal is correct and the stock should be shorted now. "
-                        f"Data: {shared_data}",
+                        f"A technical SELL signal has fired for {symbol}. "
+                        f"You are a bearish analyst defending this signal. "
+                        f"Make the strongest 2-sentence case that this bearish signal is correct "
+                        f"and the stock should be shorted now. Data: {shared_data}",
                         max_tokens=200,
                         plugins=web_plugin,
                     ),
                     call_llm_with_model(
                         MODEL_FLASH,
-                        f"You are a bullish analyst. A SHORT SALE signal has fired on {symbol}. "
-                        f"Make the strongest 2-sentence case that fundamentals or recent news OVERRIDE "
-                        f"this bearish technical signal and the stock should NOT be shorted. "
-                        f"Data: {shared_data}",
-                        max_tokens=200,
+                        f"A technical SELL signal has fired for {symbol} with the following bearish "
+                        f"evidence: {shared_data}. You are a bullish analyst. Make a compelling case "
+                        f"for why this bearish signal should be IGNORED and the stock will rise. "
+                        f"Provide only concrete fundamental or macro reasons — vague optimism does not count.\n"
+                        'Return JSON only: {"reasons":["<concrete fundamental/macro reason 1>","<reason 2>",...],'
+                        '"summary":"<one sentence>"}',
+                        response_format={"type": "json_object"},
+                        max_tokens=300,
                         plugins=web_plugin,
                     ),
                 )
-                synthesis_prompt = (
-                    f"A bearish technical sell signal has fired for a SHORT SALE on {symbol}.\n"
-                    f"Short case (signal is correct): {resp_a.text}\n"
-                    f"Override case (argues against shorting): {resp_b.text}\n\n"
-                    f"The technical signal is the default. Proceed with the short unless the override "
-                    f"case is overwhelmingly compelling and directly contradicts the technical signal. "
-                    f"When in doubt, proceed with the short.\n"
-                    'Return JSON only: {"verdict":"proceed"|"skip"|"reduce_size",'
-                    '"conviction":0.0-1.0,"reasoning":"one sentence"}'
+
+                bull_reasons: list[str] = []
+                bull_summary = "No override provided"
+                try:
+                    parsed_b = _json.loads(bull_resp.text)
+                    bull_reasons = [str(r) for r in parsed_b.get("reasons", []) if r]
+                    bull_summary = parsed_b.get("summary", bull_resp.text[:200])
+                except Exception:
+                    bull_reasons = []
+                    bull_summary = bull_resp.text[:200]
+
+                n_bull = len(bull_reasons)
+                proceed = n_bull < 2  # short proceeds unless bull raises 2+ concrete reasons
+
+                if proceed:
+                    print(f"[Debate] SHORT {symbol} — bull override FAILED ({n_bull} reason(s)) — short proceeds")
+                else:
+                    print(f"[Debate] SHORT {symbol} — bull override SUCCEEDED ({n_bull} reason(s)) — short blocked")
+
+                all_citations = bear_resp.citations + bull_resp.citations
+                source_lines = "\n".join(
+                    f"  • <{c['url']}|{c['title'] or c['url']}>" for c in all_citations[:4]
                 )
-                label_a, label_b = "Short case", "Override case"
+                reason_lines = "\n".join(f"  {i+1}. {r}" for i, r in enumerate(bull_reasons))
+                verdict_label = (
+                    "✅ SHORT PROCEEDS (bull override failed)"
+                    if proceed else
+                    "🚫 SHORT BLOCKED (bull raised 2+ concrete override reasons)"
+                )
+                summary = (
+                    f"*Bear (defends signal):* {bear_resp.text}\n"
+                    f"*Bull override ({n_bull} reason(s)):* {bull_summary}"
+                )
+                if not proceed and reason_lines:
+                    summary += f"\n*Override reasons:*\n{reason_lines}"
+                summary += f"\n*Verdict:* {verdict_label}"
+                if source_lines:
+                    summary += f"\n*Sources:* {source_lines}"
+                return proceed, summary
+
             else:
-                resp_a, resp_b = await asyncio.gather(
+                # LONG path: neutral bull vs bear; bear blocks if it raises 2+ objections.
+                bull_resp, bear_resp = await asyncio.gather(
                     call_llm_with_model(
                         MODEL_FLASH,
                         f"You are a bullish stock analyst. Search for the latest news on {symbol} "
@@ -937,47 +972,44 @@ class TradingBot:
                     ),
                 )
                 synthesis_prompt = (
-                    f"Bull case: {resp_a.text}\nBear case: {resp_b.text}\n\n"
+                    f"Bull case: {bull_resp.text}\nBear case: {bear_resp.text}\n\n"
                     f"Should we buy {symbol} right now?\n"
                     'Return JSON only: {"verdict":"proceed"|"skip"|"reduce_size",'
                     '"conviction":0.0-1.0,"reasoning":"one sentence"}'
                 )
-                label_a, label_b = "Bull", "Bear"
+                verdict_resp = await call_llm_with_model(
+                    MODEL_FLASH,
+                    synthesis_prompt,
+                    response_format={"type": "json_object"},
+                    max_tokens=150,
+                )
 
-            verdict_resp = await call_llm_with_model(
-                MODEL_FLASH,
-                synthesis_prompt,
-                response_format={"type": "json_object"},
-                max_tokens=150,
-            )
+                try:
+                    parsed = _json.loads(verdict_resp.text)
+                    verdict = parsed.get("verdict", "proceed").lower()
+                    conviction = float(parsed.get("conviction", 0.7))
+                    reasoning = parsed.get("reasoning", verdict_resp.text)
+                except Exception:
+                    verdict = "proceed" if verdict_resp.text.upper().startswith("P") else "skip"
+                    conviction = 0.5
+                    reasoning = verdict_resp.text
 
-            try:
-                parsed = _json.loads(verdict_resp.text)
-                verdict = parsed.get("verdict", "proceed").lower()
-                conviction = float(parsed.get("conviction", 0.7))
-                reasoning = parsed.get("reasoning", verdict_resp.text)
-            except Exception:
-                verdict = "proceed" if verdict_resp.text.upper().startswith("P") else "skip"
-                conviction = 0.5
-                reasoning = verdict_resp.text
+                all_citations = bull_resp.citations + bear_resp.citations
+                source_lines = "\n".join(
+                    f"  • <{c['url']}|{c['title'] or c['url']}>" for c in all_citations[:4]
+                )
+                proceed = verdict in ("proceed", "reduce_size")
+                if verdict == "reduce_size":
+                    strategy.debate_size_multiplier = 0.5
+                    print(f"[Debate] {symbol} reduce_size verdict — setting 50% position size")
 
-            all_citations = resp_a.citations + resp_b.citations
-            source_lines = "\n".join(
-                f"  • <{c['url']}|{c['title'] or c['url']}>" for c in all_citations[:4]
-            )
-
-            proceed = verdict in ("proceed", "reduce_size")
-            if verdict == "reduce_size":
-                strategy.debate_size_multiplier = 0.5
-                print(f"[Debate] {symbol} reduce_size verdict — setting 50% position size")
-
-            summary = (
-                f"*{label_a}:* {resp_a.text}\n*{label_b}:* {resp_b.text}\n"
-                f"*Verdict:* {verdict.upper()} (conviction {conviction:.0%}) — {reasoning}"
-            )
-            if source_lines:
-                summary += f"\n*Sources:* {source_lines}"
-            return proceed, summary
+                summary = (
+                    f"*Bull:* {bull_resp.text}\n*Bear:* {bear_resp.text}\n"
+                    f"*Verdict:* {verdict.upper()} (conviction {conviction:.0%}) — {reasoning}"
+                )
+                if source_lines:
+                    summary += f"\n*Sources:* {source_lines}"
+                return proceed, summary
 
         except LLMError as e:
             print(f"[Debate] {symbol} LLMError — proceeding without debate: {e}")
