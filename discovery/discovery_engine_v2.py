@@ -41,7 +41,7 @@ from alpaca.data.timeframe import TimeFrame
 from config import Config
 from discovery.strategies import load_all_strategies
 from discovery.strategies.base import DiscoveryStrategy
-from discovery.symbol_universe import get_top_n
+from discovery.symbol_universe import get_discovery_candidates
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -977,7 +977,8 @@ class DiscoveryEngineV2:
     def run(self):
         strategy_classes    = load_all_strategies()
         combos_per_symbol   = sum(len(sc().get_combos()) for sc in strategy_classes)
-        symbols             = get_top_n(self._data_client)
+        _sym_engine         = create_engine(self._db_url, pool_pre_ping=True) if self._db_url else None
+        symbols             = get_discovery_candidates(_sym_engine, top_n=100) if _sym_engine else []
 
         print(
             f"[v2] Starting: {len(symbols)} symbols × {combos_per_symbol} combos/symbol "
