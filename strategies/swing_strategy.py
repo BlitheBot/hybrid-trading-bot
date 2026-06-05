@@ -534,5 +534,6 @@ class SwingStrategy(BaseStrategy):
             order_id = str(order.id)[:8] if order and order.id else "unknown"
             print(f"[ORDER] Alpaca response: id={order.id} status={order.status.value if order else '?'} symbol={getattr(order,'symbol','?')} qty={getattr(order,'qty','?')}")
             print(f"✅ Swing Order Placed: {side} {symbol} (Qty: {qty}) @ {entry_price}. SL: {sl_price}, TP: {tp_price} | order_id={order_id} status={order.status.value if order else '?'}")
+            return qty
         except Exception:
             print(f"❌ Swing Order Failed for {symbol}:\n{traceback.format_exc()}")

@@ -152,6 +152,15 @@ async def notify_trade_skipped(symbol, strategy_name, reason, critical=False):
     }
     await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, payload)
 
+async def notify_trade_executed(symbol, direction, entry_price, stop, target, shares, gates):
+    """Fires only after a successful order submission to Alpaca."""
+    msg = (
+        f"✅ *{direction} executed — {symbol}*\n"
+        f"@ ${entry_price:.2f} | stop=${stop:.2f} | target=${target:.2f} | "
+        f"shares={shares} | {gates}"
+    )
+    await _post_to_slack(Config.SLACK_DECISIONS_WEBHOOK, {"text": msg})
+
 async def notify_alert(message, level="ERROR"):
     """Sends critical alerts to #trading-alerts; fires PagerDuty phone alert on CRITICAL."""
     if not Config.SLACK_VERBOSE and level.upper() == "INFO":

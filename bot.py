@@ -1376,10 +1376,6 @@ class TradingBot:
                     sentiment_note,
                     grok_note,
                 ] if n]
-                asyncio.create_task(notifications.notify_trade_decision(
-                    symbol, strategy.name, signal,
-                    discovery_note="\n".join(_notes) if _notes else None,
-                ))
 
                 # Short selling: when a sell signal fires with no open long position,
                 # execute a short sale instead of silently skipping.
@@ -1430,7 +1426,7 @@ class TradingBot:
                             scaled_risk_percent,
                             Config.SWING_EQUITY_RISK_PERCENT * Config.POSITION_SIZE_FLOOR,
                         )
-                        await asyncio.to_thread(
+                        executed_qty = await asyncio.to_thread(
                             strategy.execute_trade,
                             signal,
                             self.trading_client,
@@ -1443,6 +1439,21 @@ class TradingBot:
                         # Prometheus counter: confirmed buy execution
                         if signal['signal'] == 'buy':
                             _health_state["signals_fired_total"] += 1
+
+                        # Execution confirmation — fires only after Alpaca accepts the order
+                        if executed_qty:
+                            _gates = (
+                                "debate: passed | fundamentals: passed"
+                                if pre_execute_hook else "gates: passed"
+                            )
+                            asyncio.create_task(notifications.notify_trade_executed(
+                                symbol, "LONG",
+                                float(signal.get('entry_price', 0)),
+                                float(signal.get('stop_price', 0)),
+                                float(signal.get('target_price', 0)),
+                                executed_qty,
+                                _gates,
+                            ))
 
                         # Log entry to signal_outcomes after successful execute_trade
                         if signal['signal'] == 'buy' and signal_type:
@@ -2275,10 +2286,9 @@ class TradingBot:
                 f"[Swing] SHORT entered for {symbol} at {entry_price:.2f} | "
                 f"stop={short_stop:.2f} target={short_target:.2f} | size={shares}"
             )
-            asyncio.create_task(notifications.notify_alert(
-                f"🩳 SHORT entered: {symbol} @ ${entry_price:.2f} | "
-                f"stop=${short_stop:.2f} target=${short_target:.2f} | {shares} shares",
-                level="INFO",
+            asyncio.create_task(notifications.notify_trade_executed(
+                symbol, "SHORT", entry_price, short_stop, short_target, shares,
+                "debate: passed | fundamentals: passed",
             ))
             _health_state["signals_fired_total"] += 1
         except Exception as _ord_e:
