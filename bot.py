@@ -888,31 +888,41 @@ class TradingBot:
             web_plugin = [{"id": "web", "max_results": 1}]
 
             if is_short:
-                # SHORT path: bear defends the signal; bull must raise 2+ concrete fundamental/macro
+                # SHORT path: bear defends the signal; bull must raise 4+ concrete fundamental/macro
                 # reasons to override it. No synthesis call — outcome is determined by counting.
-                bear_resp, bull_resp = await asyncio.gather(
-                    call_llm_with_model(
-                        MODEL_FLASH,
-                        f"A technical SELL signal has fired for {symbol}. "
-                        f"You are a bearish analyst defending this signal. "
-                        f"Make the strongest 2-sentence case that this bearish signal is correct "
-                        f"and the stock should be shorted now. Data: {shared_data}",
-                        max_tokens=200,
-                        plugins=web_plugin,
-                    ),
-                    call_llm_with_model(
-                        MODEL_FLASH,
-                        f"A technical SELL signal has fired for {symbol} with the following bearish "
-                        f"evidence: {shared_data}. You are a bullish analyst. Make a compelling case "
-                        f"for why this bearish signal should be IGNORED and the stock will rise. "
-                        f"Provide only concrete fundamental or macro reasons — vague optimism does not count.\n"
-                        'Return JSON only: {"reasons":["<concrete fundamental/macro reason 1>","<reason 2>",...],'
-                        '"summary":"<one sentence>"}',
-                        response_format={"type": "json_object"},
-                        max_tokens=300,
-                        plugins=web_plugin,
-                    ),
+                _bear_prompt = (
+                    f"A technical SELL signal has fired for {symbol}. "
+                    f"You are a bearish analyst defending this signal. "
+                    f"Make the strongest 2-sentence case that this bearish signal is correct "
+                    f"and the stock should be shorted now. Data: {shared_data}"
                 )
+                _bull_prompt = (
+                    f"A technical SELL signal has fired for {symbol} with the following bearish "
+                    f"evidence: {shared_data}. You are a bullish analyst. Make a compelling case "
+                    f"for why this bearish signal should be IGNORED and the stock will rise. "
+                    f"Provide only concrete fundamental or macro reasons — vague optimism does not count.\n"
+                    'Return JSON only: {"reasons":["<concrete fundamental/macro reason 1>","<reason 2>",...],'
+                    '"summary":"<one sentence>"}'
+                )
+                for _attempt in range(2):
+                    try:
+                        bear_resp, bull_resp = await asyncio.gather(
+                            call_llm_with_model(
+                                MODEL_FLASH, _bear_prompt,
+                                max_tokens=200, plugins=web_plugin,
+                            ),
+                            call_llm_with_model(
+                                MODEL_FLASH, _bull_prompt,
+                                response_format={"type": "json_object"},
+                                max_tokens=300, plugins=web_plugin,
+                            ),
+                        )
+                        break
+                    except LLMError as _e:
+                        if _attempt == 0 and "null content" in str(_e):
+                            print(f"[Debate] {symbol} None response from LLM — retrying once")
+                        else:
+                            raise
 
                 bull_reasons: list[str] = []
                 bull_summary = "No override provided"
@@ -925,7 +935,7 @@ class TradingBot:
                     bull_summary = bull_resp.text[:200]
 
                 n_bull = len(bull_reasons)
-                proceed = n_bull < 2  # short proceeds unless bull raises 2+ concrete reasons
+                proceed = n_bull < 4  # short proceeds unless bull raises 4+ concrete reasons
 
                 if proceed:
                     print(f"[Debate] SHORT {symbol} — bull override FAILED ({n_bull} reason(s)) — short proceeds")
@@ -940,7 +950,7 @@ class TradingBot:
                 verdict_label = (
                     "✅ SHORT PROCEEDS (bull override failed)"
                     if proceed else
-                    "🚫 SHORT BLOCKED (bull raised 2+ concrete override reasons)"
+                    "🚫 SHORT BLOCKED (bull raised 4+ concrete override reasons)"
                 )
                 summary = (
                     f"*Bear (defends signal):* {bear_resp.text}\n"
@@ -955,34 +965,52 @@ class TradingBot:
 
             else:
                 # LONG path: neutral bull vs bear; bear blocks if it raises 2+ objections.
-                bull_resp, bear_resp = await asyncio.gather(
-                    call_llm_with_model(
-                        MODEL_FLASH,
-                        f"You are a bullish stock analyst. Search for the latest news on {symbol} "
-                        f"and make the strongest 2-sentence case FOR buying it now. Data: {shared_data}",
-                        max_tokens=200,
-                        plugins=web_plugin,
-                    ),
-                    call_llm_with_model(
-                        MODEL_FLASH,
-                        f"You are a bearish stock analyst. Search for the latest news on {symbol} "
-                        f"and make the strongest 2-sentence case AGAINST buying it now. Data: {shared_data}",
-                        max_tokens=200,
-                        plugins=web_plugin,
-                    ),
+                _bull_long_prompt = (
+                    f"You are a bullish stock analyst. Search for the latest news on {symbol} "
+                    f"and make the strongest 2-sentence case FOR buying it now. Data: {shared_data}"
                 )
+                _bear_long_prompt = (
+                    f"You are a bearish stock analyst. Search for the latest news on {symbol} "
+                    f"and make the strongest 2-sentence case AGAINST buying it now. Data: {shared_data}"
+                )
+                for _attempt in range(2):
+                    try:
+                        bull_resp, bear_resp = await asyncio.gather(
+                            call_llm_with_model(
+                                MODEL_FLASH, _bull_long_prompt,
+                                max_tokens=200, plugins=web_plugin,
+                            ),
+                            call_llm_with_model(
+                                MODEL_FLASH, _bear_long_prompt,
+                                max_tokens=200, plugins=web_plugin,
+                            ),
+                        )
+                        break
+                    except LLMError as _e:
+                        if _attempt == 0 and "null content" in str(_e):
+                            print(f"[Debate] {symbol} None response from LLM — retrying once")
+                        else:
+                            raise
                 synthesis_prompt = (
                     f"Bull case: {bull_resp.text}\nBear case: {bear_resp.text}\n\n"
                     f"Should we buy {symbol} right now?\n"
                     'Return JSON only: {"verdict":"proceed"|"skip"|"reduce_size",'
                     '"conviction":0.0-1.0,"reasoning":"one sentence"}'
                 )
-                verdict_resp = await call_llm_with_model(
-                    MODEL_FLASH,
-                    synthesis_prompt,
-                    response_format={"type": "json_object"},
-                    max_tokens=150,
-                )
+                for _attempt in range(2):
+                    try:
+                        verdict_resp = await call_llm_with_model(
+                            MODEL_FLASH,
+                            synthesis_prompt,
+                            response_format={"type": "json_object"},
+                            max_tokens=150,
+                        )
+                        break
+                    except LLMError as _e:
+                        if _attempt == 0 and "null content" in str(_e):
+                            print(f"[Debate] {symbol} None response from LLM — retrying once")
+                        else:
+                            raise
 
                 try:
                     parsed = _json.loads(verdict_resp.text)
@@ -1015,7 +1043,8 @@ class TradingBot:
             print(f"[Debate] {symbol} LLMError — proceeding without debate: {e}")
             return True, "debate unavailable (LLM error)"
         except Exception as e:
-            print(f"[Debate] {symbol} failed: {e}")
+            import traceback as _tb
+            print(f"[Debate] {symbol} failed: {e}\n{_tb.format_exc()}")
             return True, "debate unavailable"
 
     # ── Pre-trade hook: fundamentals → debate (Tasks 2 & 3) ──────────────────
@@ -1198,6 +1227,15 @@ class TradingBot:
 
                     # Pre-execute hook: fundamentals check + bull/bear debate (swing only)
                     if pre_execute_hook:
+                        # Set 4-hour cooldown the moment a signal enters the protection stack,
+                        # so repeated debate calls never fire for the same signal in one session.
+                        _now_utc = datetime.now(pytz.utc)
+                        _next_eligible = _now_utc + timedelta(hours=4)
+                        self._swing_signal_times[symbol] = _now_utc
+                        print(
+                            f"[Swing] {symbol} cooldown set — "
+                            f"next eligible {_next_eligible.strftime('%Y-%m-%d %H:%M UTC')}"
+                        )
                         hook_proceed, hook_reason = await pre_execute_hook(symbol, signal, strategy)
                         if not hook_proceed:
                             asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, hook_reason))
@@ -2208,6 +2246,16 @@ class TradingBot:
             ))
             return
 
+        # Set 4-hour cooldown before entering debate — prevents repeated debate calls
+        # for the same signal if the short is blocked by debate or subsequent gates.
+        _now_utc = datetime.now(pytz.utc)
+        _next_eligible = _now_utc + timedelta(hours=4)
+        self._swing_signal_times[symbol] = _now_utc
+        print(
+            f"[Swing] {symbol} cooldown set — "
+            f"next eligible {_next_eligible.strftime('%Y-%m-%d %H:%M UTC')}"
+        )
+
         # Bull/bear debate gate
         debate_proceed, debate_summary = await self._debate_trade(symbol, signal, strategy)
         if not debate_proceed:
@@ -2458,10 +2506,6 @@ class TradingBot:
                 print(f"Evaluating {symbol} for swing signals [{strategy.name}]")
 
                 try:
-                    # Snapshot active_signals keys for this symbol before processing;
-                    # a new key after the call means a signal fired → update 4h cooldown
-                    _keys_before = {k for k in self.active_signals if k.startswith(f"{symbol}-")}
-
                     await self._process_symbol(
                         symbol,
                         [strategy],
@@ -2470,10 +2514,6 @@ class TradingBot:
                         stop_loss_percent=Config.STOP_LOSS_PERCENT,
                         pre_execute_hook=self._swing_pre_trade_hook,
                     )
-
-                    _keys_after = {k for k in self.active_signals if k.startswith(f"{symbol}-")}
-                    if _keys_after - _keys_before:
-                        self._swing_signal_times[symbol] = datetime.now(pytz.utc)
 
                 except Exception as _sym_err:
                     import traceback as _tb

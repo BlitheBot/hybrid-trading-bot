@@ -14,7 +14,7 @@
 
 ## Architecture Overview
 
-A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. The swing screener runs every 5 minutes during market hours (9:30 AM–4:00 PM EDT, Mon–Fri) across up to 250 symbols pulled by volume from the `active_tickers` PostgreSQL table (6 priority symbols — JPM, SPY, COST, BRK.B, PG, V — always included). Per-symbol 4-hour cooldown prevents re-entering the same daily candle. Short selling is enabled (`SHORT_SELLING_ENABLED=True`): a SELL signal with no open long executes a short sale with ATR-based stop/target, full debate + fundamentals gate, and 1:2 minimum R/R. The Discovery Engine uses the same 250-symbol universe from `active_tickers`. All positions use EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly sizing, and a 15-gate risk chain. Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy.
+A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. The swing screener runs every 5 minutes during market hours (9:30 AM–4:00 PM EDT, Mon–Fri) across up to 250 symbols pulled by volume from the `active_tickers` PostgreSQL table (6 priority symbols — JPM, SPY, COST, BRK.B, PG, V — always included). Per-symbol 4-hour cooldown is set the moment a signal enters the protection stack (debate gate), not on trade execution — this prevents the same symbol from being debated repeatedly in one session. Short selling is enabled (`SHORT_SELLING_ENABLED=True`): a SELL signal with no open long executes a short sale with ATR-based stop/target, full debate + fundamentals gate, and 1:2 minimum R/R. SHORT debate gate: bull must raise **4+ concrete fundamental/macro reasons** to block the trade (LONG path remains at 2+ bear objections). The Discovery Engine uses the same 250-symbol universe from `active_tickers`. All positions use EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly sizing, and a 15-gate risk chain. Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy.
 
 ---
 
@@ -116,7 +116,7 @@ A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. T
 7. FINRA short interest veto
 8. Fundamentals gate (Finnhub)
 9. Earnings filter
-10. Bull/bear debate
+10. Bull/bear debate (SHORT: bull needs 4+ concrete reasons to block; LONG: bear needs 2+)
 11. Strategy circuit breaker
 12. VIX extreme gate (>40)
 13. VIX spike gate (>35)

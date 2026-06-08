@@ -105,7 +105,11 @@ async def call_llm_with_model(
                 resp.raise_for_status()
                 data = resp.json()
                 message = data["choices"][0]["message"]
-                content = message.get("content", "").strip()
+                content = message.get("content")
+                if content is None:
+                    print(f"[LLMClient] None response from LLM (attempt {attempt}) — retrying")
+                    raise ValueError("null content in LLM response")
+                content = content.strip()
 
                 # Parse url_citation annotations (present when web search plugin fires)
                 citations = []
@@ -150,7 +154,7 @@ async def call_llm(prompt: str, system: str = None, max_tokens: int = 1024) -> s
             if system:
                 kwargs["system"] = system
             message = await client.messages.create(**kwargs)
-            return message.content[0].text.strip()
+            return (message.content[0].text or "").strip()
         else:  # kimi / openai_compatible
             messages = []
             if system:
@@ -170,7 +174,7 @@ async def call_llm(prompt: str, system: str = None, max_tokens: int = 1024) -> s
                     },
                 )
                 resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"].strip()
+                return (resp.json()["choices"][0]["message"]["content"] or "").strip()
     except Exception as e:
         print(f"[LLMClient] call_llm failed: {e}")
         return ""
