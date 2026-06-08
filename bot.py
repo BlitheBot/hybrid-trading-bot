@@ -2596,7 +2596,9 @@ class TradingBot:
                         strength = sig["strength"]
                         action  = sig["action"]
 
-                        # Always alert Slack about the signal
+                        # Only alert for actionable directions — HOLD means no trade
+                        if action.upper() not in ("BUY", "SELL"):
+                            continue
                         asyncio.create_task(notifications.notify_news_signal(
                             ticker, sig["headline"], sig["sentiment"], strength, action
                         ))
