@@ -24,13 +24,13 @@ from sqlalchemy import create_engine
 
 from config import Config
 from .genetic_engine import GeneticEngine
+from .symbol_universe import get_discovery_candidates
 
 _DATA_DIR = Path(__file__).parent / "data"
+# discovery_engine_v2 also uses Path(__file__).parent / "data" — same directory, paths match.
 
 
 class DiscoveryScheduler:
-    SYMBOLS = Config.SWING_SYMBOLS  # ["JPM", "SPY", "COST", "BRK.B", "PG", "V"]
-
     def _slack(self, msg: str) -> None:
         webhook = Config.SLACK_DECISIONS_WEBHOOK
         if not webhook:
@@ -80,9 +80,19 @@ class DiscoveryScheduler:
             f"{now.strftime('%Y-%m-%d %H:%M %Z')}"
         )
 
+        symbols = get_discovery_candidates(db_engine, top_n=250)
+        if not symbols:
+            symbols = list(Config.SWING_SYMBOLS)
+            print(
+                f"[IndicatorDiscovery] symbol_universe empty — falling back to "
+                f"SWING_SYMBOLS ({len(symbols)} symbols)"
+            )
+        else:
+            print(f"[IndicatorDiscovery] {len(symbols)} symbols from symbol_universe")
+
         self._slack(
             f":dna: Indicator Discovery Engine starting overnight run — "
-            f"{len(self.SYMBOLS)} symbols | population=50 | 20 generations each."
+            f"{len(symbols)} symbols | population=50 | 20 generations each."
         )
 
         engine = GeneticEngine(
@@ -96,7 +106,7 @@ class DiscoveryScheduler:
         total_graduated = 0
         symbol_summaries: list[str] = []
 
-        for symbol in self.SYMBOLS:
+        for symbol in symbols:
             bars_df = self._load_bars(symbol)
             if bars_df.empty:
                 msg = f"{symbol}: no cached bars — skipping (run discovery_engine_v2 first)"
@@ -128,7 +138,7 @@ class DiscoveryScheduler:
 
         slack_body = "\n".join([
             f":white_check_mark: Indicator Discovery complete — "
-            f"{total_graduated} indicators graduated across {len(self.SYMBOLS)} symbols",
+            f"{total_graduated} indicators graduated across {len(symbols)} symbols",
             *symbol_summaries,
         ])
         print(f"\n[IndicatorDiscovery] Run complete. {total_graduated} indicators graduated.")
