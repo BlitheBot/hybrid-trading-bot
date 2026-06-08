@@ -2264,6 +2264,7 @@ class TradingBot:
                 symbol, strategy.name, f"SHORT debate SKIP — {debate_summary}"
             ))
             return
+        print(f"[Swing] {symbol}: SHORT debate passed — proceeding to sentiment/ATR/sizing")
 
         # Sentiment gate (bearish boosts short conviction, bullish reduces it)
         sentiment_mult = 1.0
@@ -2274,12 +2275,17 @@ class TradingBot:
                 _sscr = int(_sent.get("score", 0))
                 if _sdir == "bearish" and _sscr >= 7:
                     sentiment_mult = 1.2
-                    print(f"[Swing] {symbol}: bearish sentiment → short size +20%")
+                    print(f"[Swing] {symbol}: bearish sentiment (score={_sscr}) → short size +20% (mult=1.2)")
                 elif _sdir == "bullish" and _sscr >= 7:
                     sentiment_mult = 0.5
-                    print(f"[Swing] {symbol}: bullish sentiment → short size −50%")
+                    print(f"[Swing] {symbol}: bullish sentiment (score={_sscr}) → short size −50% (mult=0.5)")
+                else:
+                    print(f"[Swing] {symbol}: sentiment neutral (dir={_sdir} score={_sscr}) → no size adjustment")
+            else:
+                print(f"[Swing] {symbol}: no recent sentiment data — size mult=1.0")
         except Exception as _se:
             print(f"[Swing] {symbol}: sentiment check failed (non-fatal): {_se}\n{_tb.format_exc()}")
+        print(f"[Swing] {symbol}: sentiment_mult={sentiment_mult}")
 
         # ATR-based stop (above entry) and target (below entry)
         _atr: float | None = None
@@ -2287,37 +2293,68 @@ class TradingBot:
             _atr_s = _ta.atr(data["high"], data["low"], data["close"], length=14)
             if _atr_s is not None and not _atr_s.empty and not pd.isna(_atr_s.iloc[-1]):
                 _atr = float(_atr_s.iloc[-1])
+                print(f"[Swing] {symbol}: ATR(14)={_atr:.4f}")
+            else:
+                print(f"[Swing] {symbol}: ATR(14) unavailable — will use pct-based stop/target")
         except Exception as _ae:
             print(f"[Swing] {symbol}: ATR calculation failed (non-fatal): {_ae}\n{_tb.format_exc()}")
 
         if _atr and _atr > 0:
             short_stop   = round(entry_price + 2.0 * _atr, 2)
             short_target = round(entry_price - 3.0 * _atr, 2)
+            print(
+                f"[Swing] {symbol}: ATR stop/target — "
+                f"entry={entry_price:.2f} stop={short_stop:.2f} (+2×ATR) "
+                f"target={short_target:.2f} (−3×ATR)"
+            )
         else:
             short_stop   = round(entry_price * (1 + stop_loss_percent / 100), 2)
             short_target = round(entry_price * (1 - Config.TAKE_PROFIT_PERCENT / 100), 2)
+            print(
+                f"[Swing] {symbol}: pct stop/target (ATR unavailable) — "
+                f"entry={entry_price:.2f} stop={short_stop:.2f} (+{stop_loss_percent}%) "
+                f"target={short_target:.2f} (−{Config.TAKE_PROFIT_PERCENT}%)"
+            )
 
         # Minimum 1:2 R/R check
         short_risk   = short_stop - entry_price
         short_reward = entry_price - short_target
-        if short_risk <= 0 or (short_reward / short_risk) < Config.SWING_MIN_RR_RATIO:
-            rr = round(short_reward / max(short_risk, 1e-9), 2)
+        rr = round(short_reward / max(short_risk, 1e-9), 2)
+        print(
+            f"[Swing] {symbol}: R/R check — risk={short_risk:.4f} reward={short_reward:.4f} "
+            f"ratio={rr:.2f} (min={Config.SWING_MIN_RR_RATIO})"
+        )
+        if short_risk <= 0 or rr < Config.SWING_MIN_RR_RATIO:
             print(f"[Swing] {symbol}: SHORT skipped — R/R {rr:.2f} < {Config.SWING_MIN_RR_RATIO}")
             return
+        print(f"[Swing] {symbol}: R/R passed ({rr:.2f}) — proceeding to position sizing")
 
         # Position sizing
         try:
             account      = await asyncio.to_thread(self.trading_client.get_account)
             equity       = float(account.equity)
             risk_dollars = equity * (risk_percent * self.risk_multiplier * sentiment_mult / 100.0)
-            shares       = max(1, int(risk_dollars / short_risk))
+            shares_raw   = max(1, int(risk_dollars / short_risk))
             max_dollars  = float(account.buying_power) * (Config.MAX_BUYING_POWER_UTILIZATION_PERCENT / 100.0)
-            shares       = min(shares, max(1, int(max_dollars / entry_price)))
+            shares_bp    = max(1, int(max_dollars / entry_price))
+            shares       = min(shares_raw, shares_bp)
+            print(
+                f"[Swing] {symbol}: sizing — equity={equity:.0f} risk%={risk_percent:.3f} "
+                f"risk_mult={self.risk_multiplier:.2f} sent_mult={sentiment_mult:.2f} "
+                f"risk_$={risk_dollars:.2f} shares_risk={shares_raw} "
+                f"bp_cap={shares_bp} final_shares={shares}"
+            )
+            if shares < shares_raw:
+                print(f"[Swing] {symbol}: shares capped by buying power ({shares_raw}→{shares})")
         except Exception as _acct_e:
             print(f"[Swing] {symbol}: SHORT skipped — account fetch failed: {_acct_e}\n{_tb.format_exc()}")
             return
 
         # Submit short order
+        print(
+            f"[Swing] {symbol}: submitting SHORT order — "
+            f"qty={shares} entry={entry_price:.2f} stop={short_stop:.2f} target={short_target:.2f}"
+        )
         try:
             from alpaca.trading.requests import MarketOrderRequest
             from alpaca.trading.enums import OrderSide, TimeInForce
