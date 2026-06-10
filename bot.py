@@ -2367,15 +2367,15 @@ class TradingBot:
             print(f"[Swing] {symbol}: SHORT skipped — account fetch failed: {_acct_e}\n{_tb.format_exc()}")
             return
 
-        # Submit short order
+        # Step 1: plain market SELL — Alpaca does not support BRACKET on market orders
         print(
-            f"[Swing] {symbol}: submitting SHORT order — "
-            f"qty={shares} entry={entry_price:.2f} stop={short_stop:.2f} target={short_target:.2f}"
+            f"[Swing] {symbol}: submitting SHORT market order — "
+            f"qty={shares} entry={entry_price:.2f}"
         )
         try:
-            from alpaca.trading.requests import MarketOrderRequest
-            from alpaca.trading.enums import OrderSide, TimeInForce
-            await asyncio.to_thread(
+            from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, StopLossRequest, TakeProfitRequest
+            from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
+            _entry_order = await asyncio.to_thread(
                 self.trading_client.submit_order,
                 MarketOrderRequest(
                     symbol=symbol,
@@ -2384,12 +2384,57 @@ class TradingBot:
                     time_in_force=TimeInForce.DAY,
                 ),
             )
+            print(f"[Swing] {symbol}: SHORT market order submitted — id={str(_entry_order.id)[:12]} status={_entry_order.status}")
+
+            # Step 2: poll for fill (max 30 s)
+            _fill_price = None
+            for _attempt in range(30):
+                await asyncio.sleep(1)
+                _checked = await asyncio.to_thread(self.trading_client.get_order_by_id, _entry_order.id)
+                if getattr(_checked, 'status', None) and _checked.status.value == 'filled':
+                    _fill_price = float(_checked.filled_avg_price or entry_price)
+                    break
+            if _fill_price is None:
+                print(f"[Swing] {symbol}: fill not confirmed in 30s — using calculated entry price for OCO")
+                _fill_price = entry_price
+
+            # Recompute stop/target from actual fill price
+            if _atr and _atr > 0:
+                _actual_stop   = round(_fill_price + 2.0 * _atr, 2)
+                _actual_target = round(_fill_price - 5.0 * _atr, 2)
+            else:
+                _actual_stop   = short_stop
+                _actual_target = short_target
+
             print(
-                f"[Swing] SHORT entered for {symbol} at {entry_price:.2f} | "
-                f"stop={short_stop:.2f} target={short_target:.2f} | size={shares}"
+                f"[Swing] SHORT entered for {symbol} at {_fill_price:.2f} | "
+                f"stop={_actual_stop:.2f} target={_actual_target:.2f} | size={shares}"
             )
+
+            # Step 3: OCO buy-to-cover — BUY limit at target + BUY stop at stop
+            try:
+                _oco = await asyncio.to_thread(
+                    self.trading_client.submit_order,
+                    LimitOrderRequest(
+                        symbol=symbol,
+                        qty=shares,
+                        side=OrderSide.BUY,
+                        time_in_force=TimeInForce.GTC,
+                        order_class=OrderClass.OCO,
+                        limit_price=_actual_target,
+                        take_profit=TakeProfitRequest(limit_price=_actual_target),
+                        stop_loss=StopLossRequest(stop_price=_actual_stop),
+                    ),
+                )
+                print(
+                    f"[Swing] {symbol}: OCO protection placed — "
+                    f"id={str(_oco.id)[:12]} target={_actual_target} stop={_actual_stop}"
+                )
+            except Exception as _oco_e:
+                print(f"[Swing] {symbol}: OCO placement FAILED — {_oco_e}\n{_tb.format_exc()}")
+
             asyncio.create_task(notifications.notify_trade_executed(
-                symbol, "SHORT", entry_price, short_stop, short_target, shares,
+                symbol, "SHORT", _fill_price, _actual_stop, _actual_target, shares,
                 "debate: passed | fundamentals: passed",
             ))
             _health_state["signals_fired_total"] += 1

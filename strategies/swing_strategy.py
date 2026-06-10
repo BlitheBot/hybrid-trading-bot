@@ -3,7 +3,7 @@ import json
 import traceback
 import pandas as pd
 import numpy as np
-from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
+from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, TakeProfitRequest, StopLossRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from sqlalchemy import text as sql_text
 from .base_strategy import BaseStrategy
@@ -518,27 +518,52 @@ class SwingStrategy(BaseStrategy):
             )
             return
 
-        # 3. Place Order
+        # 3. Step 1: plain market entry — Alpaca does not support BRACKET on market orders
+        import time as _time
         order_data = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
             side=side,
-            time_in_force=TimeInForce.GTC,
-            order_class=OrderClass.BRACKET,
-            take_profit=TakeProfitRequest(limit_price=round(signal["target_price"], 2)),
-            stop_loss=StopLossRequest(stop_price=round(signal["stop_price"], 2)),
+            time_in_force=TimeInForce.DAY,
         )
-        
         _base = getattr(getattr(trading_client, '_base_url', None), 'host', None) \
                 or getattr(trading_client, '_base_url', 'unknown')
         print(f"[ORDER] Submitting Swing order → {symbol} {qty} {side.value} | endpoint={_base}")
         try:
             order = trading_client.submit_order(order_data=order_data)
-            sl_price = signal["stop_price"]
-            tp_price = signal["target_price"]
             order_id = str(order.id)[:8] if order and order.id else "unknown"
             print(f"[ORDER] Alpaca response: id={order.id} status={order.status.value if order else '?'} symbol={getattr(order,'symbol','?')} qty={getattr(order,'qty','?')}")
-            print(f"✅ Swing Order Placed: {side} {symbol} (Qty: {qty}) @ {entry_price}. SL: {sl_price}, TP: {tp_price} | order_id={order_id} status={order.status.value if order else '?'}")
+
+            # Step 2: poll for fill (max 30 s) — runs in asyncio.to_thread, blocking is safe
+            fill_price = None
+            for _i in range(30):
+                _time.sleep(1)
+                _checked = trading_client.get_order_by_id(order.id)
+                if getattr(_checked, 'status', None) and _checked.status.value == 'filled':
+                    fill_price = float(_checked.filled_avg_price or entry_price)
+                    break
+            if fill_price is None:
+                print(f"[ORDER] {symbol}: fill not confirmed in 30s — using signal entry price for OCO")
+                fill_price = float(entry_price)
+
+            # Step 3: OCO protection — SELL limit at target + SELL stop at stop
+            actual_stop   = round(fill_price * (1 - stop_loss_percent / 100), 2)
+            actual_target = round(fill_price * (1 + take_profit_percent / 100), 2)
+            print(f"✅ Swing LONG entered: {symbol} qty={qty} fill={fill_price:.2f} stop={actual_stop} target={actual_target}")
+            try:
+                oco = trading_client.submit_order(LimitOrderRequest(
+                    symbol=symbol,
+                    qty=qty,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.GTC,
+                    order_class=OrderClass.OCO,
+                    limit_price=actual_target,
+                    take_profit=TakeProfitRequest(limit_price=actual_target),
+                    stop_loss=StopLossRequest(stop_price=actual_stop),
+                ))
+                print(f"[ORDER] {symbol}: OCO protection placed — id={str(oco.id)[:12]} target={actual_target} stop={actual_stop}")
+            except Exception as _oco_e:
+                print(f"[ORDER] {symbol}: OCO FAILED — {_oco_e}\n{traceback.format_exc()}")
             return qty
         except Exception:
             print(f"❌ Swing Order Failed for {symbol}:\n{traceback.format_exc()}")
