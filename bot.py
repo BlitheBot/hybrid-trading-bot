@@ -2318,11 +2318,11 @@ class TradingBot:
 
         if _atr and _atr > 0:
             short_stop   = round(entry_price + 2.0 * _atr, 2)
-            short_target = round(entry_price - 3.0 * _atr, 2)
+            short_target = round(entry_price - 5.0 * _atr, 2)
             print(
                 f"[Swing] {symbol}: ATR stop/target — "
                 f"entry={entry_price:.2f} stop={short_stop:.2f} (+2×ATR) "
-                f"target={short_target:.2f} (−3×ATR)"
+                f"target={short_target:.2f} (−5×ATR)"
             )
         else:
             short_stop   = round(entry_price * (1 + stop_loss_percent / 100), 2)
