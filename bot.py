@@ -1436,17 +1436,34 @@ class TradingBot:
                                 "— SHORT_SELLING_ENABLED=False"
                             )
                         else:
+                            _shortable = False
                             try:
-                                await self._execute_short(
-                                    symbol, signal, strategy,
-                                    risk_percent, stop_loss_percent, data,
+                                _asset = await asyncio.to_thread(
+                                    self.trading_client.get_asset, symbol
                                 )
-                            except Exception as _se:
-                                import traceback as _tb
+                                _shortable = (
+                                    bool(getattr(_asset, "shortable", False))
+                                    and bool(getattr(_asset, "easy_to_borrow", False))
+                                )
+                            except Exception as _ae:
+                                print(f"[Swing] {symbol}: asset shortability check failed — {_ae}")
+                            if not _shortable:
                                 print(
-                                    f"[Swing] {symbol}: _execute_short raised "
-                                    f"— {_se}\n{_tb.format_exc()}"
+                                    f"[Swing] SHORT {symbol} skipped "
+                                    "— not shortable/hard to borrow"
                                 )
+                            else:
+                                try:
+                                    await self._execute_short(
+                                        symbol, signal, strategy,
+                                        risk_percent, stop_loss_percent, data,
+                                    )
+                                except Exception as _se:
+                                    import traceback as _tb
+                                    print(
+                                        f"[Swing] {symbol}: _execute_short raised "
+                                        f"— {_se}\n{_tb.format_exc()}"
+                                    )
 
                 entry_time = datetime.now(pytz.utc)
                 if not _skip_execute_trade:
@@ -1493,8 +1510,8 @@ class TradingBot:
                                 _gates,
                             ))
 
-                        # Log entry to signal_outcomes after successful execute_trade
-                        if signal['signal'] == 'buy' and signal_type:
+                        # Log entry to signal_outcomes only after a confirmed fill
+                        if executed_qty and signal['signal'] == 'buy' and signal_type:
                             regime = await self._get_market_regime()
                             row_id = await asyncio.to_thread(
                                 self._log_trade_entry,

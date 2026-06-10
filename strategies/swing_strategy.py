@@ -4,7 +4,7 @@ import traceback
 import pandas as pd
 import numpy as np
 from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from sqlalchemy import text as sql_text
 from .base_strategy import BaseStrategy
 from .kalman_signal import KalmanTrendSignal
@@ -511,7 +511,11 @@ class SwingStrategy(BaseStrategy):
             )
 
         if qty <= 0:
-            print(f"Calculated quantity for {symbol} is zero or negative. Not placing order.")
+            print(
+                f"[Swing] {symbol}: qty=0 — skipped "
+                f"(price={entry_price:.2f} equity={float(account.equity):.0f} "
+                f"risk_pct={equity_risk_percent:.3f}% bp={float(account.buying_power):.0f})"
+            )
             return
 
         # 3. Place Order
@@ -520,8 +524,9 @@ class SwingStrategy(BaseStrategy):
             qty=qty,
             side=side,
             time_in_force=TimeInForce.GTC,
-            take_profit=TakeProfitRequest(limit_price=signal["target_price"]),
-            stop_loss=StopLossRequest(stop_price=signal["stop_price"])
+            order_class=OrderClass.BRACKET,
+            take_profit=TakeProfitRequest(limit_price=round(signal["target_price"], 2)),
+            stop_loss=StopLossRequest(stop_price=round(signal["stop_price"], 2)),
         )
         
         _base = getattr(getattr(trading_client, '_base_url', None), 'host', None) \
