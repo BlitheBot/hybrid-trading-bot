@@ -1144,6 +1144,29 @@ class TradingBot:
                     asyncio.create_task(notifications.notify_trade_skipped(symbol, strategy.name, "Signal was hold (insufficient RR ratio or bear case stronger)"))
                     continue
 
+                # Portfolio heat cap: applies to ALL new positions (buys and shorts)
+                _all_pos = []  # populated below; reused by correlation guard
+                _equity_ref = _health_state.get("equity_usd") or self.start_of_day_equity
+                if _equity_ref > 0:
+                    try:
+                        _all_pos = await asyncio.to_thread(self.trading_client.get_all_positions)
+                        _heat = sum(
+                            abs(float(p.market_value)) * (stop_loss_percent / 100.0)
+                            for p in _all_pos
+                        ) / _equity_ref
+                        if _heat >= Config.PORTFOLIO_HEAT_CAP:
+                            _heat_msg = (
+                                f"Portfolio heat {_heat:.1%} ≥ cap "
+                                f"{Config.PORTFOLIO_HEAT_CAP:.0%} — trade skipped"
+                            )
+                            print(f"[HeatCap] {symbol}: {_heat_msg}")
+                            asyncio.create_task(notifications.notify_trade_skipped(
+                                symbol, strategy.name, _heat_msg, critical=True
+                            ))
+                            continue
+                    except Exception as _heat_err:
+                        print(f"[HeatCap] Position check failed for {symbol}: {_heat_err}")
+
                 if signal['signal'] == "buy":
                     try:
                         await asyncio.to_thread(self.trading_client.get_open_position, symbol)
@@ -1154,29 +1177,6 @@ class TradingBot:
                         if "position" not in err and "not found" not in err and "404" not in err:
                             print(f"[ProcessSymbol] Unexpected error checking position for {symbol}: {e}")
                             continue  # Don't trade on unexpected API errors
-
-                    # Portfolio heat cap: block new trades if aggregate open-position risk ≥ cap
-                    _all_pos = []  # populated below; reused by correlation guard
-                    _equity_ref = _health_state.get("equity_usd") or self.start_of_day_equity
-                    if _equity_ref > 0:
-                        try:
-                            _all_pos = await asyncio.to_thread(self.trading_client.get_all_positions)
-                            _heat = sum(
-                                abs(float(p.market_value)) * (stop_loss_percent / 100.0)
-                                for p in _all_pos
-                            ) / _equity_ref
-                            if _heat >= Config.PORTFOLIO_HEAT_CAP:
-                                _heat_msg = (
-                                    f"Portfolio heat {_heat:.1%} ≥ cap "
-                                    f"{Config.PORTFOLIO_HEAT_CAP:.0%} — trade skipped"
-                                )
-                                print(f"[HeatCap] {symbol}: {_heat_msg}")
-                                asyncio.create_task(notifications.notify_trade_skipped(
-                                    symbol, strategy.name, _heat_msg, critical=True
-                                ))
-                                continue
-                        except Exception as _heat_err:
-                            print(f"[HeatCap] Position check failed for {symbol}: {_heat_err}")
 
                     # Correlation guard: block if new position would concentrate the portfolio
                     _open_symbols = [p.symbol for p in _all_pos]
