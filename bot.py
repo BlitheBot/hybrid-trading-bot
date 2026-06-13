@@ -64,6 +64,9 @@ from strategies.short_interest_signal import ShortInterestSignal
 from strategies.grok_strategy import GrokStrategy
 from strategies.webull_strategy import WebullStrategy
 from discovery.regime_adapter import apply_to_swing_strategy
+from discovery.regime_classifier import (
+    classify_regime, BULL_TREND, BEAR_TREND, HIGH_VOL, CHOPPY,
+)
 from discovery.grok_sentiment import refresh_grok_sentiment, get_grok_sentiment
 from utils import get_historical_bars, get_finnhub_price
 
@@ -397,6 +400,8 @@ class TradingBot:
         self._trade_ids_lock = asyncio.Lock() # guards all _open_trade_ids mutations
         self._db_engine = self._init_db_engine()
         self._regime_cache = None             # (regime_str, timestamp)
+        self._regime_class_cache = None       # 4-regime taxonomy: (regime_str, timestamp)
+        self._current_regime_class = CHOPPY   # latest 4-regime label for entry logging
         self.daily_pnl = 0.0
         self.start_of_day_equity = 0.0
         self.last_pnl_reset_date = datetime.now(pytz.timezone('America/New_York')).date()
@@ -594,6 +599,10 @@ class TradingBot:
                         UNIQUE (symbol, strategy_type, parameters)
                     )
                 """))
+                # Regime-aware tracking column (4-regime taxonomy at signal time).
+                conn.execute(sql_text(
+                    "ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS regime_class VARCHAR(20)"
+                ))
                 count = conn.execute(sql_text("SELECT COUNT(*) FROM signal_outcomes")).scalar()
             _health_state["db_connected"] = True
             print(f"[DB] signal_outcomes table verified — {count} existing rows")
@@ -603,7 +612,8 @@ class TradingBot:
 
     def _log_trade_entry(self, symbol: str, signal_type: str, entry_price: float,
                           ema_short: int, ema_long: int, rsi_at_entry: float,
-                          macd_at_entry: float, regime: str, entry_time) -> int | None:
+                          macd_at_entry: float, regime: str, entry_time,
+                          regime_class: str | None = None) -> int | None:
         if not self._db_engine:
             return None
         try:
@@ -611,15 +621,16 @@ class TradingBot:
                 result = conn.execute(sql_text("""
                     INSERT INTO signal_outcomes
                         (symbol, signal_type, entry_time, entry_price, ema_short, ema_long,
-                         rsi_at_entry, macd_at_entry, market_regime)
+                         rsi_at_entry, macd_at_entry, market_regime, regime_class)
                     VALUES (:symbol, :signal_type, :entry_time, :entry_price, :ema_short, :ema_long,
-                            :rsi_at_entry, :macd_at_entry, :market_regime)
+                            :rsi_at_entry, :macd_at_entry, :market_regime, :regime_class)
                     RETURNING id
                 """), {
                     "symbol": symbol, "signal_type": signal_type, "entry_time": entry_time,
                     "entry_price": float(entry_price), "ema_short": int(ema_short),
                     "ema_long": int(ema_long), "rsi_at_entry": float(rsi_at_entry),
                     "macd_at_entry": float(macd_at_entry), "market_regime": regime,
+                    "regime_class": regime_class,
                 })
                 row_id = result.fetchone()[0]
             print(f"[DB] Logged {signal_type} entry for {symbol} (row={row_id})")
@@ -769,6 +780,82 @@ class TradingBot:
 
         self._adx_regime_cache = (regime, time.time())
         return regime
+
+    # ── 4-regime classifier + live regime gating ──────────────────────────────
+
+    async def _get_current_regime_class(self, spy_bars=None) -> str:
+        """
+        Current market regime in the 4-regime taxonomy (BULL_TREND / BEAR_TREND /
+        HIGH_VOL / CHOPPY). Cached for Config.REGIME_CACHE_SECONDS (4h). Uses the
+        live FRED-sourced VIX from MACRO_SNAPSHOT; falls back to SPY-only when VIX
+        is unavailable.
+        """
+        if self._regime_class_cache is not None:
+            regime, ts = self._regime_class_cache
+            if time.time() - ts < Config.REGIME_CACHE_SECONDS:
+                self._current_regime_class = regime
+                return regime
+
+        regime = CHOPPY
+        ema50 = ema200 = float("nan")
+        vix = MACRO_SNAPSHOT.get("vix")
+        try:
+            bars = spy_bars
+            if bars is None:
+                bars = await asyncio.to_thread(
+                    get_historical_bars, "SPY", TimeFrame.Day, 260, self.stock_data_client, False
+                )
+            if bars is not None and len(bars) >= 200:
+                tagged = classify_regime(bars, vix)
+                regime = str(tagged["regime"].iloc[-1])
+                ema50 = float(bars["close"].ewm(span=50, adjust=False).mean().iloc[-1])
+                ema200 = float(bars["close"].ewm(span=200, adjust=False).mean().iloc[-1])
+        except Exception as e:
+            print(f"[Regime] _get_current_regime_class failed — defaulting to CHOPPY: {e}")
+
+        vix_disp = vix if vix is not None else float("nan")
+        print(
+            f"[Regime] Current market regime: {regime} | "
+            f"SPY EMA50={ema50:.2f} EMA200={ema200:.2f} VIX={vix_disp:.1f}"
+        )
+        self._regime_class_cache = (regime, time.time())
+        self._current_regime_class = regime
+        return regime
+
+    def _regime_gate_ok(self, symbol: str, current_regime: str) -> tuple[bool, list[str], bool]:
+        """
+        Look up the symbol's regime-validated flags in validated_strategies.
+        Returns (proceed, valid_regimes, has_data). Fail-open: if there is no DB,
+        no validation row, or any error, returns proceed=True with has_data=False.
+        Sync — call via asyncio.to_thread.
+        """
+        if not self._db_engine:
+            return True, [], False
+        _col = {
+            BULL_TREND: "valid_bull_trend",
+            BEAR_TREND: "valid_bear_trend",
+            HIGH_VOL:   "valid_high_vol",
+            CHOPPY:     "valid_choppy",
+        }
+        try:
+            with self._db_engine.connect() as conn:
+                row = conn.execute(sql_text("""
+                    SELECT valid_bull_trend, valid_bear_trend, valid_high_vol, valid_choppy
+                    FROM validated_strategies
+                    WHERE symbol = :sym
+                    ORDER BY validated_at DESC NULLS LAST
+                    LIMIT 1
+                """), {"sym": symbol}).mappings().fetchone()
+            if row is None:
+                return True, [], False  # no regime data yet → fail-open
+            valid_regimes = [
+                reg for reg, col in _col.items() if bool(row.get(col))
+            ]
+            proceed = bool(row.get(_col.get(current_regime, "valid_choppy")))
+            return proceed, valid_regimes, True
+        except Exception as e:
+            print(f"[Regime] {symbol}: validated_strategies lookup failed — fail-open: {e}")
+            return True, [], False
 
     # ── Fundamentals check (Task 3) ───────────────────────────────────────────
 
@@ -1542,7 +1629,7 @@ class TradingBot:
                                 symbol, signal_type, float(signal.get('entry_price', 0)),
                                 getattr(strategy, 'ema_short', 50), getattr(strategy, 'ema_long', 200),
                                 float(signal.get('rsi_at_entry', 0)), float(signal.get('macd_at_entry', 0)),
-                                regime, entry_time,
+                                regime, entry_time, self._current_regime_class,
                             )
                             if row_id:
                                 async with self._trade_ids_lock:
@@ -2226,7 +2313,38 @@ class TradingBot:
                 if overall_avg_loss > 0 else None
             )
 
+            # Regime performance breakdown — closes the loop on backtested vs live
+            # performance per market regime, to detect regime-specific decay.
+            regime_breakdown = []
+            try:
+                with self._db_engine.connect() as conn:
+                    regime_rows = conn.execute(sql_text("""
+                        SELECT regime_class,
+                               COUNT(*) AS trades,
+                               ROUND(100.0 * COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::numeric
+                                   / NULLIF(COUNT(*), 0), 1) AS win_rate,
+                               ROUND(AVG(pnl_pct)::numeric, 2) AS avg_pnl
+                        FROM signal_outcomes
+                        WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                          AND regime_class IS NOT NULL
+                          AND entry_time >= :week_ago
+                        GROUP BY regime_class
+                        ORDER BY trades DESC
+                    """), {"week_ago": week_ago}).mappings().fetchall()
+                regime_breakdown = [
+                    {
+                        "regime":   r["regime_class"],
+                        "trades":   int(r["trades"]),
+                        "win_rate": float(r["win_rate"] or 0),
+                        "avg_pnl":  float(r["avg_pnl"] or 0),
+                    }
+                    for r in regime_rows
+                ]
+            except Exception as _re:
+                print(f"[PerfBrain] Regime breakdown query failed: {_re}")
+
             return {
+                "regime_breakdown":  regime_breakdown,
                 "total_trades":      total_trades,
                 "best_signal_type":  best_type,
                 "best_ev":           round(best_ev, 3)  if best_type  else None,
@@ -2560,6 +2678,9 @@ class TradingBot:
 
             swing_regime = await self._get_market_regime()
 
+            # 4-regime classification for live regime gating (cached 4h).
+            current_regime_class = await self._get_current_regime_class(spy_bars)
+
             adx_regime = self._get_market_regime_adx(spy_bars)
             preferred_strategy_type = {
                 "trending": "ema_trend",
@@ -2761,6 +2882,31 @@ class TradingBot:
                     risk_to_use *= Config.BEAR_MARKET_SIZE_REDUCTION
                     strategy.bear_market_note = "🐻 Bear market mode — position size reduced 50%"
                     print(f"[Swing] {symbol}: bear market mode — risk_to_use={risk_to_use:.3f}%")
+
+                # Live regime gate — only trade a symbol when its validated strategy
+                # covers the current regime. Fail-open when no regime data exists.
+                if Config.REGIME_GATING_ENABLED:
+                    gate_ok, valid_regimes, has_data = await asyncio.to_thread(
+                        self._regime_gate_ok, symbol, current_regime_class
+                    )
+                    if has_data:
+                        print(
+                            f"[Regime] {symbol} strategy validated for {valid_regimes} — "
+                            f"current regime {current_regime_class} — "
+                            f"{'PROCEED' if gate_ok else 'SKIP'}"
+                        )
+                        if not gate_ok:
+                            asyncio.create_task(notifications.notify_trade_skipped(
+                                symbol, strategy.name,
+                                f"Regime gate: validated for {valid_regimes}, "
+                                f"current {current_regime_class}"
+                            ))
+                            continue
+                    else:
+                        print(
+                            f"[Regime] {symbol} no regime validation data — "
+                            f"current regime {current_regime_class} — PROCEED (fail-open)"
+                        )
 
                 risk_to_use *= tod_mult
                 print(f"Evaluating {symbol} for swing signals [{strategy.name}]")

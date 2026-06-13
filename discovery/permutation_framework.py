@@ -109,6 +109,7 @@ def calculate_objective_score(
     position_vector: np.ndarray,
     returns: np.ndarray,
     method: str = "sharpe",
+    mask: np.ndarray | None = None,
 ) -> float:
     """
     The single scoring function used everywhere in the framework.
@@ -116,6 +117,10 @@ def calculate_objective_score(
     Applies the +1-bar forward shift (strategy_returns = S_t * R_{t+1}) so the
     position taken on bar t is rewarded with the return realized on bar t+1, then
     scores the resulting return vector directly (never a trade list).
+
+    ``mask`` (optional, aligned to ``position_vector``) restricts scoring to bars
+    where the mask is True — used for regime-specific scoring. The position bar t
+    determines inclusion (a position held during regime R is scored under R).
     """
     pos = np.asarray(position_vector, dtype=float)
     ret = np.asarray(returns, dtype=float)
@@ -126,6 +131,9 @@ def calculate_objective_score(
     ret = ret[:n]
     # S_t * R_{t+1}: drop the final position (no t+1 return for it).
     strategy_returns = pos[:-1] * ret[1:]
+    if mask is not None:
+        m = np.asarray(mask, dtype=bool)[:n][:-1]
+        strategy_returns = strategy_returns[m]
     return _score_strategy_returns(strategy_returns, method)
 
 
@@ -354,8 +362,12 @@ def get_permutation(data, start_index: int = 0, seed: int | None = None):
 # Optimization over the parameter grid
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _optimize_score(strategy, grid: list[dict], df: pd.DataFrame, method: str) -> tuple[float, dict]:
-    """Best objective score (and params) across the grid for one path."""
+def _optimize_score(strategy, grid: list[dict], df: pd.DataFrame, method: str,
+                    mask: np.ndarray | None = None) -> tuple[float, dict]:
+    """Best objective score (and params) across the grid for one path.
+
+    ``mask`` (aligned to ``df``) restricts scoring to a regime's bars.
+    """
     returns = calculate_log_returns(df["close"].to_numpy())
     best_score = -np.inf
     best_params: dict = {}
@@ -365,7 +377,7 @@ def _optimize_score(strategy, grid: list[dict], df: pd.DataFrame, method: str) -
         except Exception:
             print(f"[Permutation] position_vector failed for {params}:\n{traceback.format_exc()}")
             continue
-        score = calculate_objective_score(pos, returns, method)
+        score = calculate_objective_score(pos, returns, method, mask=mask)
         if score > best_score:
             best_score = score
             best_params = params
@@ -381,19 +393,26 @@ def _walk_forward_score(
     train_window: int,
     test_window: int,
     method: str,
+    mask: np.ndarray | None = None,
 ) -> float:
     """
     Rolling walk-forward: optimize on each train window, apply best params to the
     following test window, accumulate test-period strategy returns, then score the
     concatenated out-of-sample return vector once.
+
+    ``mask`` (aligned to ``df``) restricts the out-of-sample scoring to a regime's
+    bars. Training-window optimization is restricted to the same regime so the
+    selected params are tuned for that regime.
     """
     n = len(df)
     start = 0
     oos_returns: list[np.ndarray] = []
+    mask_arr = None if mask is None else np.asarray(mask, dtype=bool)
 
     while start + train_window + test_window <= n:
+        train_mask = None if mask_arr is None else mask_arr[start:start + train_window]
         train = df.iloc[start:start + train_window]
-        _, best_params = _optimize_score(strategy, grid, train, method)
+        _, best_params = _optimize_score(strategy, grid, train, method, mask=train_mask)
         if not best_params:
             start += test_window
             continue
@@ -406,10 +425,14 @@ def _walk_forward_score(
             continue
         test_ret = calculate_log_returns(test["close"].to_numpy())
         if pos.size >= 2:
-            oos_returns.append(pos[:-1] * test_ret[1:])
+            strat_ret = pos[:-1] * test_ret[1:]
+            if mask_arr is not None:
+                tm = mask_arr[start + train_window:start + train_window + test_window][:pos.size][:-1]
+                strat_ret = strat_ret[tm]
+            oos_returns.append(strat_ret)
         start += test_window
 
-    if not oos_returns:
+    if not oos_returns or sum(r.size for r in oos_returns) == 0:
         return 0.0
     return _score_strategy_returns(np.concatenate(oos_returns), method)
 
@@ -419,12 +442,12 @@ def _walk_forward_score(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _insample_worker(payload: tuple) -> float:
-    iteration, base_seed, df, grid, method, strat_name = payload
+    iteration, base_seed, df, grid, method, strat_name, mask = payload
     seed = base_seed + iteration
     try:
         strategy = _STRATEGY_REGISTRY[strat_name]()
         perm = get_permutation(df, start_index=0, seed=seed)
-        score, _ = _optimize_score(strategy, grid, perm, method)
+        score, _ = _optimize_score(strategy, grid, perm, method, mask=mask)
         return float(score)
     except Exception:
         print(f"[Permutation] in-sample worker {iteration} failed:\n{traceback.format_exc()}")
@@ -432,12 +455,12 @@ def _insample_worker(payload: tuple) -> float:
 
 
 def _walkforward_worker(payload: tuple) -> float:
-    iteration, base_seed, df, grid, method, strat_name, train_window, test_window = payload
+    iteration, base_seed, df, grid, method, strat_name, train_window, test_window, mask = payload
     seed = base_seed + iteration
     try:
         strategy = _STRATEGY_REGISTRY[strat_name]()
         perm = get_permutation(df, start_index=train_window, seed=seed)
-        score = _walk_forward_score(strategy, grid, perm, train_window, test_window, method)
+        score = _walk_forward_score(strategy, grid, perm, train_window, test_window, method, mask=mask)
         return float(score)
     except Exception:
         print(f"[Permutation] walk-forward worker {iteration} failed:\n{traceback.format_exc()}")
@@ -508,6 +531,8 @@ def run_insample_permutation_test(
     method: str | None = None,
     symbol: str = "",
     base_seed: int = 1_000,
+    mask: np.ndarray | None = None,
+    regime_label: str = "",
 ) -> tuple[bool, float, float]:
     """
     Returns (passed, p_value, real_score).
@@ -515,45 +540,50 @@ def run_insample_permutation_test(
     Optimizes the strategy on real in-sample data for PF_real, then re-optimizes
     on ``n_iterations`` fully-permuted paths. p = count(PF_perm >= PF_real) / N.
     Passes when p <= Config.PERMUTATION_P_THRESHOLD.
+
+    ``mask`` restricts scoring to a regime's bars; ``regime_label`` tags the logs
+    and report filename.
     """
     method = method or Config.PERMUTATION_OBJECTIVE
     strategy = strategy_class()
     grid = strategy.param_grid()
+    tag = f"{symbol}/{regime_label}" if regime_label else symbol
 
-    real_score, real_params = _optimize_score(strategy, grid, insample_data, method)
+    real_score, real_params = _optimize_score(strategy, grid, insample_data, method, mask=mask)
     print(
-        f"[Permutation] {symbol} in-sample baseline {method}={real_score:.4f} "
+        f"[Permutation] {tag} in-sample baseline {method}={real_score:.4f} "
         f"params={real_params}"
     )
 
     payloads = [
-        (i, base_seed, insample_data, grid, method, strategy.name)
+        (i, base_seed, insample_data, grid, method, strategy.name, mask)
         for i in range(n_iterations)
     ]
     raw = _run_parallel(_insample_worker, payloads)
     perm_scores = np.array([s for s in raw if np.isfinite(s)], dtype=float)
 
     if perm_scores.size == 0:
-        print(f"[Permutation] {symbol} in-sample: all permutations failed — treating as FAIL")
+        print(f"[Permutation] {tag} in-sample: all permutations failed — treating as FAIL")
         return False, 1.0, real_score
 
     p_value = float(np.mean(perm_scores >= real_score))
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    suffix = f"_{regime_label}" if regime_label else ""
     _save_histogram(
         perm_scores, real_score,
-        title=f"In-Sample MCPT — {symbol} ({method}) p={p_value:.4f}",
-        path=REPORTS_DIR / f"insample_{symbol}_{ts}.png",
+        title=f"In-Sample MCPT — {tag} ({method}) p={p_value:.4f}",
+        path=REPORTS_DIR / f"insample_{symbol}{suffix}_{ts}.png",
     )
 
     if p_value > Config.PERMUTATION_P_THRESHOLD:
         print(
             f"[Permutation] FAIL in-sample p={p_value:.4f} > {Config.PERMUTATION_P_THRESHOLD} "
-            f"— strategy discarded (data mining bias detected)"
+            f"({tag}) — strategy discarded (data mining bias detected)"
         )
         return False, p_value, real_score
 
-    print(f"[Permutation] PASS in-sample p={p_value:.4f} — advancing to walk-forward test")
+    print(f"[Permutation] PASS in-sample p={p_value:.4f} ({tag}) — advancing to walk-forward test")
     return True, p_value, real_score
 
 
@@ -571,6 +601,8 @@ def run_walkforward_permutation_test(
     method: str | None = None,
     symbol: str = "",
     base_seed: int = 5_000,
+    mask: np.ndarray | None = None,
+    regime_label: str = "",
 ) -> tuple[bool, float, float]:
     """
     Returns (passed, p_value, real_score).
@@ -578,42 +610,47 @@ def run_walkforward_permutation_test(
     Runs walk-forward on real data for WF_real, then on ``n_iterations`` partially
     permuted paths (training period intact via start_index=train_window).
     p = count(WF_perm >= WF_real) / N. Passes when p <= the configured threshold.
+
+    ``mask`` restricts out-of-sample scoring to a regime's bars; ``regime_label``
+    tags logs and the report filename.
     """
     method = method or Config.PERMUTATION_OBJECTIVE
     strategy = strategy_class()
     grid = strategy.param_grid()
+    tag = f"{symbol}/{regime_label}" if regime_label else symbol
 
-    real_score = _walk_forward_score(strategy, grid, full_data, train_window, test_window, method)
-    print(f"[Permutation] {symbol} walk-forward baseline {method}={real_score:.4f}")
+    real_score = _walk_forward_score(strategy, grid, full_data, train_window, test_window, method, mask=mask)
+    print(f"[Permutation] {tag} walk-forward baseline {method}={real_score:.4f}")
 
     payloads = [
-        (i, base_seed, full_data, grid, method, strategy.name, train_window, test_window)
+        (i, base_seed, full_data, grid, method, strategy.name, train_window, test_window, mask)
         for i in range(n_iterations)
     ]
     raw = _run_parallel(_walkforward_worker, payloads)
     perm_scores = np.array([s for s in raw if np.isfinite(s)], dtype=float)
 
     if perm_scores.size == 0:
-        print(f"[Permutation] {symbol} walk-forward: all permutations failed — treating as FAIL")
+        print(f"[Permutation] {tag} walk-forward: all permutations failed — treating as FAIL")
         return False, 1.0, real_score
 
     p_value = float(np.mean(perm_scores >= real_score))
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    suffix = f"_{regime_label}" if regime_label else ""
     _save_histogram(
         perm_scores, real_score,
-        title=f"Walk-Forward MCPT — {symbol} ({method}) p={p_value:.4f}",
-        path=REPORTS_DIR / f"walkforward_{symbol}_{ts}.png",
+        title=f"Walk-Forward MCPT — {tag} ({method}) p={p_value:.4f}",
+        path=REPORTS_DIR / f"walkforward_{symbol}{suffix}_{ts}.png",
     )
 
     if p_value > Config.PERMUTATION_P_THRESHOLD:
         print(
-            f"[Permutation] FAIL walk-forward p={p_value:.4f} "
+            f"[Permutation] FAIL walk-forward p={p_value:.4f} ({tag}) "
             f"— strategy rejected (out-of-sample selection luck)"
         )
         return False, p_value, real_score
 
-    print(f"[Permutation] PASS walk-forward p={p_value:.4f} — strategy has genuine edge")
+    print(f"[Permutation] PASS walk-forward p={p_value:.4f} ({tag}) — strategy has genuine edge")
     return True, p_value, real_score
 
 
@@ -645,6 +682,16 @@ def _ensure_validated_table(conn) -> None:
                 validated_at       TIMESTAMPTZ DEFAULT NOW()
             )
         """)
+        # Regime-aware columns — added for safe deployment to existing databases.
+        for col, ddl in (
+            ("valid_bull_trend", "BOOLEAN DEFAULT FALSE"),
+            ("valid_bear_trend", "BOOLEAN DEFAULT FALSE"),
+            ("valid_high_vol", "BOOLEAN DEFAULT FALSE"),
+            ("valid_choppy", "BOOLEAN DEFAULT FALSE"),
+            ("best_regime", "VARCHAR(20)"),
+            ("regime_sharpes", "JSONB"),
+        ):
+            cur.execute(f"ALTER TABLE validated_strategies ADD COLUMN IF NOT EXISTS {col} {ddl}")
     conn.commit()
 
 
@@ -761,4 +808,215 @@ def validate_strategy_edge(strategy_class, params: dict, symbol: str, full_data:
         f"[Permutation] {symbol} {strategy_name} — IS p={is_p:.4f} WF p={wf_p:.4f} "
         f"— PROMOTED to live trading"
     )
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Regime-aware validation (Steps 2–4)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _scale_regime_iters(base: int, n_regime_bars: int, total_bars: int) -> int:
+    """Scale MCPT iterations by a regime's share of bars, floored at 200 (or base
+    if base < 200, so reduced test configs stay fast)."""
+    floor = min(200, base)
+    if total_bars <= 0:
+        return base
+    scaled = int(base * (n_regime_bars / total_bars))
+    return max(floor, min(base, scaled))
+
+
+def _write_validated_regime(symbol, strategy_name, params, method,
+                            regime_scores: dict, valid_flags: dict, best_regime) -> None:
+    import json
+    conn = None
+    try:
+        conn = _get_db_conn()
+        if conn is None:
+            print("[Permutation] No DATABASE_URL — skipping validated_strategies write")
+            return
+        _ensure_validated_table(conn)
+        # Representative IS/WF p-values + scores from the best regime (or any validated).
+        ref = regime_scores.get(best_regime) if best_regime else None
+        if ref is None:
+            ref = next((v for r, v in regime_scores.items() if valid_flags.get(r)), {})
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO validated_strategies (
+                    symbol, strategy_name, parameters, objective_method,
+                    insample_p, walkforward_p, insample_score, walkforward_score,
+                    valid_bull_trend, valid_bear_trend, valid_high_vol, valid_choppy,
+                    best_regime, regime_sharpes
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """, (
+                symbol, strategy_name, json.dumps(params), method,
+                ref.get("insample_p"), ref.get("walkforward_p"),
+                ref.get("sharpe"), ref.get("walkforward_score"),
+                bool(valid_flags.get("BULL_TREND")), bool(valid_flags.get("BEAR_TREND")),
+                bool(valid_flags.get("HIGH_VOL")), bool(valid_flags.get("CHOPPY")),
+                best_regime, json.dumps(regime_scores),
+            ))
+        conn.commit()
+        print(f"[Permutation] Persisted regime-validated strategy {symbol}/{strategy_name} (best={best_regime})")
+    except Exception:
+        print(f"[Permutation] validated_strategies regime write failed:\n{traceback.format_exc()}")
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def validate_strategy_edge_regime_aware(
+    strategy_class,
+    params: dict,
+    symbol: str,
+    full_data: pd.DataFrame,
+    regime_series,
+) -> dict:
+    """
+    Regime-aware entry point. Validates the strategy *independently within each
+    market regime* and persists per-regime validity flags.
+
+    ``regime_series`` must be aligned to ``full_data`` (one regime label per bar).
+    A regime is validated only if it has >= Config.REGIME_MIN_BARS bars AND the
+    strategy passes both the in-sample and walk-forward MCPT restricted to that
+    regime's bars. A strategy can be valid for some regimes and not others.
+
+    Returns::
+
+        {
+          "promoted": bool,                 # valid for >= 1 regime
+          "regime_scores": {regime: {sharpe, profit_factor, n_bars,
+                                     insample_p, walkforward_p, p_value}},
+          "valid_regimes": [regime, ...],
+          "best_regime": regime | None,     # highest Sharpe among validated
+          "reason": str,
+        }
+    """
+    from discovery.regime_classifier import REGIMES
+
+    method = Config.PERMUTATION_OBJECTIVE
+    result = {
+        "promoted": False,
+        "regime_scores": {},
+        "valid_regimes": [],
+        "best_regime": None,
+        "reason": "",
+    }
+
+    n = len(full_data)
+    train_window = Config.WALK_FORWARD_TRAIN_MONTHS * 21
+    test_window = Config.WALK_FORWARD_TEST_MONTHS * 21
+    min_required = train_window + 2 * test_window
+    if n < max(min_required, 60):
+        result["reason"] = f"insufficient data ({n} bars)"
+        print(f"[Permutation] {symbol}: {result['reason']} — skipping regime gate")
+        return result
+
+    regime_arr = np.asarray(pd.Series(regime_series).to_numpy())
+    if regime_arr.shape[0] != n:
+        result["reason"] = f"regime_series length {regime_arr.shape[0]} != data length {n}"
+        print(f"[Permutation] {symbol}: {result['reason']} — skipping regime gate")
+        return result
+
+    split = int(n * 0.8)
+    insample = full_data.iloc[:split]
+    insample_regimes = regime_arr[:split]
+
+    strategy = strategy_class()
+    grid = strategy.param_grid()
+    full_returns = calculate_log_returns(full_data["close"].to_numpy())
+
+    regime_scores: dict = {}
+    valid_flags: dict = {}
+
+    for regime in REGIMES:
+        is_mask = (insample_regimes == regime)
+        full_mask = (regime_arr == regime)
+        n_is = int(is_mask.sum())
+        n_full = int(full_mask.sum())
+
+        # Per-regime metrics (best in-sample config under the configured method).
+        best_score, best_params = _optimize_score(strategy, grid, insample, method, mask=is_mask)
+        sharpe = pf = 0.0
+        if best_params:
+            pos_full = strategy.position_vector(full_data, best_params)
+            sharpe = calculate_objective_score(pos_full, full_returns, "sharpe", mask=full_mask)
+            pf = calculate_objective_score(pos_full, full_returns, "profit_factor", mask=full_mask)
+
+        entry = {
+            "sharpe": round(float(sharpe), 4),
+            "profit_factor": round(float(pf), 4),
+            "n_bars": n_full,
+            "insample_p": None,
+            "walkforward_p": None,
+            "walkforward_score": None,
+            "p_value": None,
+        }
+
+        if n_is < Config.REGIME_MIN_BARS or n_full < Config.REGIME_MIN_BARS:
+            print(
+                f"[Permutation] {symbol}/{regime}: insufficient sample "
+                f"(IS={n_is}, full={n_full} < {Config.REGIME_MIN_BARS}) — not scored"
+            )
+            valid_flags[regime] = False
+            regime_scores[regime] = entry
+            continue
+
+        is_iters = _scale_regime_iters(Config.PERMUTATION_INSAMPLE_ITERS, n_is, split)
+        is_passed, is_p, _is_score = run_insample_permutation_test(
+            strategy_class, params, insample,
+            n_iterations=is_iters, method=method, symbol=symbol,
+            mask=is_mask, regime_label=regime,
+        )
+        entry["insample_p"] = is_p
+        entry["p_value"] = is_p
+
+        if not is_passed:
+            valid_flags[regime] = False
+            regime_scores[regime] = entry
+            continue
+
+        wf_iters = _scale_regime_iters(Config.PERMUTATION_WALKFORWARD_ITERS, n_full, n)
+        wf_passed, wf_p, wf_score = run_walkforward_permutation_test(
+            strategy_class, params, full_data, train_window, test_window,
+            n_iterations=wf_iters, method=method, symbol=symbol,
+            mask=full_mask, regime_label=regime,
+        )
+        entry["walkforward_p"] = wf_p
+        entry["walkforward_score"] = round(float(wf_score), 4)
+        entry["p_value"] = wf_p
+        valid_flags[regime] = bool(wf_passed)
+        regime_scores[regime] = entry
+
+    valid_regimes = [r for r in REGIMES if valid_flags.get(r)]
+    best_regime = None
+    if valid_regimes:
+        best_regime = max(valid_regimes, key=lambda r: regime_scores[r]["sharpe"])
+
+    result["regime_scores"] = regime_scores
+    result["valid_regimes"] = valid_regimes
+    result["best_regime"] = best_regime
+    result["promoted"] = bool(valid_regimes)
+
+    if valid_regimes:
+        _write_validated_regime(
+            symbol, strategy.name, params, method,
+            regime_scores, valid_flags, best_regime,
+        )
+        result["reason"] = f"validated for {valid_regimes} (best={best_regime})"
+        print(
+            f"[Permutation] {symbol} {strategy.name} — regime validation complete — "
+            f"valid for {valid_regimes}, best={best_regime}"
+        )
+    else:
+        result["reason"] = "no regime passed MCPT"
+        print(f"[Permutation] {symbol} {strategy.name} — no regime passed MCPT — not promoted")
+
     return result

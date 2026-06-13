@@ -166,3 +166,13 @@ class Config:
     PERMUTATION_OBJECTIVE = "profit_factor" # objective function: "profit_factor" or "sharpe"
     PERMUTATION_WORKERS = 0                 # multiprocessing workers; 0 = cpu_count() - 1
     PERMUTATION_MOMENT_TOLERANCE = 0.01     # 1% tolerance for moment-preservation validation
+
+    # Regime classifier (4 market regimes) + live regime gating
+    REGIME_HIGH_VOL_VIX = 30.0      # VIX > this => HIGH_VOL (overrides trend)
+    REGIME_BULL_VIX_MAX = 20.0      # BULL_TREND requires VIX < this
+    REGIME_BEAR_VIX_MIN = 25.0      # BEAR_TREND requires VIX > this
+    REGIME_BULL_RETURN_PCT = 0.02   # BULL_TREND requires SPY 20-day return > +2%
+    REGIME_BEAR_RETURN_PCT = -0.02  # BEAR_TREND requires SPY 20-day return < -2%
+    REGIME_CACHE_SECONDS = 14400    # live regime cache TTL (4 hours)
+    REGIME_MIN_BARS = 50            # min bars in a regime to score / validate it
+    REGIME_GATING_ENABLED = os.getenv("REGIME_GATING_ENABLED", "true").lower() != "false"

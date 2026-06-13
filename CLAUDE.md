@@ -53,7 +53,8 @@ A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. T
 | `strategies/correlation_guard.py` | Pearson ρ on 60-day closes; blocks ρ > 0.75 or same-sector concentration |
 | `strategies/short_interest_signal.py` | FINRA CNMSshvol; ratio ≥ 65% → veto buy; uptick → squeeze boost |
 | `discovery/discovery_engine.py` | v1 — 243-combo EMA/RSI grid; scipy t-test → permutation gate; writes `strategy_results` |
-| `discovery/permutation_framework.py` | Masters 4-step MCPT validation; position-vector backtest + bar permutation; gates promotion; writes `validated_strategies` |
+| `discovery/permutation_framework.py` | Masters 4-step MCPT validation; position-vector backtest + bar permutation; **regime-aware** per-regime MCPT; writes `validated_strategies` |
+| `discovery/regime_classifier.py` | 4-regime classifier (BULL_TREND/BEAR_TREND/HIGH_VOL/CHOPPY); `classify_regime()`, `get_current_regime()` (4h cache); SPY-only fallback when VIX missing |
 | `discovery/discovery_engine_v2.py` | v2 — 5 strategy families; top-100 S&P 500; writes `discovery_results` JSONB |
 | `discovery/regime_adapter.py` | Returns best approved strategy per symbol + SPY regime |
 | `discovery/genetic_engine.py` | Genetic programming; 50-pop × 20-gen; IC fitness; graduates IC > 0.05 |
@@ -70,7 +71,8 @@ A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. T
 - `strategy_results` — Discovery Engine v1 walk-forward results; `permutation_tested` BOOLEAN marks combos that ran the MCPT gate (status `validated` = passed both gates, `rejected_permutation` = passed t-test but failed MCPT)
 - `strategy_circuit_breakers` — per-strategy drawdown pauses; auto-resets on recovery
 - `discovery_results` — Discovery Engine v2 multi-strategy JSONB results; approval via dashboard
-- `validated_strategies` — strategies that cleared the full permutation framework; stores IS/WF p-values, scores, params; authoritative "genuine edge" record
+- `validated_strategies` — strategies that cleared the permutation framework; stores IS/WF p-values, scores, params, and **per-regime validity** (`valid_bull_trend`, `valid_bear_trend`, `valid_high_vol`, `valid_choppy`, `best_regime`, `regime_sharpes` JSONB); authoritative "genuine edge" record consulted by the live regime gate
+- `signal_outcomes.regime_class` — 4-regime label captured at signal time (added via `ALTER TABLE IF NOT EXISTS`); powers the weekly regime performance breakdown
 
 ---
 
@@ -90,6 +92,26 @@ Every parameter combo passes through **two mandatory gates** before being marked
    - Unit tests: `discovery/test_permutation_framework.py` (moment preservation, final-close invariance, training-period preservation, objective directionality).
 
 Per-symbol summary log line: `[Discovery] {symbol}: {n_combos} combos tested → {n_ttest} passed t-test → {n_permutation} passed permutation → {n_promoted} promoted`.
+
+---
+
+## Regime-Aware Validation & Live Gating
+
+**4 market regimes** (`discovery/regime_classifier.py`), evaluated in priority order:
+- **HIGH_VOL** — VIX > 30 (overrides trend)
+- **BULL_TREND** — SPY EMA50 > EMA200 AND VIX < 20 AND SPY 20-day return > +2%
+- **BEAR_TREND** — SPY EMA50 < EMA200 AND VIX > 25 AND SPY 20-day return < −2%
+- **CHOPPY** — everything else
+
+VIX comes from the FRED-sourced `MACRO_SNAPSHOT`; if VIX is missing the classifier falls back to SPY-only rules (HIGH_VOL disabled, VIX sub-conditions dropped). Historical backtest tagging approximates per-bar VIX with SPY realized volatility (`realized_vol_proxy`) since no per-bar VIX feed exists.
+
+**Discovery (regime-aware MCPT):** the permutation gate runs **independently within each regime's bars** (`validate_strategy_edge_regime_aware`). A regime needs ≥ `REGIME_MIN_BARS` (50) bars to be scored; MCPT iterations scale by regime bar share (floor 200). A strategy can be validated for some regimes and not others — `validated_strategies` stores a `valid_*` flag per regime plus `best_regime` (highest Sharpe) and `regime_sharpes` JSONB.
+
+**Live gating (`bot.py` swing loop):** `_get_current_regime_class()` computes the current regime once per cycle (cached 4h). Before evaluating each symbol, `_regime_gate_ok()` looks up its `validated_strategies` flags and **only proceeds if the strategy is validated for the current regime**. **Fail-open**: no DB / no validation row / any error → trade proceeds with a warning log. Toggle via `REGIME_GATING_ENABLED` (default on). Log line: `[Regime] {symbol} strategy validated for {valid_regimes} — current regime {current} — PROCEED|SKIP`.
+
+**Regime performance tracking:** `signal_outcomes.regime_class` records the regime at signal time; the Sunday Performance Brain digest adds a per-regime win-rate / avg-P&L breakdown to compare live vs backtested edge and detect decay.
+
+Config: `REGIME_HIGH_VOL_VIX`, `REGIME_BULL_VIX_MAX`, `REGIME_BEAR_VIX_MIN`, `REGIME_BULL_RETURN_PCT`, `REGIME_BEAR_RETURN_PCT`, `REGIME_CACHE_SECONDS`, `REGIME_MIN_BARS`, `REGIME_GATING_ENABLED`.
 
 ---
 

@@ -16,7 +16,11 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
 from config import Config
-from discovery.permutation_framework import SwingPositionStrategy, validate_strategy_edge
+from discovery.permutation_framework import (
+    SwingPositionStrategy,
+    validate_strategy_edge_regime_aware,
+)
+from discovery.regime_classifier import CHOPPY, classify_regime, realized_vol_proxy
 
 PARAM_GRID = {
     "ema_short":     [20, 30, 50],
@@ -475,6 +479,23 @@ class DiscoveryEngine:
         except Exception as e:
             print(f"[DiscoveryEngine] Slack error: {e}")
 
+    def _regime_series_for(self, spy_regime_df, symbol_bars):
+        """
+        Align SPY regime labels to a symbol's bar index (forward-filled by date).
+        Returns a list of regime strings the same length as symbol_bars, defaulting
+        to CHOPPY where no SPY label is available (fail-safe).
+        """
+        n = len(symbol_bars)
+        if spy_regime_df is None or "regime" not in getattr(spy_regime_df, "columns", []):
+            return [CHOPPY] * n
+        try:
+            aligned = spy_regime_df["regime"].reindex(symbol_bars.index, method="ffill")
+            aligned = aligned.fillna(CHOPPY)
+            return aligned.tolist()
+        except Exception as e:
+            print(f"[DiscoveryEngine] regime alignment failed — defaulting to CHOPPY: {e}")
+            return [CHOPPY] * n
+
     def _upsert_result(self, conn, symbol, params, wf_df, p_value, status,
                        permutation_tested=False):
         if wf_df.empty:
@@ -550,6 +571,20 @@ class DiscoveryEngine:
             print("[DiscoveryEngine] PostgreSQL connected, tables verified")
         else:
             print("[DiscoveryEngine] No DATABASE_URL — skipping DB persistence")
+
+        # SPY-based regime labels for the whole backtest window. VIX history is
+        # approximated by SPY realized volatility (no per-bar VIX feed available);
+        # live gating uses the true FRED VIX. Computed once and reindexed per symbol.
+        spy_regime_df = None
+        try:
+            spy_bars = await asyncio.to_thread(_load_bars, "SPY", self._data_client)
+            if spy_bars is not None and not spy_bars.empty:
+                vix_proxy = realized_vol_proxy(spy_bars)
+                spy_regime_df = classify_regime(spy_bars, vix_proxy)
+                print(f"[DiscoveryEngine] SPY regime labels computed over {len(spy_regime_df)} bars")
+        except Exception as e:
+            import traceback as _tb
+            print(f"[DiscoveryEngine] SPY regime computation failed — regime gate disabled: {e}\n{_tb.format_exc()}")
 
         validated_total = 0
         processed_total = 0
@@ -641,11 +676,19 @@ class DiscoveryEngine:
                 )
                 perm_was_run = True
                 try:
+                    regime_series = self._regime_series_for(spy_regime_df, bars)
                     edge_result = await asyncio.to_thread(
-                        validate_strategy_edge,
+                        validate_strategy_edge_regime_aware,
                         SwingPositionStrategy, ttest_passers[0]["params"], symbol, bars,
+                        regime_series,
                     )
                     edge_promoted = bool(edge_result.get("promoted"))
+                    if edge_promoted:
+                        print(
+                            f"[DiscoveryEngine] {symbol}: regime validation — "
+                            f"valid for {edge_result.get('valid_regimes')} "
+                            f"best={edge_result.get('best_regime')}"
+                        )
                 except Exception as e:
                     import traceback as _tb
                     print(f"[DiscoveryEngine] {symbol}: permutation gate raised — {e}\n{_tb.format_exc()}")

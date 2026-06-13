@@ -568,6 +568,17 @@ async def notify_weekly_performance_brain(stats: dict):
     avg_loss_str = f"-{avg_loss:.2f}%" if avg_loss else "—"
     ratio_str    = f"{ratio:.2f}x"     if ratio is not None else "—"
 
+    # Regime performance breakdown (live win rate + avg P&L by market regime).
+    regime_breakdown = stats.get("regime_breakdown") or []
+    if regime_breakdown:
+        regime_lines = "\n".join(
+            f"• *{r['regime']}*: {r['trades']} trades | "
+            f"{r['win_rate']:.1f}% WR | {r['avg_pnl']:+.2f}% avg P&L"
+            for r in regime_breakdown
+        )
+    else:
+        regime_lines = "_No regime-tagged trades closed this week._"
+
     payload = {
         "text": "🧠 *Weekly Performance Brain Digest*",
         "blocks": [
@@ -586,8 +597,12 @@ async def notify_weekly_performance_brain(stats: dict):
                 ]
             },
             {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*📊 Performance by Market Regime:*\n{regime_lines}"}
+            },
+            {
                 "type": "context",
-                "elements": [{"type": "mrkdwn", "text": ":information_source: Performance Brain uses last 20 trades per strategy to scale next week's position sizes: WR >60% → +20%, WR <40% → −30%, floor at 10% of normal size."}]
+                "elements": [{"type": "mrkdwn", "text": ":information_source: Performance Brain uses last 20 trades per strategy to scale next week's position sizes: WR >60% → +20%, WR <40% → −30%, floor at 10% of normal size. Regime breakdown compares live vs backtested edge per regime to detect decay."}]
             }
         ]
     }
