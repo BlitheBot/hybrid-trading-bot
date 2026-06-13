@@ -339,31 +339,39 @@ class SwingStrategy(BaseStrategy):
             k = self._kalman.compute_latest(df['close'])
             h = self._hurst.compute_latest(df['close'])
             noise_ok = k["noise_ratio"] < 0.4
-            hurst_ok = h["regime_code"] == 1  # H > 0.6 → statistically trending
+            hurst_ok = h["hurst"] >= 0.55  # lowered from 0.6 — accept weakly-trending regimes
 
-            # Decompose entry conditions for clean logging
+            # LONG entry conditions
             ema_ok  = last_ema_short > last_ema_long
+            # Allow crossover up to 3 bars old: any of the 3 preceding bars had MACD <= signal
             macd_ok = (last_macd > last_macd_signal and
-                       df['MACD'].iloc[-2] <= df['MACD_Signal'].iloc[-2])
-            rsi_ok  = self.rsi_entry_low <= last_rsi <= self.rsi_entry_high
+                       any(df['MACD'].iloc[-4:-1].values <= df['MACD_Signal'].iloc[-4:-1].values))
+            rsi_ok  = self.rsi_entry_low <= last_rsi <= self.rsi_entry_high  # widened to [35, 65]
+
+            # SHORT entry conditions: at least 2 of 3 must be true
+            rsi_overbought     = last_rsi > 70
+            macd_bearish_cross = (last_macd < last_macd_signal and
+                                  df['MACD'].iloc[-2] >= df['MACD_Signal'].iloc[-2])
+            ema_bearish        = last_ema_short < last_ema_long
+            short_conditions   = int(rsi_overbought) + int(macd_bearish_cross) + int(ema_bearish)
 
             signal     = None
             confidence = 0.0
 
-            # Entry: EMA crossover + MACD + RSI + Kalman noise gate + Hurst regime gate
+            # LONG entry: EMA bullish + MACD above signal (≤3 bars) + RSI [35,65] + Kalman + Hurst ≥0.55
             if ema_ok and macd_ok and rsi_ok and noise_ok and hurst_ok:
                 signal = "buy"
                 confidence = 0.7
                 reasoning = (
                     f"EMA{self.ema_short}({last_ema_short:.2f}) > EMA{self.ema_long}({last_ema_long:.2f}), "
-                    f"MACD Cross Up, RSI({last_rsi:.2f}) in [{self.rsi_entry_low},{self.rsi_entry_high}], "
+                    f"MACD above signal (<=3 bars), RSI({last_rsi:.2f}) in [{self.rsi_entry_low},{self.rsi_entry_high}], "
                     f"Kalman noise={k['noise_ratio']:.2f}, Hurst H={h['hurst']:.3f}"
                 )
             elif ema_ok and macd_ok and rsi_ok and noise_ok and not hurst_ok:
                 if Config.SWING_VERBOSE_LOGGING:
                     print(
                         f"[SwingVerbose] {self.name}: BUY suppressed by Hurst regime gate "
-                        f"(H={h['hurst']:.3f} regime={h['regime']} — not trending)"
+                        f"(H={h['hurst']:.3f} < 0.55 — not sufficiently trending)"
                     )
             elif ema_ok and macd_ok and rsi_ok and not noise_ok:
                 if Config.SWING_VERBOSE_LOGGING:
@@ -372,13 +380,20 @@ class SwingStrategy(BaseStrategy):
                         f"(noise_ratio={k['noise_ratio']:.2f} >= 0.4)"
                     )
 
-            # Exit conditions (for existing positions)
-            # RSI above 70 or MACD reversal
-            elif (last_rsi > 70) or \
-                 (last_macd < last_macd_signal and df['MACD'].iloc[-2] >= df['MACD_Signal'].iloc[-2]):
+            # SHORT entry: at least 2 of 3 bearish conditions confirmed
+            elif short_conditions >= 2:
+                cond_labels = []
+                if rsi_overbought:     cond_labels.append(f"RSI({last_rsi:.2f})>70")
+                if macd_bearish_cross: cond_labels.append("MACD cross down")
+                if ema_bearish:        cond_labels.append(f"EMA{self.ema_short}<EMA{self.ema_long}")
                 signal = "sell"
                 confidence = 0.9
-                reasoning = f"Exit Condition Met: RSI({last_rsi:.2f}) > 70 OR MACD Reversal Down"
+                reasoning = f"Short Entry ({short_conditions}/3 conditions): {' | '.join(cond_labels)}"
+                if Config.SWING_VERBOSE_LOGGING:
+                    print(
+                        f"[SwingVerbose] {self.name}: SHORT signal — "
+                        f"{short_conditions}/3 conditions: {' | '.join(cond_labels)}"
+                    )
 
             elif Config.SWING_VERBOSE_LOGGING and not (ema_ok and macd_ok and rsi_ok):
                 # Log which specific entry condition(s) failed
@@ -394,14 +409,20 @@ class SwingStrategy(BaseStrategy):
                         )
                     else:
                         failed.append(
-                            f"MACD no fresh crossover — already above signal prev bar "
-                            f"(prev MACD={df['MACD'].iloc[-2]:.4f} sig={df['MACD_Signal'].iloc[-2]:.4f})"
+                            f"MACD above signal but crossover >3 bars old "
+                            f"(oldest checked: MACD={df['MACD'].iloc[-4]:.4f} sig={df['MACD_Signal'].iloc[-4]:.4f})"
                         )
                 if not rsi_ok:
                     if last_rsi < self.rsi_entry_low:
-                        failed.append(f"RSI({last_rsi:.2f}) < low gate {self.rsi_entry_low} — oversold / not yet recovering")
+                        failed.append(f"RSI({last_rsi:.2f}) < low gate {self.rsi_entry_low} — oversold / not recovering")
                     else:
                         failed.append(f"RSI({last_rsi:.2f}) > high gate {self.rsi_entry_high} — overbought")
+                if short_conditions == 1:
+                    sc_labels = []
+                    if rsi_overbought:     sc_labels.append("RSI>70")
+                    if macd_bearish_cross: sc_labels.append("MACD cross down")
+                    if ema_bearish:        sc_labels.append("EMA bearish")
+                    failed.append(f"SHORT needs 2/3 conditions — only {short_conditions}: {', '.join(sc_labels)}")
                 print(f"[SwingVerbose] {self.name}: HOLD — {' | '.join(failed)}")
 
             if signal == "buy":

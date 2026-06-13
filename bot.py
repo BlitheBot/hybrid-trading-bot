@@ -1107,7 +1107,12 @@ class TradingBot:
                 return # Blocked by cooldown
 
         client = self.crypto_data_client if is_crypto else self.stock_data_client
-        data = get_historical_bars(symbol, TimeFrame.Day, 365, client, is_crypto=is_crypto)
+        if is_crypto:
+            # 1-minute bars for intraday SMB scalp — 390 bars covers one full trading session
+            data = get_historical_bars(symbol, TimeFrame.Minute, 390, client, is_crypto=True)
+            print(f"[Scalp] {symbol}: fetched 1-min bars (n={0 if data is None else len(data)}) for intraday SMB signal")
+        else:
+            data = get_historical_bars(symbol, TimeFrame.Day, 365, client, is_crypto=False)
         
         if data is None:
             return
@@ -1710,7 +1715,7 @@ class TradingBot:
                         )
                         orders = await asyncio.to_thread(self.trading_client.get_orders, req)
                         for order in orders:
-                            if order.order_type.value == "stop":
+                            if order.order_type.value in ("stop", "stop_limit"):
                                 msg = f"Activating Trailing Stop for {pos.symbol} at {unrealized_pct*100:.2f}% profit!"
                                 print(msg)
                                 asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
@@ -2576,7 +2581,93 @@ class TradingBot:
                 tod_mult = 0.5
             print(f"[Swing] Time-of-day multiplier: {tod_mult}x ({now.strftime('%H:%M')} EST)")
 
+            # Fetch all open positions once per cycle for short-thesis-exit check
+            _short_positions: dict = {}
+            try:
+                _all_open = await asyncio.to_thread(self.trading_client.get_all_positions)
+                _short_positions = {
+                    p.symbol: p for p in _all_open
+                    if str(getattr(p, 'side', '')).lower() == 'short'
+                }
+                if _short_positions:
+                    print(
+                        f"[Swing] {len(_short_positions)} open short position(s) — "
+                        f"will check thesis reversal: {list(_short_positions.keys())}"
+                    )
+            except Exception as _pos_fetch_err:
+                print(f"[Swing] Could not fetch open positions for short-exit check (non-fatal): {_pos_fetch_err}")
+
             for symbol in symbols:
+                # Short thesis reversal check — runs before cooldown so existing shorts can exit
+                # even if the 4-hour entry cooldown is still active.
+                if symbol in _short_positions:
+                    _short_pos = _short_positions[symbol]
+                    try:
+                        import pandas_ta as _pdt
+                        _exit_data = get_historical_bars(symbol, TimeFrame.Day, 365, self.stock_data_client)
+                        if _exit_data is not None and len(_exit_data) >= 3:
+                            _rsi_s    = _pdt.rsi(_exit_data['close'], length=14)
+                            _macd_e   = _pdt.macd(_exit_data['close'], fast=12, slow=26, signal=9)
+                            if (_rsi_s is not None and _macd_e is not None and
+                                    not _rsi_s.empty and len(_macd_e) >= 2):
+                                _curr_rsi  = float(_rsi_s.iloc[-1])
+                                _curr_macd = float(_macd_e.iloc[:, 0].iloc[-1])
+                                _curr_msig = float(_macd_e.iloc[:, 2].iloc[-1])
+                                _prev_macd = float(_macd_e.iloc[:, 0].iloc[-2])
+                                _prev_msig = float(_macd_e.iloc[:, 2].iloc[-2])
+                                _rsi_recovered  = _curr_rsi < 55
+                                _macd_recovered = _curr_macd > _curr_msig and _prev_macd <= _prev_msig
+                                print(
+                                    f"[Swing] {symbol} short exit check — "
+                                    f"RSI={_curr_rsi:.2f}(recovered={_rsi_recovered}) "
+                                    f"MACD={_curr_macd:.4f}(recovered={_macd_recovered})"
+                                )
+                                if _rsi_recovered and _macd_recovered:
+                                    print(
+                                        f"[Swing] {symbol} SHORT thesis reversed — closing position early | "
+                                        f"RSI={_curr_rsi:.2f} MACD={_curr_macd:.4f}"
+                                    )
+                                    # Cancel outstanding OCO orders before covering
+                                    try:
+                                        _open_ords = await asyncio.to_thread(
+                                            self.trading_client.get_orders,
+                                            GetOrdersRequest(
+                                                status=QueryOrderStatus.OPEN,
+                                                symbols=[symbol],
+                                            ),
+                                        )
+                                        for _o in _open_ords:
+                                            await asyncio.to_thread(
+                                                self.trading_client.cancel_order_by_id, _o.id
+                                            )
+                                        print(f"[Swing] {symbol}: cancelled {len(_open_ords)} OCO order(s) before covering")
+                                    except Exception as _ce:
+                                        print(f"[Swing] {symbol}: OCO cancel error (non-fatal) — {_ce}")
+                                    # Market buy-to-cover
+                                    try:
+                                        from alpaca.trading.requests import MarketOrderRequest as _MOR
+                                        from alpaca.trading.enums import OrderSide as _OS, TimeInForce as _TIF
+                                        _cover = await asyncio.to_thread(
+                                            self.trading_client.submit_order,
+                                            _MOR(
+                                                symbol=symbol,
+                                                qty=abs(float(_short_pos.qty)),
+                                                side=_OS.BUY,
+                                                time_in_force=_TIF.DAY,
+                                            ),
+                                        )
+                                        print(f"[Swing] {symbol}: buy-to-cover submitted — id={str(_cover.id)[:12]}")
+                                        asyncio.create_task(notifications.notify_alert(
+                                            f"[ShortExit] {symbol} thesis reversed — covered at market | "
+                                            f"RSI={_curr_rsi:.1f} MACD crossed above signal",
+                                            level="INFO",
+                                        ))
+                                    except Exception as _cov_e:
+                                        print(f"[Swing] {symbol}: buy-to-cover FAILED — {_cov_e}")
+                    except Exception as _exit_err:
+                        print(f"[Swing] {symbol}: short exit check failed (non-fatal) — {_exit_err}")
+                    continue  # skip new signal evaluation for any symbol with an open short
+
                 # 4-hour per-symbol cooldown — skip if a signal already fired recently
                 _last_sig = self._swing_signal_times.get(symbol)
                 if _last_sig and (datetime.now(pytz.utc) - _last_sig) < timedelta(hours=4):

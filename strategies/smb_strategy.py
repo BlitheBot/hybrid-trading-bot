@@ -1,8 +1,8 @@
 import traceback
 import pandas as pd
 import numpy as np
-from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, TakeProfitRequest, StopLossRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from .base_strategy import BaseStrategy
 from .kalman_signal import KalmanTrendSignal
 from .vwap_signal import AnchoredVWAPSignal
@@ -22,22 +22,19 @@ class SMBStrategy(BaseStrategy):
         self.drawdown_window_days = drawdown_window_days
         self._kelly = KellySizer(db_engine=db_engine, base_capital=base_capital) if db_engine else None
         # Kalman replaces EMA-9 as the trend line for VWAP crossover detection.
-        # Q=1e-3 / R=0.1 are calibrated for daily bars (current use).
-        # If crypto scalp is ever re-enabled on intraday data, raise Q to ~5e-3
-        # so the filter reacts faster to the shorter bar duration.
-        self._kalman = KalmanTrendSignal(process_variance=1e-3, measurement_variance=0.1)
-        # AnchoredVWAPSignal: entry filter requiring price to be on the correct
-        # side of VWAP with above-average volume before executing a crossover signal.
-        # distance_threshold_pct=0.3: tighter than the 0.5 equity default — crypto
-        #   sits near VWAP longer during consolidation so 0.3% separates real
-        #   directional moves from indecision at the crossover point.
-        # volume_ratio_threshold=1.2: 20% above-average volume as a floor for
-        #   institutional participation confirmation.
+        # Q=5e-3 / R=0.1 calibrated for 1-minute intraday bars — reacts faster than
+        # the daily Q=1e-3 setting to keep up with intraday crypto price action.
+        self._kalman = KalmanTrendSignal(process_variance=5e-3, measurement_variance=0.1)
+        # AnchoredVWAPSignal: entry filter for 1-minute intraday crypto data.
+        # distance_threshold_pct=0.15: loosened from 0.3 — intraday crypto moves
+        #   away from VWAP by smaller percentages than daily data.
+        # volume_ratio_threshold=1.1: loosened from 1.2 — 10% above-average is
+        #   sufficient confirmation at 1-minute resolution.
         self._avwap = AnchoredVWAPSignal(
             window=20,
             anchor="rolling",
-            distance_threshold_pct=0.3,
-            volume_ratio_threshold=1.2,
+            distance_threshold_pct=0.15,
+            volume_ratio_threshold=1.1,
         )
 
     def calculate_relative_strength(self, stock_data, spy_data):
@@ -178,21 +175,65 @@ class SMBStrategy(BaseStrategy):
             )
 
         if qty <= 0:
+            print(f"[SMB] {symbol}: qty=0 — skipped (price={entry_price:.4f})")
             return
 
-        order_data = MarketOrderRequest(
-            symbol=symbol, qty=qty, side=side, time_in_force=TimeInForce.GTC,
-            take_profit=TakeProfitRequest(limit_price=target_price),
-            stop_loss=StopLossRequest(stop_price=stop_price)
-        )
-        
+        import time as _time
         _base = getattr(getattr(trading_client, '_base_url', None), 'host', None) \
                 or getattr(trading_client, '_base_url', 'unknown')
         print(f"[ORDER] Submitting SMB order → {symbol} {qty} {side.value} | endpoint={_base}")
         try:
-            order = trading_client.submit_order(order_data=order_data)
-            order_id = str(order.id)[:8] if order and order.id else "unknown"
+            # Step 1: plain market entry — Alpaca does not support BRACKET on market orders
+            order = trading_client.submit_order(MarketOrderRequest(
+                symbol=symbol, qty=qty, side=side, time_in_force=TimeInForce.GTC,
+            ))
             print(f"[ORDER] Alpaca response: id={order.id} status={order.status.value if order else '?'} symbol={getattr(order,'symbol','?')} qty={getattr(order,'qty','?')}")
-            print(f"✅ SMB Order Placed: {side} {symbol} (Qty: {qty}) @ {entry_price}. Target: {target_price}, Stop: {stop_price} | order_id={order_id} status={order.status.value if order else '?'}")
+
+            # Step 2: poll for fill (max 30 s)
+            fill_price = None
+            for _i in range(30):
+                _time.sleep(1)
+                _checked = trading_client.get_order_by_id(order.id)
+                if getattr(_checked, 'status', None) and _checked.status.value == 'filled':
+                    fill_price = float(_checked.filled_avg_price or entry_price)
+                    break
+            if fill_price is None:
+                print(f"[ORDER] {symbol}: fill not confirmed in 30s — using signal entry price for OCO")
+                fill_price = float(entry_price)
+
+            # Recompute stop/target from actual fill price
+            if side == OrderSide.BUY:
+                actual_stop   = round(fill_price * (1 - stop_loss_percent / 100), 4)
+                actual_target = round(fill_price * (1 + take_profit_percent / 100), 4)
+                oco_side = OrderSide.SELL
+            else:
+                actual_stop   = round(fill_price * (1 + stop_loss_percent / 100), 4)
+                actual_target = round(fill_price * (1 - take_profit_percent / 100), 4)
+                oco_side = OrderSide.BUY
+
+            print(
+                f"✅ SMB {'LONG' if side == OrderSide.BUY else 'SHORT'} entered: "
+                f"{symbol} qty={qty} fill={fill_price:.4f} stop={actual_stop} target={actual_target}"
+            )
+
+            # Step 3: GTC OCO protection
+            try:
+                oco = trading_client.submit_order(LimitOrderRequest(
+                    symbol=symbol,
+                    qty=qty,
+                    side=oco_side,
+                    time_in_force=TimeInForce.GTC,
+                    order_class=OrderClass.OCO,
+                    limit_price=actual_target,
+                    take_profit=TakeProfitRequest(limit_price=actual_target),
+                    stop_loss=StopLossRequest(stop_price=actual_stop),
+                ))
+                print(
+                    f"[ORDER] {symbol}: OCO protection placed — "
+                    f"id={str(oco.id)[:12]} target={actual_target} stop={actual_stop}"
+                )
+            except Exception as _oco_e:
+                print(f"[ORDER] {symbol}: OCO FAILED — {_oco_e}\n{traceback.format_exc()}")
+            return qty
         except Exception:
             print(f"❌ SMB Order Failed for {symbol}:\n{traceback.format_exc()}")
