@@ -182,7 +182,8 @@ class BollingerMeanReversionStrategy(BaseStrategy):
 
         qty = self.calculate_safe_quantity(
             symbol, entry_price, signal["stop_price"], account,
-            equity_risk_percent, max_buying_power_utilization_percent
+            equity_risk_percent, max_buying_power_utilization_percent,
+            adv_cap_shares=signal.get('adv_cap_shares'),
         )
         if qty <= 0:
             print(f"BB MeanRev: calculated qty=0 for {symbol} — skipping.")

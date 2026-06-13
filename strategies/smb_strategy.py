@@ -159,13 +159,22 @@ class SMBStrategy(BaseStrategy):
         # Kelly pre-computed in _process_symbol when sufficient history exists;
         # falls back to risk-based sizing when below MIN_SAMPLE_SIZE.
         kelly_qty = signal.get('kelly_qty')
+        _adv_cap = signal.get('adv_cap_shares')
         if kelly_qty and kelly_qty > 0:
             max_cash = float(account.buying_power) * (max_buying_power_utilization_percent / 100)
             qty = min(kelly_qty, int(max_cash / entry_price) if entry_price > 0 else kelly_qty)
+            if _adv_cap and qty > _adv_cap:
+                adv_raw = int(_adv_cap / 0.01)
+                print(
+                    f"[Sizing] {symbol} ADV cap applied — requested {qty} shares, "
+                    f"capped to {_adv_cap} (1% of ADV={adv_raw})"
+                )
+                qty = _adv_cap
         else:
             qty = self.calculate_safe_quantity(
                 symbol, entry_price, stop_price, account,
-                equity_risk_percent, max_buying_power_utilization_percent
+                equity_risk_percent, max_buying_power_utilization_percent,
+                adv_cap_shares=_adv_cap,
             )
 
         if qty <= 0:

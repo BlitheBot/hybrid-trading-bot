@@ -410,6 +410,7 @@ class TradingBot:
         self._recent_signals: deque = deque(maxlen=50)
         self._sector_alert_cooldown: dict[str, datetime] = {}
         self._adx_regime_cache = None  # (regime_str, timestamp)
+        self._adv_cache: dict[str, tuple[float, datetime]] = {}  # symbol → (adv_shares, cached_at)
         self._signal_stack: dict[str, list] = {}  # ticker → [{source, strength, timestamp}]
         self._daily_signals: dict[str, set] = {}  # ticker → set of source names that fired today
         self._confluence_alerted: set[str] = set()  # tickers already alerted today (dedup)
@@ -1465,6 +1466,24 @@ class TradingBot:
                                         f"— {_se}\n{_tb.format_exc()}"
                                     )
 
+                # Liquidity filter + ADV cap (stocks only; skipped for crypto)
+                if not _skip_execute_trade and not is_crypto:
+                    _adv = await self._get_adv(symbol)
+                    _ep  = float(signal.get('entry_price') or 0)
+                    _dollar_vol = _adv * _ep if _adv > 0 and _ep > 0 else 0.0
+                    if 0 < _dollar_vol < Config.MIN_DOLLAR_VOLUME:
+                        _liq_msg = (
+                            f"[Liquidity] {symbol} skipped — "
+                            f"avg daily dollar volume ${_dollar_vol / 1e6:.1f}M below $10M minimum"
+                        )
+                        print(_liq_msg)
+                        asyncio.create_task(notifications.notify_trade_skipped(
+                            symbol, strategy.name, _liq_msg
+                        ))
+                        continue
+                    if _adv > 0 and _ep > 0:
+                        signal['adv_cap_shares'] = max(1, int(_adv * 0.01))
+
                 entry_time = datetime.now(pytz.utc)
                 if not _skip_execute_trade:
                     try:
@@ -2235,6 +2254,25 @@ class TradingBot:
         extras = [s for s in _PRIORITY if s not in ticker_set]
         return db_tickers + extras
 
+    async def _get_adv(self, symbol: str) -> float:
+        """20-day average daily volume for symbol, cached per symbol for 24 hours."""
+        now = datetime.now(pytz.utc)
+        cached = self._adv_cache.get(symbol)
+        if cached:
+            adv_val, cached_at = cached
+            if (now - cached_at).total_seconds() < 86400:
+                return adv_val
+        try:
+            bars = await asyncio.to_thread(
+                get_historical_bars, symbol, TimeFrame.Day, 20, self.stock_data_client
+            )
+            adv_val = float(bars["volume"].mean()) if bars is not None and not bars.empty else 0.0
+        except Exception as _adv_e:
+            print(f"[ADV] {symbol}: fetch failed (non-fatal): {_adv_e}")
+            adv_val = 0.0
+        self._adv_cache[symbol] = (adv_val, now)
+        return adv_val
+
     async def _execute_short(
         self,
         symbol: str,
@@ -2344,7 +2382,33 @@ class TradingBot:
         if short_risk <= 0 or rr < Config.SWING_MIN_RR_RATIO:
             print(f"[Swing] {symbol}: SHORT skipped — R/R {rr:.2f} < {Config.SWING_MIN_RR_RATIO}")
             return
-        print(f"[Swing] {symbol}: R/R passed ({rr:.2f}) — proceeding to position sizing")
+
+        # Slippage-adjusted R/R: assume 0.2% worse fill on both entry and exit
+        _SLIP = 0.002
+        _eff_entry  = entry_price * (1 - _SLIP)
+        _eff_cover  = short_target * (1 + _SLIP)
+        _eff_risk   = short_stop - _eff_entry
+        _eff_reward = _eff_entry - _eff_cover
+        rr_slippage = round(_eff_reward / max(_eff_risk, 1e-9), 2)
+        print(f"[Sizing] {symbol} R/R after slippage: {rr_slippage} (pre-slippage: {rr})")
+        if _eff_risk <= 0 or rr_slippage < Config.SWING_MIN_RR_RATIO:
+            print(
+                f"[Swing] {symbol}: SHORT skipped — "
+                f"R/R after slippage {rr_slippage:.2f} < {Config.SWING_MIN_RR_RATIO}"
+            )
+            return
+        print(f"[Swing] {symbol}: R/R passed ({rr_slippage:.2f} w/ slippage) — proceeding to liquidity + sizing")
+
+        # Minimum liquidity filter: skip if avg daily dollar volume < $10M
+        _adv = await self._get_adv(symbol)
+        _adv_dollar_vol = _adv * entry_price if _adv > 0 else 0.0
+        if 0 < _adv_dollar_vol < Config.MIN_DOLLAR_VOLUME:
+            print(
+                f"[Liquidity] {symbol} skipped — "
+                f"avg daily dollar volume ${_adv_dollar_vol / 1e6:.1f}M below $10M minimum"
+            )
+            return
+        _adv_cap = max(1, int(_adv * 0.01)) if _adv > 0 else None
 
         # Position sizing
         try:
@@ -2363,6 +2427,12 @@ class TradingBot:
             )
             if shares < shares_raw:
                 print(f"[Swing] {symbol}: shares capped by buying power ({shares_raw}→{shares})")
+            if _adv_cap is not None and shares > _adv_cap:
+                print(
+                    f"[Sizing] {symbol} ADV cap applied — requested {shares} shares, "
+                    f"capped to {_adv_cap} (1% of ADV={_adv:.0f})"
+                )
+                shares = _adv_cap
         except Exception as _acct_e:
             print(f"[Swing] {symbol}: SHORT skipped — account fetch failed: {_acct_e}\n{_tb.format_exc()}")
             return

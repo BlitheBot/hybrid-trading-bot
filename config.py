@@ -30,6 +30,7 @@ class Config:
     
     # Advanced Swing & Risk Parameters
     SWING_MIN_RR_RATIO = 2.0
+    MIN_DOLLAR_VOLUME = 10_000_000  # skip trades where avg daily dollar volume < $10M
     TRAILING_STOP_ACTIVATION_PCT = 0.03
     TRAILING_STOP_TRAIL_PCT = 0.015
     SYMBOL_COOLDOWN_MINUTES = 120

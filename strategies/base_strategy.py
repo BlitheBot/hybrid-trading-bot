@@ -42,16 +42,17 @@ class BaseStrategy(ABC):
             print(f"Error checking existing positions for {symbol}: {e}")
             return False
 
-    def calculate_safe_quantity(self, symbol, entry_price, stop_price, account, equity_risk_percent, max_buying_power_utilization_percent):
+    def calculate_safe_quantity(self, symbol, entry_price, stop_price, account, equity_risk_percent, max_buying_power_utilization_percent, adv_cap_shares=None):
         """
         Calculates a safe quantity based on:
         1. 2% Equity Risk
         2. Max Buying Power Utilization (10% of available cash)
         3. Hard Position Cap (5% of total equity)
+        4. ADV Cap (1% of 20-day average daily volume, when provided)
         """
         current_equity = float(account.equity)
         available_cash = float(account.buying_power)
-        
+
         # 1. Risk-Based Quantity (2% of equity)
         risk_amount = current_equity * (equity_risk_percent / 100)
         risk_per_share = abs(entry_price - stop_price)
@@ -65,10 +66,19 @@ class BaseStrategy(ABC):
 
         # 3. SAFETY LOCK: Hard Position Cap (Max 5% of total equity per trade)
         # This prevents one trade from hogging all buying power even if risk allows it
-        max_position_value = current_equity * 0.05 
+        max_position_value = current_equity * 0.05
         qty_from_hard_cap = int(max_position_value / entry_price) if entry_price > 0 else 0
 
-        # Final quantity is the minimum of all three safety checks
+        # Final quantity is the minimum of all safety checks
         qty = min(qty_from_risk, qty_from_buying_power, qty_from_hard_cap)
-        
+
+        # 4. ADV Cap: 1% of 20-day average daily volume
+        if adv_cap_shares is not None and adv_cap_shares > 0 and qty > adv_cap_shares:
+            adv_raw = int(adv_cap_shares / 0.01)  # recover ADV from the cap for logging
+            print(
+                f"[Sizing] {symbol} ADV cap applied — requested {qty} shares, "
+                f"capped to {adv_cap_shares} (1% of ADV={adv_raw})"
+            )
+            qty = adv_cap_shares
+
         return qty
