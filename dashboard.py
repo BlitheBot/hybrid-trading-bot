@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+import time
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -227,6 +228,20 @@ hr { border-color: #30363d !important; opacity: 1 !important; }
 ::-webkit-scrollbar-track { background: #0d1117; }
 ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+
+/* ── Mobile — danger (primary) button ───────────── */
+[data-testid="baseButton-primary"] {
+    background: #3a1a1a !important;
+    border-color: #ff4444 !important;
+    color: #ff4444 !important;
+    font-weight: 700 !important;
+    font-size: 15px !important;
+}
+[data-testid="baseButton-primary"]:hover {
+    background: #ff444422 !important;
+    border-color: #ff6666 !important;
+    color: #ff6666 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1015,6 +1030,211 @@ def _fetch_fred_sidebar() -> dict:
             result[key] = None
     return result
 
+# ── Mobile view helpers ────────────────────────────────────────────────────────
+
+def _close_all_positions_action():
+    """Cancel all open orders then submit market close for every open position."""
+    try:
+        trading_client.cancel_orders()
+    except Exception as _coe:
+        st.error(f"Cancel orders failed: {_coe}")
+
+    try:
+        _open = trading_client.get_all_positions()
+    except Exception as _pe:
+        st.error(f"Could not fetch positions: {_pe}")
+        return
+
+    if not _open:
+        st.info("No open positions to close.")
+        return
+
+    _errors = []
+    _closed = 0
+    for _pos in _open:
+        try:
+            trading_client.close_position(_pos.symbol)
+            _closed += 1
+        except Exception as _ce:
+            _errors.append(f"{_pos.symbol}: {_ce}")
+
+    if _errors:
+        st.error("Some positions failed to close: " + " | ".join(_errors))
+    else:
+        st.success(f"Market-close submitted for {_closed} position(s).")
+
+
+def _render_mobile_view():
+    """Single-column mobile dashboard with auto-refresh every 30 seconds."""
+    _now_m = datetime.now(pytz.timezone("America/New_York"))
+
+    # ── Equity ─────────────────────────────────────────────────────────────────
+    _acct = fetch_account()
+    _equity = float(_acct.equity) if _acct else 0.0
+    st.markdown(
+        f'<div style="text-align:center;padding:24px 0 8px 0;">'
+        f'  <div style="font-size:11px;color:#484f58;text-transform:uppercase;'
+        f'       letter-spacing:0.12em;font-weight:700;margin-bottom:8px;">Account Equity</div>'
+        f'  <div style="font-size:48px;font-weight:800;color:#e6edf3;'
+        f'       font-variant-numeric:tabular-nums;line-height:1.1;">${_equity:,.2f}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Today's P&L ────────────────────────────────────────────────────────────
+    _daily_df = fetch_daily_pnl()
+    _today_str = _now_m.strftime("%Y-%m-%d")
+    _today_pnl = 0.0
+    if _daily_df is not None and not _daily_df.empty:
+        _today_rows = _daily_df[_daily_df["trade_date"].astype(str) == _today_str]
+        if not _today_rows.empty:
+            _today_pnl = float(_today_rows["daily_pnl_sum"].iloc[0])
+
+    _today_color = "#00c851" if _today_pnl >= 0 else "#ff4444"
+    _today_sign  = "+" if _today_pnl >= 0 else ""
+    st.markdown(
+        f'<div style="text-align:center;padding:4px 0 8px 0;">'
+        f'  <div style="font-size:11px;color:#484f58;text-transform:uppercase;'
+        f'       letter-spacing:0.12em;font-weight:700;margin-bottom:6px;">Today\'s P&L (closed trades)</div>'
+        f'  <div style="font-size:32px;font-weight:700;color:{_today_color};">'
+        f'    {_today_sign}{_today_pnl:.2f}%'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Total P&L since inception ───────────────────────────────────────────────
+    _total_pnl = 0.0
+    if _daily_df is not None and not _daily_df.empty:
+        _total_pnl = float(_daily_df["daily_pnl_sum"].sum())
+
+    _total_color = "#00c851" if _total_pnl >= 0 else "#ff4444"
+    _total_sign  = "+" if _total_pnl >= 0 else ""
+    st.markdown(
+        f'<div style="text-align:center;padding:4px 0 24px 0;">'
+        f'  <div style="font-size:11px;color:#484f58;text-transform:uppercase;'
+        f'       letter-spacing:0.12em;font-weight:700;margin-bottom:6px;">Total P&L since inception</div>'
+        f'  <div style="font-size:24px;font-weight:700;color:{_total_color};">'
+        f'    {_total_sign}{_total_pnl:.2f}%'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
+
+    # ── Open Positions ──────────────────────────────────────────────────────────
+    st.markdown(
+        '<div style="font-size:13px;font-weight:700;color:#484f58;'
+        'text-transform:uppercase;letter-spacing:0.12em;margin-bottom:12px;">'
+        'Open Positions</div>',
+        unsafe_allow_html=True,
+    )
+
+    _positions = fetch_positions()
+
+    # Try to find stop prices from open orders for stop-distance display
+    _stop_prices: dict = {}
+    try:
+        _open_orders = trading_client.get_orders()
+        for _o in (_open_orders or []):
+            _otype = str(getattr(_o, 'order_type', '')).lower()
+            if _otype in ("stop", "stop_limit"):
+                _sp = getattr(_o, 'stop_price', None)
+                if _sp:
+                    _stop_prices[str(getattr(_o, 'symbol', ''))] = float(_sp)
+    except Exception:
+        pass
+
+    if not _positions:
+        st.markdown(
+            '<div style="color:#484f58;text-align:center;padding:20px 0;">No open positions.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        for _pos in _positions:
+            _sym     = str(_pos.symbol)
+            _side    = str(getattr(_pos, 'side', '')).upper()
+            _unpl    = float(getattr(_pos, 'unrealized_pl',   0) or 0)
+            _unplpc  = float(getattr(_pos, 'unrealized_plpc', 0) or 0) * 100
+            _cprice  = float(getattr(_pos, 'current_price',   0) or 0)
+
+            _stop_px = _stop_prices.get(_sym)
+            if _stop_px and _cprice > 0:
+                _stop_dist = abs(_cprice - _stop_px) / _cprice * 100
+                _stop_str  = f"{_stop_dist:.1f}% to stop"
+            else:
+                _stop_str = "— to stop"
+
+            _pl_color   = "#00c851" if _unpl >= 0 else "#ff4444"
+            _pl_sign    = "+" if _unpl >= 0 else ""
+            _side_color = "#00c851" if _side == "LONG" else "#ff4444"
+
+            st.markdown(
+                f'<div style="background:#161b22;border:1px solid #30363d;border-radius:8px;'
+                f'padding:16px;margin-bottom:10px;">'
+                f'  <div style="display:flex;justify-content:space-between;align-items:center;">'
+                f'    <span style="font-size:20px;font-weight:700;color:#e6edf3;">{_sym}</span>'
+                f'    <span style="font-size:12px;font-weight:700;color:{_side_color};'
+                f'          background:{_side_color}1a;border:1px solid {_side_color}44;'
+                f'          padding:3px 10px;border-radius:10px;">{_side}</span>'
+                f'  </div>'
+                f'  <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center;">'
+                f'    <span style="font-size:24px;font-weight:700;color:{_pl_color};">'
+                f'      {_pl_sign}${_unpl:,.2f}'
+                f'    </span>'
+                f'    <span style="font-size:13px;color:#7d8590;">{_stop_str}</span>'
+                f'  </div>'
+                f'  <div style="margin-top:4px;">'
+                f'    <span style="font-size:14px;color:{_pl_color};">{_pl_sign}{_unplpc:.2f}%</span>'
+                f'  </div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.divider()
+
+    # ── Close All Positions ─────────────────────────────────────────────────────
+    if 'mobile_close_all_pending' not in st.session_state:
+        st.session_state['mobile_close_all_pending'] = False
+
+    if not st.session_state['mobile_close_all_pending']:
+        if st.button(
+            "CLOSE ALL POSITIONS",
+            key="mobile_close_all_btn",
+            use_container_width=True,
+            type="primary",
+        ):
+            st.session_state['mobile_close_all_pending'] = True
+            st.rerun()
+    else:
+        st.warning("This will cancel all open orders and market-close every position. Are you sure?")
+        _col_yes, _col_no = st.columns(2)
+        with _col_yes:
+            if st.button("YES, CLOSE ALL", key="mobile_confirm_yes", use_container_width=True, type="primary"):
+                _close_all_positions_action()
+                st.session_state['mobile_close_all_pending'] = False
+                st.cache_data.clear()
+                st.rerun()
+        with _col_no:
+            if st.button("Cancel", key="mobile_confirm_no", use_container_width=True):
+                st.session_state['mobile_close_all_pending'] = False
+                st.rerun()
+
+    st.divider()
+
+    # ── Last updated + auto-refresh ─────────────────────────────────────────────
+    st.markdown(
+        f'<p style="color:#484f58;font-size:12px;text-align:center;">'
+        f'Last updated: {_now_m.strftime("%H:%M:%S EST")} · Auto-refreshing every 30s'
+        f'</p>',
+        unsafe_allow_html=True,
+    )
+    time.sleep(30)
+    st.cache_data.clear()
+    st.rerun()
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
 now_est = datetime.now(pytz.timezone("America/New_York"))
@@ -1124,6 +1344,15 @@ if st.sidebar.button("⟳  Refresh Data", key="sidebar_refresh"):
     st.cache_data.clear()
     st.rerun()
 st.sidebar.caption(f"Prices 30s · FRED 1h · Refreshed {now_est.strftime('%H:%M:%S EST')}")
+
+st.sidebar.markdown('<div class="sidebar-section">VIEW</div>', unsafe_allow_html=True)
+_mobile_view = st.sidebar.checkbox("📱 Mobile View", key="mobile_view_toggle", value=False)
+
+# ── Mobile layout (skips desktop tabs when active) ─────────────────────────────
+
+if _mobile_view:
+    _render_mobile_view()
+    st.stop()
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
 
