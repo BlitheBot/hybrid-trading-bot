@@ -155,3 +155,14 @@ class Config:
     DISCOVERY_MIN_TRADES = 10
     DISCOVERY_P_VALUE_THRESHOLD = 0.05
     DATABASE_URL = os.getenv("DATABASE_URL")
+
+    # Permutation Validation Framework (Timothy Masters 4-step MCPT)
+    # Mandatory second gate after the SciPy t-test before a strategy is recorded
+    # as fully validated. Eliminates data-mining bias and out-of-sample selection luck.
+    PERMUTATION_ENABLED = os.getenv("PERMUTATION_ENABLED", "true").lower() != "false"
+    PERMUTATION_P_THRESHOLD = 0.01          # quasi p-value gate for both IS and WF tests
+    PERMUTATION_INSAMPLE_ITERS = 1000       # Monte Carlo iterations for in-sample test
+    PERMUTATION_WALKFORWARD_ITERS = 200     # Monte Carlo iterations for walk-forward test
+    PERMUTATION_OBJECTIVE = "profit_factor" # objective function: "profit_factor" or "sharpe"
+    PERMUTATION_WORKERS = 0                 # multiprocessing workers; 0 = cpu_count() - 1
+    PERMUTATION_MOMENT_TOLERANCE = 0.01     # 1% tolerance for moment-preservation validation

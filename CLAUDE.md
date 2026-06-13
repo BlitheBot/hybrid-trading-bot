@@ -52,7 +52,8 @@ A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. T
 | `strategies/kelly_sizer.py` | Half-Kelly sizing capped 10%; pulls from `signal_outcomes`; 20-trade min |
 | `strategies/correlation_guard.py` | Pearson ρ on 60-day closes; blocks ρ > 0.75 or same-sector concentration |
 | `strategies/short_interest_signal.py` | FINRA CNMSshvol; ratio ≥ 65% → veto buy; uptick → squeeze boost |
-| `discovery/discovery_engine.py` | v1 — 243-combo EMA/RSI grid; scipy t-test; writes `strategy_results` |
+| `discovery/discovery_engine.py` | v1 — 243-combo EMA/RSI grid; scipy t-test → permutation gate; writes `strategy_results` |
+| `discovery/permutation_framework.py` | Masters 4-step MCPT validation; position-vector backtest + bar permutation; gates promotion; writes `validated_strategies` |
 | `discovery/discovery_engine_v2.py` | v2 — 5 strategy families; top-100 S&P 500; writes `discovery_results` JSONB |
 | `discovery/regime_adapter.py` | Returns best approved strategy per symbol + SPY regime |
 | `discovery/genetic_engine.py` | Genetic programming; 50-pop × 20-gen; IC fitness; graduates IC > 0.05 |
@@ -66,9 +67,29 @@ A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. T
 ## Database Tables
 
 - `signal_outcomes` — live trade log; primary ML training data; exit backfilled by `_exit_monitor_loop`
-- `strategy_results` — Discovery Engine v1 walk-forward results
+- `strategy_results` — Discovery Engine v1 walk-forward results; `permutation_tested` BOOLEAN marks combos that ran the MCPT gate (status `validated` = passed both gates, `rejected_permutation` = passed t-test but failed MCPT)
 - `strategy_circuit_breakers` — per-strategy drawdown pauses; auto-resets on recovery
 - `discovery_results` — Discovery Engine v2 multi-strategy JSONB results; approval via dashboard
+- `validated_strategies` — strategies that cleared the full permutation framework; stores IS/WF p-values, scores, params; authoritative "genuine edge" record
+
+---
+
+## Strategy Validation Pipeline (Discovery Engine v1)
+
+Every parameter combo passes through **two mandatory gates** before being marked `validated`:
+
+1. **SciPy t-test gate** (`_validate`) — walk-forward test-period CAGR significantly > 0 (p < `DISCOVERY_P_VALUE_THRESHOLD`, default 0.05) with ≥ `DISCOVERY_MIN_TRADES` trades.
+2. **Permutation framework gate** (`permutation_framework.validate_strategy_edge`) — Timothy Masters 4-step Monte Carlo Permutation Test. Runs **once per symbol** (it re-optimizes the whole grid on each permuted path, so it tests the strategy *family*, not one combo) and the verdict applies to all that symbol's t-test passers:
+   - **Step 1 — Position-vector backtest**: posture vector S ∈ {+1, −1, 0}; close-to-close log returns; strategy returns = S_t × R_{t+1}; scored by `calculate_objective_score` (Sharpe or Profit Factor, on the return vector — never a trade list).
+   - **Step 2 — Bar permutation** (`get_permutation`): single shuffle index applied to candle gaps + intra-bar moves, preserving return moments and final close while destroying path memory. `start_index` keeps a training prefix intact.
+   - **Step 3 — In-sample MCPT** (1000 iters): p = count(PF_perm ≥ PF_real)/N; p > 0.01 ⇒ data-mining bias ⇒ discard.
+   - **Step 4 — Walk-forward MCPT** (200 iters, training period preserved): p > 0.01 ⇒ out-of-sample selection luck ⇒ reject.
+   - **Step 5 — Fail-fast gateway**: 80/20 hard wall; in-sample runs first and short-circuits on failure; only both-pass writes to `validated_strategies`.
+   - Histograms of permuted-score distributions saved to `discovery/reports/` (gitignored). Iterations parallelized via multiprocessing (seed = base_seed + worker_id), with a serial fallback.
+   - Config: `PERMUTATION_ENABLED`, `PERMUTATION_P_THRESHOLD`, `PERMUTATION_INSAMPLE_ITERS`, `PERMUTATION_WALKFORWARD_ITERS`, `PERMUTATION_OBJECTIVE`, `PERMUTATION_WORKERS`.
+   - Unit tests: `discovery/test_permutation_framework.py` (moment preservation, final-close invariance, training-period preservation, objective directionality).
+
+Per-symbol summary log line: `[Discovery] {symbol}: {n_combos} combos tested → {n_ttest} passed t-test → {n_permutation} passed permutation → {n_promoted} promoted`.
 
 ---
 

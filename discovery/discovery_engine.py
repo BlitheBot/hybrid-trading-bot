@@ -16,6 +16,7 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
 from config import Config
+from discovery.permutation_framework import SwingPositionStrategy, validate_strategy_edge
 
 PARAM_GRID = {
     "ema_short":     [20, 30, 50],
@@ -60,10 +61,16 @@ def _ensure_tables(conn):
                 p_value          FLOAT,
                 total_test_trades INTEGER,
                 status           VARCHAR(20),
+                permutation_tested BOOLEAN DEFAULT FALSE,
                 discovered_at    TIMESTAMP DEFAULT NOW(),
                 UNIQUE (symbol, ema_short, ema_long, rsi_period, rsi_entry_low, rsi_entry_high)
             )
         """)
+        # Backfill the column for databases created before the permutation gate.
+        cur.execute(
+            "ALTER TABLE strategy_results "
+            "ADD COLUMN IF NOT EXISTS permutation_tested BOOLEAN DEFAULT FALSE"
+        )
         cur.execute("""
             CREATE TABLE IF NOT EXISTS signal_outcomes (
                 id            SERIAL PRIMARY KEY,
@@ -468,7 +475,8 @@ class DiscoveryEngine:
         except Exception as e:
             print(f"[DiscoveryEngine] Slack error: {e}")
 
-    def _upsert_result(self, conn, symbol, params, wf_df, p_value, status):
+    def _upsert_result(self, conn, symbol, params, wf_df, p_value, status,
+                       permutation_tested=False):
         if wf_df.empty:
             train_sharpe = test_sharpe = 0.0
             total_test_trades = 0
@@ -484,8 +492,9 @@ class DiscoveryEngine:
                 cur.execute("""
                     INSERT INTO strategy_results (
                         symbol, ema_short, ema_long, rsi_period, rsi_entry_low, rsi_entry_high,
-                        train_sharpe, test_sharpe, degradation, p_value, total_test_trades, status
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        train_sharpe, test_sharpe, degradation, p_value, total_test_trades,
+                        status, permutation_tested
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     ON CONFLICT (symbol, ema_short, ema_long, rsi_period, rsi_entry_low, rsi_entry_high)
                     DO UPDATE SET
                         train_sharpe      = EXCLUDED.train_sharpe,
@@ -494,6 +503,7 @@ class DiscoveryEngine:
                         p_value           = EXCLUDED.p_value,
                         total_test_trades = EXCLUDED.total_test_trades,
                         status            = EXCLUDED.status,
+                        permutation_tested = EXCLUDED.permutation_tested,
                         discovered_at     = NOW()
                 """, (
                     symbol,
@@ -501,7 +511,7 @@ class DiscoveryEngine:
                     int(params["rsi_period"]), float(params["rsi_entry_low"]),
                     float(params["rsi_entry_high"]),
                     train_sharpe, test_sharpe, degradation,
-                    p_value, total_test_trades, status,
+                    p_value, total_test_trades, status, bool(permutation_tested),
                 ))
             conn.commit()
         except Exception as e:
@@ -558,6 +568,7 @@ class DiscoveryEngine:
 
             print(f"[DiscoveryEngine] {symbol}: {len(bars)} bars. Running {total_combos} combos...")
             symbol_validated = 0
+            ttest_passers: list[dict] = []   # combos that clear the SciPy t-test gate
 
             for combo in all_combos:
                 ema_short, ema_long, rsi_period, rsi_entry_low, rsi_entry_high = combo
@@ -584,27 +595,84 @@ class DiscoveryEngine:
                         Config.DISCOVERY_P_VALUE_THRESHOLD,
                     )
 
-                    status = "validated" if is_valid else "rejected"
                     processed_total += 1
 
-                    if db_conn:
-                        self._upsert_result(db_conn, symbol, params, wf_df, p_value, status)
-
                     if is_valid:
-                        symbol_validated += 1
-                        validated_total  += 1
+                        # Defer the upsert until the permutation gate has run for
+                        # this symbol, so the row carries the final status.
+                        ttest_passers.append({"params": params, "wf_df": wf_df, "p_value": p_value})
                         ts  = wf_df["test_sharpe"].mean()
                         trs = wf_df["train_sharpe"].mean()
                         print(
-                            f"[DiscoveryEngine] VALIDATED {symbol} "
+                            f"[DiscoveryEngine] T-TEST PASS {symbol} "
                             f"EMA{ema_short}/{ema_long} RSI{rsi_period}[{rsi_entry_low}-{rsi_entry_high}] "
                             f"train={trs:.2f} test={ts:.2f} p={p_value:.4f}"
+                        )
+                    elif db_conn:
+                        self._upsert_result(
+                            db_conn, symbol, params, wf_df, p_value,
+                            status="rejected", permutation_tested=False,
                         )
 
                 except Exception as e:
                     print(f"[DiscoveryEngine] {symbol} {params}: error — {e}")
 
-            print(f"[DiscoveryEngine] {symbol}: {symbol_validated}/{total_combos} combos validated")
+            # ── Second mandatory gate: permutation framework (Masters MCPT) ──────
+            # The MCPT re-optimizes the whole grid on each permuted path, so it
+            # tests the strategy *family* on this symbol — run it once and apply
+            # the verdict to every t-test passer.
+            n_ttest = len(ttest_passers)
+            n_permutation = 0
+            n_promoted = 0
+
+            if n_ttest == 0:
+                edge_promoted = False
+                perm_was_run = False
+            elif not Config.PERMUTATION_ENABLED:
+                # Permutation gate disabled — fall back to t-test-only promotion.
+                edge_promoted = True
+                perm_was_run = False
+                print(f"[DiscoveryEngine] {symbol}: permutation gate disabled — promoting on t-test only")
+            else:
+                print(
+                    f"[DiscoveryEngine] {symbol}: {n_ttest} combos passed t-test — "
+                    f"running permutation framework (IS={Config.PERMUTATION_INSAMPLE_ITERS}, "
+                    f"WF={Config.PERMUTATION_WALKFORWARD_ITERS} iters)"
+                )
+                perm_was_run = True
+                try:
+                    edge_result = await asyncio.to_thread(
+                        validate_strategy_edge,
+                        SwingPositionStrategy, ttest_passers[0]["params"], symbol, bars,
+                    )
+                    edge_promoted = bool(edge_result.get("promoted"))
+                except Exception as e:
+                    import traceback as _tb
+                    print(f"[DiscoveryEngine] {symbol}: permutation gate raised — {e}\n{_tb.format_exc()}")
+                    edge_promoted = False
+
+            if n_ttest > 0:
+                final_status = "validated" if edge_promoted else (
+                    "rejected_permutation" if perm_was_run else "rejected"
+                )
+                if edge_promoted:
+                    n_permutation = n_ttest if perm_was_run else 0
+                    n_promoted = n_ttest
+                for entry in ttest_passers:
+                    symbol_validated += 1 if edge_promoted else 0
+                    if edge_promoted:
+                        validated_total += 1
+                    if db_conn:
+                        self._upsert_result(
+                            db_conn, symbol, entry["params"], entry["wf_df"], entry["p_value"],
+                            status=final_status, permutation_tested=perm_was_run,
+                        )
+
+            print(
+                f"[Discovery] {symbol}: {total_combos} combos tested → "
+                f"{n_ttest} passed t-test → {n_permutation} passed permutation → "
+                f"{n_promoted} promoted"
+            )
 
         if db_conn:
             db_conn.close()
