@@ -180,9 +180,15 @@ class Config:
     DISCOVERY_SYMBOLS = ["JPM", "SPY", "COST", "BRK.B", "PG"]
     DISCOVERY_MIN_TRADES = 10
     DISCOVERY_P_VALUE_THRESHOLD = 0.05
-    # Multi-factor discovery families (Task 3): run mean-reversion, volume-breakout
-    # and insider-flow families alongside the EMA/MACD/RSI momentum family.
+    # Multi-factor discovery families (Tasks 3 & 9): run mean-reversion, volume-breakout,
+    # insider-flow, and SMC families alongside the EMA/MACD/RSI momentum family.
     DISCOVERY_MULTI_FAMILY_ENABLED = os.getenv("DISCOVERY_MULTI_FAMILY_ENABLED", "true").lower() != "false"
+
+    # SMC live confirmation gate (Task 9) — optional additional filter on swing buy/sell
+    # signals: requires price to be inside an active order block AND an unfilled FVG
+    # target to exist in the expected direction. Default False; enable via Railway env var
+    # after SMC strategies have been validated by the Discovery Engine.
+    SMC_CONFIRMATION_ENABLED = os.getenv("SMC_CONFIRMATION_ENABLED", "false").lower() != "false"
 
     # Correlation-aware portfolio construction (Task 4)
     PORTFOLIO_OPTIMIZER_ENABLED = os.getenv("PORTFOLIO_OPTIMIZER_ENABLED", "true").lower() != "false"

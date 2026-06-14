@@ -37,6 +37,7 @@ A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. T
 | `discovery/strategies/mean_reversion_strategy.py` | Task 3 family 2 — BB+RSI mean reversion (position-vector) |
 | `discovery/strategies/volume_breakout_strategy.py` | Task 3 family 3 — Donchian+OBV volume breakout (position-vector) |
 | `discovery/strategies/insider_flow_strategy.py` | Task 3 family 4 — Form 4 insider flow, long-only (position-vector) |
+| `discovery/strategies/smc_strategy.py` | Task 9 family 5 — Smart Money Concepts: order block + FVG signal (position-vector); also exposes `detect_order_blocks()` / `detect_fair_value_gaps()` for live bot confirmation gate |
 | `config.py` | All config constants; reads `.env` via `load_dotenv()` at import time (critical) |
 | `llm_client.py` | Unified LLM abstraction — routes to Anthropic, OpenRouter, or Moonshot |
 | `notifications.py` | Slack webhook functions for alerts/decisions/health/performance channels |
@@ -95,11 +96,12 @@ A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. T
 
 ## Strategy Validation Pipeline (Discovery Engine v1)
 
-**Multi-factor strategy families (Task 3):** the Discovery Engine validates **4 position-vector families** per symbol each weekly run (gated by `DISCOVERY_MULTI_FAMILY_ENABLED`, default on), each implementing the `SwingPositionStrategy` interface (`name`/`param_grid()`/`position_vector()`) and flowing through the full cost + regime + MCPT pipeline:
+**Multi-factor strategy families (Tasks 3 & 9):** the Discovery Engine validates **5 position-vector families** per symbol each weekly run (gated by `DISCOVERY_MULTI_FAMILY_ENABLED`, default on), each implementing the `SwingPositionStrategy` interface (`name`/`param_grid()`/`position_vector()`) and flowing through the full cost + regime + MCPT pipeline:
 1. **Momentum** — `SwingPositionStrategy` (`swing_ema_macd_rsi`): EMA/MACD/RSI (existing family 1).
 2. **Mean reversion** — `discovery/strategies/mean_reversion_strategy.py` `MeanReversionPositionStrategy` (`mean_reversion_bb_rsi`): long on lower-BB touch + RSI<35, short on upper-BB touch + RSI>65, exit on mean (middle-band) cross. Grid: bb_period [15,20,25] × bb_std [1.5,2.0,2.5] × rsi_period [10,14] (18).
 3. **Volume breakout** — `discovery/strategies/volume_breakout_strategy.py` `VolumeBreakoutPositionStrategy` (`volume_breakout_obv`): Donchian break of prior N-day high/low + volume > mult×ADV + OBV trending; Donchian channel exit. Grid: breakout_period [15,20,25] × volume_mult [1.5,2.0,2.5] × obv_lookback [3,5] (18).
 4. **Insider flow** — `discovery/strategies/insider_flow_strategy.py` `InsiderFlowPositionStrategy` (`insider_flow_form4`, long-only): cumulative Form 4 buys ≥ threshold in last `lookback` days AND close > EMA; exit on EMA cross. Grid: insider_threshold [$50k,$100k,$250k] × lookback [3,5,7] × ema_period [20,50] (18). **Known limitation:** needs a per-bar `insider_buy_value` column; OHLCV-only bars have none, so it returns all-flat (never validates) until a historical Form 4 feed is wired in — does not crash the pipeline.
+5. **Smart Money Concepts (SMC)** — `discovery/strategies/smc_strategy.py` `SMCPositionStrategy` (`smc_order_block_fvg`): long when price enters a bullish order block (last bearish candle before a bullish impulse > `atr_multiplier`×ATR) AND an unfilled bullish FVG target exists above + RSI < 55 + EMA50 > EMA200; short on mirror conditions. Exit on EMA cross reversal or OB invalidation (close through OB zone). Pure pandas/numpy — no TA-Lib. Grid: atr_multiplier [1.2,1.5,2.0] × lookback [15,20,30] × min_gap_pct [0.05,0.10,0.15] × rsi_period [10,14] = **54 combos**. Live bot optional gate: `SMC_CONFIRMATION_ENABLED` (default False); when on, adds `[SMC] {symbol} — {n} OBs | {n} FVGs | signal=…` log line and blocks signals lacking OB+FVG confluence. Tests: `discovery/test_smc_strategy.py`.
 
 Families register into `permutation_framework._STRATEGY_REGISTRY` (so spawned MCPT workers resolve them by name) and `DISCOVERY_FAMILIES`. The best-net-Sharpe family per symbol wins deployment; log `[Discovery] {symbol}: best family across {n} promoted = {name} (net Sharpe=…)`. Unit tests: `discovery/test_strategy_families.py`.
 

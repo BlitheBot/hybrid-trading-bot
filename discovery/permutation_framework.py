@@ -361,8 +361,14 @@ try:
     from discovery.strategies.mean_reversion_strategy import MeanReversionPositionStrategy
     from discovery.strategies.volume_breakout_strategy import VolumeBreakoutPositionStrategy
     from discovery.strategies.insider_flow_strategy import InsiderFlowPositionStrategy
+    from discovery.strategies.smc_strategy import SMCPositionStrategy
 
-    for _fam in (MeanReversionPositionStrategy, VolumeBreakoutPositionStrategy, InsiderFlowPositionStrategy):
+    for _fam in (
+        MeanReversionPositionStrategy,
+        VolumeBreakoutPositionStrategy,
+        InsiderFlowPositionStrategy,
+        SMCPositionStrategy,
+    ):
         register_strategy(_fam)
         DISCOVERY_FAMILIES.append(_fam)
 except Exception:

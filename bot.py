@@ -74,6 +74,11 @@ from utils import get_historical_bars, get_finnhub_price
 import signal_quality
 import performance_brain
 import risk_limits
+try:
+    from discovery.strategies.smc_strategy import detect_order_blocks, detect_fair_value_gaps
+    _SMC_AVAILABLE = True
+except Exception:
+    _SMC_AVAILABLE = False
 
 # ── Sentry error monitoring (optional — omit SENTRY_DSN to disable) ─────────
 try:
@@ -1400,6 +1405,46 @@ class TradingBot:
                 else:
                     print(f"[Risk] {symbol}: weekly P&L {_risk_state['weekly_pnl_pct']:.2f}% "
                           f"within limit (PASS)")
+
+                # ── SMC confirmation gate (Task 9 / optional) ─────────────────────
+                # When enabled, swing signals require price to be inside an active
+                # order block AND have an unfilled FVG target in the signal direction.
+                if (Config.SMC_CONFIRMATION_ENABLED and _SMC_AVAILABLE
+                        and isinstance(strategy, SwingStrategy) and not is_crypto):
+                    _smc_direction = "bullish" if signal["signal"] == "buy" else "bearish"
+                    try:
+                        _smc_obs = detect_order_blocks(data, lookback=20)
+                        _smc_fvgs = detect_fair_value_gaps(data)
+                        _smc_obs_dir = [ob for ob in _smc_obs if ob["direction"] == _smc_direction]
+                        _smc_fvgs_dir = [fvg for fvg in _smc_fvgs if fvg["direction"] == _smc_direction]
+                        _curr_price = float(data["close"].iloc[-1])
+                        _n_ob = len(_smc_obs_dir)
+                        _n_fvg = len(_smc_fvgs_dir)
+                        print(
+                            f"[SMC] {symbol} — {_n_ob} active order blocks | "
+                            f"{_n_fvg} unfilled FVGs | signal={_smc_direction}"
+                        )
+                        _in_ob = any(ob["low"] <= _curr_price <= ob["high"] for ob in _smc_obs_dir)
+                        if _smc_direction == "bullish":
+                            # Unfilled bullish FVG target: gap lower edge is above current price
+                            _fvg_target = any(fvg["lower"] > _curr_price for fvg in _smc_fvgs_dir)
+                        else:
+                            # Unfilled bearish FVG target: gap upper edge is below current price
+                            _fvg_target = any(fvg["upper"] < _curr_price for fvg in _smc_fvgs_dir)
+                        if not _in_ob or not _fvg_target:
+                            _smc_msg = (
+                                f"SMC gate: "
+                                + ("not in order block" if not _in_ob else "no FVG target")
+                                + f" ({_n_ob} OBs, {_n_fvg} FVGs)"
+                            )
+                            print(f"[SMC] {symbol}: {_smc_msg} — SKIP")
+                            asyncio.create_task(notifications.notify_trade_skipped(
+                                symbol, strategy.name, _smc_msg
+                            ))
+                            continue
+                        print(f"[SMC] {symbol}: in OB + FVG target confirmed — PASS")
+                    except Exception as _smc_err:
+                        print(f"[SMC] {symbol}: gate error (fail-open) — {_smc_err}")
 
                 if signal['signal'] == "buy":
                     try:

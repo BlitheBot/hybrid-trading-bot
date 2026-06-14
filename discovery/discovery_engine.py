@@ -23,12 +23,14 @@ from discovery.permutation_framework import (
 from discovery.strategies.mean_reversion_strategy import MeanReversionPositionStrategy
 from discovery.strategies.volume_breakout_strategy import VolumeBreakoutPositionStrategy
 from discovery.strategies.insider_flow_strategy import InsiderFlowPositionStrategy
+from discovery.strategies.smc_strategy import SMCPositionStrategy
 
 # Multi-factor families run in addition to the swing momentum family (family 1).
 _EXTRA_FAMILIES = [
     MeanReversionPositionStrategy,
     VolumeBreakoutPositionStrategy,
     InsiderFlowPositionStrategy,
+    SMCPositionStrategy,
 ]
 from discovery.regime_classifier import CHOPPY, classify_regime, realized_vol_proxy
 from discovery.data_partitioner import DataPartitioner, PartitionViolation
@@ -622,7 +624,7 @@ class DiscoveryEngine:
                 f"{best_name} (net Sharpe={candidates[best_name]:.2f})"
             )
         else:
-            print(f"[Discovery] {symbol}: no family promoted across all 4 families")
+            print(f"[Discovery] {symbol}: no family promoted across all 5 families")
         return promoted_count
 
     def _upsert_result(self, conn, symbol, params, wf_df, p_value, status,
@@ -867,9 +869,9 @@ class DiscoveryEngine:
                 f"{n_promoted} promoted"
             )
 
-            # ── Multi-factor families (Task 3): mean-reversion, volume-breakout,
-            #    insider-flow run alongside the swing momentum family. Best net-of-
-            #    cost Sharpe across all four wins deployment for this symbol.
+            # ── Multi-factor families (Tasks 3 & 9): mean-reversion, volume-breakout,
+            #    insider-flow, and SMC run alongside the swing momentum family. Best
+            #    net-of-cost Sharpe across all five wins deployment for this symbol.
             if Config.DISCOVERY_MULTI_FAMILY_ENABLED and Config.PERMUTATION_ENABLED:
                 try:
                     n_fam = await self._run_extra_families(
