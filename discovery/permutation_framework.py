@@ -363,6 +363,9 @@ try:
     from discovery.strategies.insider_flow_strategy import InsiderFlowPositionStrategy
     from discovery.strategies.smc_strategy import SMCPositionStrategy
     from discovery.strategies.pead_strategy import PEADPositionStrategy
+    from discovery.strategies.short_interest_momentum_strategy import (
+        ShortInterestMomentumPositionStrategy,
+    )
 
     for _fam in (
         MeanReversionPositionStrategy,
@@ -370,6 +373,7 @@ try:
         InsiderFlowPositionStrategy,
         SMCPositionStrategy,
         PEADPositionStrategy,
+        ShortInterestMomentumPositionStrategy,
     ):
         register_strategy(_fam)
         DISCOVERY_FAMILIES.append(_fam)

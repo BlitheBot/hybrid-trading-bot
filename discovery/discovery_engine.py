@@ -25,6 +25,9 @@ from discovery.strategies.volume_breakout_strategy import VolumeBreakoutPosition
 from discovery.strategies.insider_flow_strategy import InsiderFlowPositionStrategy
 from discovery.strategies.smc_strategy import SMCPositionStrategy
 from discovery.strategies.pead_strategy import PEADPositionStrategy
+from discovery.strategies.short_interest_momentum_strategy import (
+    ShortInterestMomentumPositionStrategy,
+)
 
 # Multi-factor families run in addition to the swing momentum family (family 1).
 # Families gated off via config are filtered out in _active_extra_families().
@@ -34,6 +37,7 @@ _EXTRA_FAMILIES = [
     InsiderFlowPositionStrategy,
     SMCPositionStrategy,
     PEADPositionStrategy,
+    ShortInterestMomentumPositionStrategy,
 ]
 
 
@@ -47,6 +51,8 @@ def _active_extra_families() -> list:
     ]
     if getattr(Config, "DISCOVERY_PEAD_ENABLED", True):
         fams.append(PEADPositionStrategy)
+    if getattr(Config, "DISCOVERY_SHORT_MOMENTUM_ENABLED", True):
+        fams.append(ShortInterestMomentumPositionStrategy)
     return fams
 from discovery.regime_classifier import CHOPPY, classify_regime, realized_vol_proxy
 from discovery.data_partitioner import DataPartitioner, PartitionViolation
