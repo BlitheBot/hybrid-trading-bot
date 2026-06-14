@@ -151,7 +151,7 @@ class Config:
     # Enhanced signal quality scoring (Task 5)
     # Composite 0-10 score from technical/sentiment/regime/insider/volume components.
     SIGNAL_QUALITY_ENABLED = os.getenv("SIGNAL_QUALITY_ENABLED", "true").lower() != "false"  # compute + log + store always
-    SIGNAL_QUALITY_GATING_ENABLED = os.getenv("SIGNAL_QUALITY_GATING_ENABLED", "true").lower() != "false"  # block trades below min + scale size
+    SIGNAL_QUALITY_GATING_ENABLED = os.getenv("SIGNAL_QUALITY_GATING_ENABLED", "false").lower() != "false"  # block trades below min + scale size; off by default until MACD calibration verified in live logs
     SIGNAL_QUALITY_MIN_SCORE = float(os.getenv("SIGNAL_QUALITY_MIN_SCORE", "5.0"))  # minimum composite score to trade
 
     # Performance Brain

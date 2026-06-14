@@ -39,8 +39,7 @@ def _clamp(x: float, lo: float = 0.0, hi: float = 10.0) -> float:
 
 def score_technical(
     rsi: float | None,
-    macd: float | None,
-    macd_signal: float | None = None,
+    macd_histogram: float | None,
     ema_short_val: float | None = None,
     ema_long_val: float | None = None,
     direction: str = "long",
@@ -50,6 +49,11 @@ def score_technical(
     Each available sub-signal contributes a bounded, monotonic score; the result
     is their mean (NEUTRAL when nothing is available). ``direction`` flips the sign
     so a short is scored on bearish strength.
+
+    ``macd_histogram`` must be the pre-computed MACD histogram (line minus signal
+    line), not the raw MACD line value. At a fresh crossover the histogram is near
+    zero (NEUTRAL score) and grows as momentum builds — this gives correct
+    directionality regardless of raw MACD line magnitude or stock price.
     """
     sign = 1.0 if direction == "long" else -1.0
     subs: list[float] = []
@@ -58,9 +62,8 @@ def score_technical(
         # long: RSI 30->0, 50->5, 70->10 ; short mirrored.
         subs.append(_clamp((rsi - 30.0) / 4.0 if sign > 0 else (70.0 - rsi) / 4.0))
 
-    if macd is not None:
-        hist = macd - macd_signal if macd_signal is not None else macd
-        favorable = hist * sign
+    if macd_histogram is not None:
+        favorable = macd_histogram * sign
         # Smoothly map the (sign-adjusted) MACD histogram to 0-10 around NEUTRAL.
         subs.append(_clamp(NEUTRAL + 5.0 * math.tanh(favorable * 5.0)))
 
@@ -127,8 +130,7 @@ def size_multiplier(score: float) -> float:
 def evaluate(
     *,
     rsi: float | None = None,
-    macd: float | None = None,
-    macd_signal: float | None = None,
+    macd_histogram: float | None = None,
     ema_short_val: float | None = None,
     ema_long_val: float | None = None,
     grok_score: float | None = None,
@@ -141,7 +143,7 @@ def evaluate(
 ) -> SignalQuality:
     """Compute the full composite quality assessment for one trade decision."""
     components = {
-        "technical": score_technical(rsi, macd, macd_signal, ema_short_val, ema_long_val, direction),
+        "technical": score_technical(rsi, macd_histogram, ema_short_val, ema_long_val, direction),
         "sentiment": score_sentiment(grok_score, direction),
         "regime": score_regime(validated_for_regime),
         "insider": score_insider(insider_aligned),

@@ -468,6 +468,7 @@ class SwingStrategy(BaseStrategy):
                     "target_price": take_profit_price,
                     "rsi_at_entry": float(last_rsi),
                     "macd_at_entry": float(last_macd),
+                    "macd_histogram_at_entry": float(last_macd - last_macd_signal),
                     "noise_ratio": round(float(k["noise_ratio"]), 3),
                     "hurst": round(float(h["hurst"]), 3),
                     "reasoning": reasoning

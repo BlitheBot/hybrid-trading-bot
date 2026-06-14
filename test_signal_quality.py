@@ -9,15 +9,15 @@ import signal_quality as sq
 def test_all_scores_bounded():
     for rsi in (10, 30, 50, 70, 90):
         for d in ("long", "short"):
-            s = sq.score_technical(rsi, 0.1, 0.0, 105, 100, d)
+            s = sq.score_technical(rsi, 0.1, 105, 100, d)
             assert 0.0 <= s <= 10.0
     print("[test] technical bounded OK")
 
 
 def test_technical_directionality():
     """Bullish setup scores higher long than short, and vice-versa."""
-    long_s = sq.score_technical(65, 0.5, 0.0, 105, 100, "long")
-    short_s = sq.score_technical(65, 0.5, 0.0, 105, 100, "short")
+    long_s = sq.score_technical(65, 0.5, 105, 100, "long")
+    short_s = sq.score_technical(65, 0.5, 105, 100, "short")
     assert long_s > short_s
     print("[test] technical directional OK")
 
@@ -66,11 +66,11 @@ def test_size_multiplier_linear():
 
 def test_evaluate_gate():
     # Strong setup passes; weak setup fails the 5.0 gate.
-    strong = sq.evaluate(rsi=68, macd=0.6, ema_short_val=104, ema_long_val=100,
+    strong = sq.evaluate(rsi=68, macd_histogram=0.6, ema_short_val=104, ema_long_val=100,
                          grok_score=9, validated_for_regime=True, insider_aligned=True,
                          current_volume=180, adv=100, direction="long", min_score=5.0)
     assert strong.passes and strong.composite > 5.0
-    weak = sq.evaluate(rsi=32, macd=-0.5, ema_short_val=98, ema_long_val=100,
+    weak = sq.evaluate(rsi=32, macd_histogram=-0.5, ema_short_val=98, ema_long_val=100,
                        grok_score=1, validated_for_regime=False, insider_aligned=False,
                        current_volume=10, adv=100, direction="long", min_score=5.0)
     assert not weak.passes and weak.composite < 5.0

@@ -1697,7 +1697,7 @@ class TradingBot:
                             _cur_vol = _adv_val = None
                         sq = signal_quality.evaluate(
                             rsi=signal.get('rsi_at_entry'),
-                            macd=signal.get('macd_at_entry'),
+                            macd_histogram=signal.get('macd_histogram_at_entry'),
                             ema_short_val=_es_val, ema_long_val=_el_val,
                             grok_score=_gscore,
                             validated_for_regime=_regime_aligned,
@@ -4410,8 +4410,16 @@ class TradingBot:
         if self._db_engine:
             print("[TickerPrioritizer] Pre-populating active_tickers before loop startup...")
             try:
-                from discovery.ticker_prioritizer import refresh_active_tickers
+                from discovery.ticker_prioritizer import refresh_active_tickers, get_active_tickers
                 await asyncio.to_thread(refresh_active_tickers, self._db_engine, self.stock_data_client)
+                # Enrich sector map from Finnhub for the top 50 active symbols.
+                # Fail-open — any errors are logged inside enrich_sector_map.
+                _top_syms = await asyncio.to_thread(get_active_tickers, self._db_engine)
+                await asyncio.to_thread(
+                    CorrelationGuard.enrich_sector_map,
+                    _top_syms[:50],
+                    Config.FINNHUB_API_KEY,
+                )
             except Exception as _tp_e:
                 print(f"[TickerPrioritizer] Pre-populate error: {_tp_e}")
         await asyncio.gather(
