@@ -72,6 +72,11 @@ class Config:
     # Quiver Quantitative API (congressional trading)
     QUIVER_API_KEY = os.getenv("QUIVER_API_KEY")
 
+    # Financial Modeling Prep (FMP) — historical earnings calendar for the PEAD
+    # discovery family (Task 1). Free tier at financialmodelingprep.com. Without a
+    # key the earnings loader returns empty and the PEAD family degrades to all-flat.
+    FMP_API_KEY = os.getenv("FMP_API_KEY")
+
     # Polling intervals and rate limits
     NEWS_DEDUP_HOURS = 2                   # dedup / cooldown window per ticker
     NEWS_BATCH_SIZE = 50                   # symbols per Alpaca News API request
@@ -183,6 +188,31 @@ class Config:
     # Multi-factor discovery families (Tasks 3 & 9): run mean-reversion, volume-breakout,
     # insider-flow, and SMC families alongside the EMA/MACD/RSI momentum family.
     DISCOVERY_MULTI_FAMILY_ENABLED = os.getenv("DISCOVERY_MULTI_FAMILY_ENABLED", "true").lower() != "false"
+
+    # Extended discovery families backed by free alternative-data feeds (overnight build).
+    #   Family 6 — PEAD earnings drift (FMP historical earnings surprises)
+    #   Family 7 — Short-interest momentum (FINRA week-over-week change)
+    #   Family 8 — Sector rotation (Alpaca sector-ETF relative strength)
+    # Each family fail-opens to all-flat when its data feed is unavailable.
+    DISCOVERY_PEAD_ENABLED = os.getenv("DISCOVERY_PEAD_ENABLED", "true").lower() != "false"
+    DISCOVERY_SHORT_MOMENTUM_ENABLED = os.getenv("DISCOVERY_SHORT_MOMENTUM_ENABLED", "true").lower() != "false"
+    DISCOVERY_SECTOR_ROTATION_ENABLED = os.getenv("DISCOVERY_SECTOR_ROTATION_ENABLED", "true").lower() != "false"
+    # PEAD signal defaults (also exposed for the live composite score)
+    PEAD_SURPRISE_THRESHOLD = float(os.getenv("PEAD_SURPRISE_THRESHOLD", "0.05"))  # 5% EPS surprise
+
+    # Live short-interest week-over-week confirmation bonus (Task 4 of overnight build)
+    SHORT_INTEREST_CONFIRM_ENABLED = os.getenv("SHORT_INTEREST_CONFIRM_ENABLED", "true").lower() != "false"
+    SHORT_INTEREST_RISING_THRESHOLD = float(os.getenv("SHORT_INTEREST_RISING_THRESHOLD", "0.10"))   # +10% WoW confirms shorts
+    SHORT_INTEREST_FALLING_THRESHOLD = float(os.getenv("SHORT_INTEREST_FALLING_THRESHOLD", "0.15"))  # -15% WoW = squeeze setup
+    SHORT_INTEREST_SHORT_BONUS = float(os.getenv("SHORT_INTEREST_SHORT_BONUS", "0.2"))   # +0.2x size for confirmed shorts
+    SHORT_INTEREST_LONG_BONUS = float(os.getenv("SHORT_INTEREST_LONG_BONUS", "0.3"))     # +0.3x size for squeeze longs
+
+    # Cross-asset regime confirmation (Task 3 of overnight build)
+    REGIME_CROSS_ASSET_ENABLED = os.getenv("REGIME_CROSS_ASSET_ENABLED", "true").lower() != "false"
+
+    # Historical Form-4 backtest feed (Task 5 of overnight build) — SEC EDGAR full-text search.
+    DISCOVERY_INSIDER_FEED_ENABLED = os.getenv("DISCOVERY_INSIDER_FEED_ENABLED", "true").lower() != "false"
+    INSIDER_DATA_STALE_DAYS = int(os.getenv("INSIDER_DATA_STALE_DAYS", "30"))  # flag symbol stale if newest filing older
 
     # SMC live confirmation gate (Task 9) — optional additional filter on swing buy/sell
     # signals: requires price to be inside an active order block AND an unfilled FVG

@@ -362,12 +362,14 @@ try:
     from discovery.strategies.volume_breakout_strategy import VolumeBreakoutPositionStrategy
     from discovery.strategies.insider_flow_strategy import InsiderFlowPositionStrategy
     from discovery.strategies.smc_strategy import SMCPositionStrategy
+    from discovery.strategies.pead_strategy import PEADPositionStrategy
 
     for _fam in (
         MeanReversionPositionStrategy,
         VolumeBreakoutPositionStrategy,
         InsiderFlowPositionStrategy,
         SMCPositionStrategy,
+        PEADPositionStrategy,
     ):
         register_strategy(_fam)
         DISCOVERY_FAMILIES.append(_fam)

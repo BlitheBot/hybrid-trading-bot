@@ -24,14 +24,30 @@ from discovery.strategies.mean_reversion_strategy import MeanReversionPositionSt
 from discovery.strategies.volume_breakout_strategy import VolumeBreakoutPositionStrategy
 from discovery.strategies.insider_flow_strategy import InsiderFlowPositionStrategy
 from discovery.strategies.smc_strategy import SMCPositionStrategy
+from discovery.strategies.pead_strategy import PEADPositionStrategy
 
 # Multi-factor families run in addition to the swing momentum family (family 1).
+# Families gated off via config are filtered out in _active_extra_families().
 _EXTRA_FAMILIES = [
     MeanReversionPositionStrategy,
     VolumeBreakoutPositionStrategy,
     InsiderFlowPositionStrategy,
     SMCPositionStrategy,
+    PEADPositionStrategy,
 ]
+
+
+def _active_extra_families() -> list:
+    """The extra families enabled by config flags (overnight-build families gate individually)."""
+    fams = [
+        MeanReversionPositionStrategy,
+        VolumeBreakoutPositionStrategy,
+        InsiderFlowPositionStrategy,
+        SMCPositionStrategy,
+    ]
+    if getattr(Config, "DISCOVERY_PEAD_ENABLED", True):
+        fams.append(PEADPositionStrategy)
+    return fams
 from discovery.regime_classifier import CHOPPY, classify_regime, realized_vol_proxy
 from discovery.data_partitioner import DataPartitioner, PartitionViolation
 from discovery.decay_monitor import (
@@ -597,10 +613,26 @@ class DiscoveryEngine:
             candidates[SwingPositionStrategy.name] = swing_net
 
         promoted_count = 0
-        for fam in _EXTRA_FAMILIES:
+        for fam in _active_extra_families():
             try:
+                # Event-driven families (PEAD, etc.) expose an `enrich` hook that
+                # attaches their per-bar data column. Extra columns survive the MCPT
+                # permutation (it copies the frame and only rewrites OHLC), so the
+                # enriched frame can be passed straight through. Fail-open: on any
+                # enrich error fall back to the raw bars (family → all-flat).
+                fam_bars = bars
+                enrich = getattr(fam, "enrich", None)
+                if enrich is not None:
+                    try:
+                        fam_bars = enrich(bars, symbol)
+                        if fam_bars is None or len(fam_bars) != len(bars):
+                            fam_bars = bars
+                    except Exception:
+                        import traceback as _tb
+                        print(f"[Discovery] {symbol} family={fam.name} enrich raised:\n{_tb.format_exc()}")
+                        fam_bars = bars
                 res = await asyncio.to_thread(
-                    validate_strategy_edge_regime_aware, fam, {}, symbol, bars, regime_series
+                    validate_strategy_edge_regime_aware, fam, {}, symbol, fam_bars, regime_series
                 )
                 if res.get("promoted"):
                     promoted_count += 1
@@ -624,7 +656,7 @@ class DiscoveryEngine:
                 f"{best_name} (net Sharpe={candidates[best_name]:.2f})"
             )
         else:
-            print(f"[Discovery] {symbol}: no family promoted across all 5 families")
+            print(f"[Discovery] {symbol}: no family promoted across all {1 + len(_active_extra_families())} families")
         return promoted_count
 
     def _upsert_result(self, conn, symbol, params, wf_df, p_value, status,
