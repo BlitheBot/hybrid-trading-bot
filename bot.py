@@ -73,6 +73,7 @@ from discovery.grok_sentiment import refresh_grok_sentiment, get_grok_sentiment
 from utils import get_historical_bars, get_finnhub_price
 import signal_quality
 import performance_brain
+import risk_limits
 
 # ── Sentry error monitoring (optional — omit SENTRY_DSN to disable) ─────────
 try:
@@ -415,6 +416,10 @@ class TradingBot:
         self.risk_multiplier = 1.0
         self.active_signals = {}
         self.last_loss_times = {}
+        # Risk Management Upgrade (Task 8) state
+        self._risk_state_cache = None          # (timestamp, dict) — consecutive losses + weekly P&L
+        self._entries_paused_until = None       # datetime — consecutive-loss pause expiry
+        self._last_consec_loss_alert = None     # de-dup the Slack pause alert
         self._alerted_negative_ev: set[str] = set()
         self._last_ev_check_date = None
         self.last_evaluated_price = {}
@@ -1360,6 +1365,42 @@ class TradingBot:
                     except Exception as _heat_err:
                         print(f"[HeatCap] Position check failed for {symbol}: {_heat_err}")
 
+                # ── Risk Management Upgrade (Task 8): account-level gates ───────
+                _risk_state = await asyncio.to_thread(self._get_risk_state)
+                _now_utc = datetime.now(pytz.utc)
+                # Consecutive-loss pause — block all new entries during the cooldown.
+                if self._entries_paused_until and _now_utc < self._entries_paused_until:
+                    print(f"[Risk] {symbol}: new entries paused until "
+                          f"{self._entries_paused_until:%H:%M UTC} (consecutive losses) — SKIP")
+                    continue
+                if risk_limits.consecutive_loss_tripped(
+                    _risk_state["consecutive_losses"], Config.CONSECUTIVE_LOSS_LIMIT
+                ):
+                    self._entries_paused_until = _now_utc + timedelta(
+                        hours=Config.CONSECUTIVE_LOSS_PAUSE_HOURS)
+                    _cl_msg = (f"{_risk_state['consecutive_losses']} consecutive losing trades "
+                               f"— pausing new entries for {Config.CONSECUTIVE_LOSS_PAUSE_HOURS:g}h")
+                    print(f"[Risk] {symbol}: {_cl_msg} — SKIP (FAIL)")
+                    if (self._last_consec_loss_alert is None
+                            or (_now_utc - self._last_consec_loss_alert).total_seconds() > 3600):
+                        asyncio.create_task(notifications.notify_alert(
+                            f"⛔ Risk: {_cl_msg}", level="CRITICAL"))
+                        self._last_consec_loss_alert = _now_utc
+                    continue
+                print(f"[Risk] {symbol}: consecutive-loss check PASS "
+                      f"({_risk_state['consecutive_losses']}/{Config.CONSECUTIVE_LOSS_LIMIT})")
+                # Weekly loss limit — reduce new-position sizing for the rest of the week.
+                weekly_loss_mult = risk_limits.weekly_loss_reduction(
+                    _risk_state["weekly_pnl_pct"], Config.WEEKLY_LOSS_LIMIT_PCT,
+                    Config.WEEKLY_LOSS_SIZE_REDUCTION,
+                )
+                if weekly_loss_mult < 1.0:
+                    print(f"[Risk] {symbol}: weekly P&L {_risk_state['weekly_pnl_pct']:.2f}% < "
+                          f"{Config.WEEKLY_LOSS_LIMIT_PCT}% — new sizes ×{weekly_loss_mult} (FAIL)")
+                else:
+                    print(f"[Risk] {symbol}: weekly P&L {_risk_state['weekly_pnl_pct']:.2f}% "
+                          f"within limit (PASS)")
+
                 if signal['signal'] == "buy":
                     try:
                         await asyncio.to_thread(self.trading_client.get_open_position, symbol)
@@ -1396,6 +1437,36 @@ class TradingBot:
                             f"[CORRELATION] Proceeding with elevated correlation "
                             f"{_corr_result['avg_correlation']:.2f} to open positions"
                         )
+
+                    # ── Sector concentration cap (Task 8) ──────────────────────
+                    _positions_mv = [
+                        (p.symbol, abs(float(getattr(p, "market_value", 0) or 0)))
+                        for p in _all_pos
+                    ]
+                    _sec_ok, _sec, _sec_share, _sec_reason = risk_limits.sector_exposure_ok(
+                        CorrelationGuard.SECTOR_MAP, symbol, _positions_mv,
+                        Config.MAX_SECTOR_CONCENTRATION_PCT,
+                    )
+                    if not _sec_ok:
+                        print(f"[Risk] {symbol}: sector concentration FAIL — {_sec_reason}")
+                        asyncio.create_task(notifications.notify_trade_skipped(
+                            symbol, strategy.name, f"Sector cap: {_sec_reason}"))
+                        continue
+                    print(f"[Risk] {symbol}: sector concentration PASS "
+                          f"({_sec} {_sec_share:.1f}% ≤ {Config.MAX_SECTOR_CONCENTRATION_PCT:.0f}%)")
+
+                    # ── Single-position size cap (Task 8): ≤ 5% equity at entry ─
+                    _eq_ref = _health_state.get("equity_usd") or self.start_of_day_equity or 0.0
+                    _entry_px = float(signal.get("entry_price") or 0)
+                    _pos_cap = risk_limits.single_position_share_cap(
+                        _eq_ref, _entry_px, Config.MAX_SINGLE_POSITION_PCT)
+                    if _pos_cap > 0:
+                        _existing_cap = signal.get("adv_cap_shares")
+                        signal["adv_cap_shares"] = (
+                            min(_existing_cap, _pos_cap) if _existing_cap else _pos_cap)
+                        print(f"[Risk] {symbol}: single-position cap "
+                              f"{_pos_cap} shares (≤{Config.MAX_SINGLE_POSITION_PCT:.0f}% equity) "
+                              f"→ effective share cap {signal['adv_cap_shares']}")
 
                     # Short interest signal: enrichment for swing buy signals only
                     if isinstance(strategy, SwingStrategy):
@@ -1735,7 +1806,11 @@ class TradingBot:
                         ))
                         continue
                     if _adv > 0 and _ep > 0:
-                        signal['adv_cap_shares'] = max(1, int(_adv * 0.01))
+                        _adv_cap = max(1, int(_adv * 0.01))
+                        # Keep the most restrictive of the ADV cap and any single-
+                        # position cap (Task 8) already set on the signal.
+                        _prior_cap = signal.get('adv_cap_shares')
+                        signal['adv_cap_shares'] = min(_prior_cap, _adv_cap) if _prior_cap else _adv_cap
 
                 entry_time = datetime.now(pytz.utc)
                 if not _skip_execute_trade:
@@ -1751,7 +1826,7 @@ class TradingBot:
                             risk_percent * self.risk_multiplier
                             * earnings_mult * vix_risk_mult * confidence_mult
                             * perf_mult * debate_mult * sentiment_mult * grok_mult
-                            * decay_mult * quality_mult
+                            * decay_mult * quality_mult * weekly_loss_mult
                         )
                         # Floor: no trade can go below 10% of normal size regardless of stacked multipliers
                         scaled_risk_percent = max(
@@ -2371,6 +2446,42 @@ class TradingBot:
                 print("[Heatmap] Upload failed — Slack notification skipped")
         except Exception as e:
             print(f"[Heatmap] Unexpected error: {e}")
+
+    def _get_risk_state(self) -> dict:
+        """Account-level risk state (Task 8): consecutive losses + weekly P&L proxy.
+
+        Cached for RISK_STATE_CACHE_SECONDS. Weekly P&L is approximated as the sum
+        of closed-trade pnl_pct over the last 7 days (equal-weight book proxy — no
+        per-trade dollar P&L is stored). Sync — call via asyncio.to_thread.
+        """
+        now = datetime.now(pytz.utc)
+        if self._risk_state_cache:
+            ts, cached = self._risk_state_cache
+            if (now - ts).total_seconds() < Config.RISK_STATE_CACHE_SECONDS:
+                return cached
+        state = {"consecutive_losses": 0, "weekly_pnl_pct": 0.0}
+        if self._db_engine:
+            try:
+                with self._db_engine.connect() as conn:
+                    recent = conn.execute(sql_text("""
+                        SELECT pnl_pct FROM signal_outcomes
+                        WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                        ORDER BY exit_time DESC LIMIT 50
+                    """)).mappings().fetchall()
+                    week_ago = now - timedelta(days=7)
+                    wk = conn.execute(sql_text("""
+                        SELECT COALESCE(SUM(pnl_pct), 0) AS wk FROM signal_outcomes
+                        WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                          AND exit_time >= :wa
+                    """), {"wa": week_ago}).mappings().fetchone()
+                state["consecutive_losses"] = risk_limits.count_leading_losses(
+                    [float(r["pnl_pct"]) for r in recent]
+                )
+                state["weekly_pnl_pct"] = float(wk["wk"]) if wk and wk["wk"] is not None else 0.0
+            except Exception as e:
+                print(f"[Risk] risk-state query failed (fail-open): {e}")
+        self._risk_state_cache = (now, state)
+        return state
 
     def _get_performance_multiplier(self, signal_type: str, symbol: str | None = None,
                                     current_regime: str | None = None) -> float:

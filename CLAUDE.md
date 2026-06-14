@@ -143,6 +143,16 @@ Config: `REGIME_HIGH_VOL_VIX`, `REGIME_BULL_VIX_MAX`, `REGIME_BEAR_VIX_MIN`, `RE
 
 ---
 
+## Risk Management Upgrade (Task 8)
+
+Four account-level limits enforced in `_process_symbol` (pure logic in `risk_limits.py`), each logging `[Risk] {symbol}: … PASS/FAIL`:
+- **Sector concentration** — blocks a new entry whose GICS sector (CorrelationGuard.SECTOR_MAP) already holds ≥ `MAX_SECTOR_CONCENTRATION_PCT` (30%) of total open-position market value.
+- **Single-position cap** — caps order shares so notional ≤ `MAX_SINGLE_POSITION_PCT` (5%) of equity at entry, applied via the signal's share-cap channel (min'd with the ADV cap).
+- **Weekly loss limit** — when 7-day P&L (sum of closed-trade `pnl_pct`, an equal-weight proxy) < `WEEKLY_LOSS_LIMIT_PCT` (−3%), multiplies new sizes by `WEEKLY_LOSS_SIZE_REDUCTION` (0.5) into the stack.
+- **Consecutive-loss pause** — `CONSECUTIVE_LOSS_LIMIT` (5) losers in a row pauses all new entries for `CONSECUTIVE_LOSS_PAUSE_HOURS` (2h) and fires a CRITICAL Slack alert (de-duped 1h).
+
+Account-level state (consecutive losses, weekly P&L) is computed in `_get_risk_state()` cached `RISK_STATE_CACHE_SECONDS` (300s). Tests: `test_risk_limits.py`. **Note:** weekly P&L is a per-trade-pnl_pct sum proxy (no dollar P&L stored); sector map only covers the 6 priority symbols today (extend SECTOR_MAP as the universe grows).
+
 ## Performance Brain (Task 7)
 
 `_get_performance_multiplier(signal_type, symbol, current_regime)` (math in `performance_brain.py`) returns a size multiplier clamped to **[0.5, 1.5]** combining three terms: **momentum base** (1.2× if 3+ of last 5 closed signals won, 0.7× if 3+ lost, else 1.0×; needs ≥3 recent), **regime bonus** (+0.1× when the current regime is net-profitable for the strategy, ≥5 samples), and **time-of-day bonus** (±0.1× for the stronger/weaker of morning [9:30–11:30] vs afternoon [13:30–16:00] session, computed from `signal_outcomes` ET timestamps). Log: `[PerfBrain] {symbol} multiplier=… | momentum=… regime_bonus=… time_bonus=…`. Tests: `test_performance_brain.py`.

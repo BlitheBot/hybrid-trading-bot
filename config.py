@@ -161,6 +161,15 @@ class Config:
     # Portfolio heat cap
     PORTFOLIO_HEAT_CAP = 0.15   # max aggregate open-position risk as % of equity
 
+    # Risk Management Upgrade (Task 8) — all env-var configurable
+    MAX_SECTOR_CONCENTRATION_PCT = float(os.getenv("MAX_SECTOR_CONCENTRATION_PCT", "30.0"))  # max % of exposure in one GICS sector
+    MAX_SINGLE_POSITION_PCT = float(os.getenv("MAX_SINGLE_POSITION_PCT", "5.0"))             # max single position as % of equity at entry
+    WEEKLY_LOSS_LIMIT_PCT = float(os.getenv("WEEKLY_LOSS_LIMIT_PCT", "-3.0"))                # weekly P&L below this → size reduction
+    WEEKLY_LOSS_SIZE_REDUCTION = float(os.getenv("WEEKLY_LOSS_SIZE_REDUCTION", "0.5"))       # multiplier applied for rest of week
+    CONSECUTIVE_LOSS_LIMIT = int(os.getenv("CONSECUTIVE_LOSS_LIMIT", "5"))                   # consecutive losers → pause entries
+    CONSECUTIVE_LOSS_PAUSE_HOURS = float(os.getenv("CONSECUTIVE_LOSS_PAUSE_HOURS", "2.0"))   # pause duration on tripping
+    RISK_STATE_CACHE_SECONDS = int(os.getenv("RISK_STATE_CACHE_SECONDS", "300"))             # risk-state recompute TTL
+
     # Backtester / Strategy Discovery Engine
     BACKTEST_START_DATE = "2019-01-01"
     BACKTEST_END_DATE = "2024-12-31"
