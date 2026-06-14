@@ -157,6 +157,15 @@ class Config:
     # Multi-factor discovery families (Task 3): run mean-reversion, volume-breakout
     # and insider-flow families alongside the EMA/MACD/RSI momentum family.
     DISCOVERY_MULTI_FAMILY_ENABLED = os.getenv("DISCOVERY_MULTI_FAMILY_ENABLED", "true").lower() != "false"
+
+    # Correlation-aware portfolio construction (Task 4)
+    PORTFOLIO_OPTIMIZER_ENABLED = os.getenv("PORTFOLIO_OPTIMIZER_ENABLED", "true").lower() != "false"
+    PORTFOLIO_MAX_CORRELATION = float(os.getenv("PORTFOLIO_MAX_CORRELATION", "0.7"))  # add only if corr w/ all selected < this
+    PORTFOLIO_MAX_SIZE = int(os.getenv("PORTFOLIO_MAX_SIZE", "20"))                   # max strategy/symbol combos
+    PORTFOLIO_MIN_SHARPE = float(os.getenv("PORTFOLIO_MIN_SHARPE", "0.5"))           # min combined portfolio Sharpe to deploy
+    PORTFOLIO_MIN_OVERLAP = int(os.getenv("PORTFOLIO_MIN_OVERLAP", "10"))            # min overlapping daily obs to trust a correlation
+    # When on, the swing screener only evaluates symbols in the current optimal portfolio.
+    PORTFOLIO_GATING_ENABLED = os.getenv("PORTFOLIO_GATING_ENABLED", "true").lower() != "false"
     DATABASE_URL = os.getenv("DATABASE_URL")
 
     # Permutation Validation Framework (Timothy Masters 4-step MCPT)

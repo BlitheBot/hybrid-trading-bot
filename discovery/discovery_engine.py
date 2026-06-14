@@ -883,6 +883,16 @@ class DiscoveryEngine:
         if db_conn:
             db_conn.close()
 
+        # Correlation-aware portfolio construction (Task 4): after all strategies
+        # are validated, select the diversified subset to deploy and persist it.
+        if Config.PORTFOLIO_OPTIMIZER_ENABLED:
+            try:
+                from discovery.portfolio_optimizer import PortfolioOptimizer
+                await asyncio.to_thread(PortfolioOptimizer().optimize)
+            except Exception as e:
+                import traceback as _tb
+                print(f"[Portfolio] construction step failed (non-fatal): {e}\n{_tb.format_exc()}")
+
         summary = (
             f":white_check_mark: Discovery Engine complete — "
             f"{processed_total} combos processed, {validated_total} validated across {len(symbols)} symbols."

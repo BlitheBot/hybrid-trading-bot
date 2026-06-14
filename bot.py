@@ -865,6 +865,28 @@ class TradingBot:
             print(f"[Regime] {symbol}: validated_strategies lookup failed — fail-open: {e}")
             return True, [], False
 
+    def _load_portfolio_symbols(self) -> tuple[set, bool]:
+        """Return (symbols_in_current_optimal_portfolio, has_data).
+
+        Reads the most recent ``strategy_portfolio`` build (Task 4). Fail-open: no
+        DB / no table / empty / error → (empty set, False) so the caller proceeds.
+        Sync — call via asyncio.to_thread.
+        """
+        if not self._db_engine:
+            return set(), False
+        try:
+            with self._db_engine.connect() as conn:
+                rows = conn.execute(sql_text("""
+                    SELECT symbol FROM strategy_portfolio
+                    WHERE build_id = (SELECT build_id FROM strategy_portfolio
+                                      ORDER BY selected_at DESC LIMIT 1)
+                """)).mappings().fetchall()
+            symbols = {r["symbol"] for r in rows}
+            return symbols, bool(symbols)
+        except Exception as e:
+            print(f"[Portfolio] strategy_portfolio lookup failed — fail-open: {e}")
+            return set(), False
+
     # ── Strategy decay gating (Loop 22 support) ───────────────────────────────
 
     def _decay_key_for_strategy(self, strategy) -> str:
@@ -2731,6 +2753,18 @@ class TradingBot:
             # 4-regime classification for live regime gating (cached 4h).
             current_regime_class = await self._get_current_regime_class(spy_bars)
 
+            # Correlation-aware portfolio gate (Task 4): load the current optimal
+            # portfolio's symbol set once per cycle. Fail-open when no portfolio exists.
+            portfolio_symbols, portfolio_has_data = set(), False
+            if Config.PORTFOLIO_GATING_ENABLED:
+                portfolio_symbols, portfolio_has_data = await asyncio.to_thread(
+                    self._load_portfolio_symbols
+                )
+                if portfolio_has_data:
+                    print(f"[Portfolio] Gating swing screener to {len(portfolio_symbols)} portfolio symbols")
+                else:
+                    print("[Portfolio] No optimal portfolio yet — screening all symbols (fail-open)")
+
             adx_regime = self._get_market_regime_adx(spy_bars)
             preferred_strategy_type = {
                 "trending": "ema_trend",
@@ -2932,6 +2966,14 @@ class TradingBot:
                     risk_to_use *= Config.BEAR_MARKET_SIZE_REDUCTION
                     strategy.bear_market_note = "🐻 Bear market mode — position size reduced 50%"
                     print(f"[Swing] {symbol}: bear market mode — risk_to_use={risk_to_use:.3f}%")
+
+                # Portfolio gate (Task 4) — only evaluate symbols in the current
+                # optimal portfolio. Fail-open when no portfolio has been built yet.
+                if Config.PORTFOLIO_GATING_ENABLED and portfolio_has_data:
+                    if symbol not in portfolio_symbols:
+                        print(f"[Portfolio] {symbol} not in optimal portfolio — SKIP")
+                        continue
+                    print(f"[Portfolio] {symbol} in optimal portfolio — PROCEED")
 
                 # Live regime gate — only trade a symbol when its validated strategy
                 # covers the current regime. Fail-open when no regime data exists.
