@@ -20,6 +20,7 @@ A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. T
 - LONG: EMA50 > EMA200 AND MACD above signal within last 3 bars AND RSI in [35, 65] AND Kalman noise < 0.4 AND Hurst H ≥ 0.55
 - SHORT: at least 2 of 3 — RSI > 70, MACD fresh bearish crossover, EMA50 < EMA200
 - Crypto scalp (smb_strategy.py): uses 1-minute bars (390 bars = ~1 session), Kalman Q=5e-3 (intraday), AnchoredVWAP gate at 0.15% distance / 1.1× volume
+- Crypto momentum (crypto_momentum_strategy.py, Task 6): 9/21 EMA crossover on 1-min bars + volume > 1.2× 20-bar avg; ATR stop 1.5×/target 3× (R/R 2.0); 15-min cooldown + 0.1% min-move per symbol. Both crypto strategies are evaluated each tick in `_process_symbol`; only the higher-confidence signal executes (`CRYPTO_MOMENTUM_ENABLED`). Tests: `strategies/test_crypto_momentum_strategy.py`
 
 ---
 
@@ -37,6 +38,7 @@ A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. T
 | `strategies/swing_strategy.py` | EMA crossover + MACD + RSI; per-symbol params from Discovery Engine |
 | `strategies/bollinger_mean_reversion_strategy.py` | BB lower-break + RSI oversold; half-life OU gate; middle-band exit |
 | `strategies/smb_strategy.py` | Crypto scalp — Kalman/VWAP crossover + AnchoredVWAP gate; BTC/ETH |
+| `strategies/crypto_momentum_strategy.py` | Crypto scalp (Task 6) — 9/21 EMA crossover + volume confirm; 1.5×/3× ATR stop/target (R/R 2.0); 15-min cooldown + 0.1% min-move throttle; runs alongside SMB, best confidence wins |
 | `strategies/news_strategy.py` | Benzinga via Alpaca News API; LLM NLP scoring with keyword fallback |
 | `strategies/sec_edgar_strategy.py` | SEC EDGAR Form 4 XML parsing; strength-tiered scoring; 429 backoff |
 | `strategies/fred_strategy.py` | FRED macro via public CSV; `MACRO_SNAPSHOT` + `get_conviction_multiplier()` |

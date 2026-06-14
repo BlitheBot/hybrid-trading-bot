@@ -41,6 +41,17 @@ class Config:
     SCALP_SYMBOLS = ["BTC/USD", "ETH/USD"]
     CRYPTO_SCALP_STOP_LOSS_PERCENT = 4.0 # Wider stop losses for crypto scalp trades (4-8%)
 
+    # Crypto Momentum Strategy (Task 6) — simpler/more-frequent EMA crossover scalp
+    # that runs alongside the SMB late scalp; best signal (higher confidence) wins.
+    CRYPTO_MOMENTUM_ENABLED = os.getenv("CRYPTO_MOMENTUM_ENABLED", "true").lower() != "false"
+    CRYPTO_MOMENTUM_EMA_FAST = int(os.getenv("CRYPTO_MOMENTUM_EMA_FAST", "9"))
+    CRYPTO_MOMENTUM_EMA_SLOW = int(os.getenv("CRYPTO_MOMENTUM_EMA_SLOW", "21"))
+    CRYPTO_MOMENTUM_VOL_MULT = float(os.getenv("CRYPTO_MOMENTUM_VOL_MULT", "1.2"))  # vol > 1.2x avg of last 20 bars
+    CRYPTO_MOMENTUM_ATR_STOP_MULT = float(os.getenv("CRYPTO_MOMENTUM_ATR_STOP_MULT", "1.5"))
+    CRYPTO_MOMENTUM_ATR_TARGET_MULT = float(os.getenv("CRYPTO_MOMENTUM_ATR_TARGET_MULT", "3.0"))  # R/R = 2.0
+    CRYPTO_MOMENTUM_COOLDOWN_MINUTES = int(os.getenv("CRYPTO_MOMENTUM_COOLDOWN_MINUTES", "15"))
+    CRYPTO_MOMENTUM_MIN_MOVE_PCT = float(os.getenv("CRYPTO_MOMENTUM_MIN_MOVE_PCT", "0.001"))  # 0.1% min move since last signal
+
     # Swing Bot Parameters (Stocks)
     SWING_SYMBOLS = ["JPM", "SPY", "COST", "BRK.B", "PG", "V"]
     SWING_EQUITY_RISK_PERCENT = 1.0 # Smaller position sizes for swing trades

@@ -52,6 +52,7 @@ from sqlalchemy import create_engine, text as sql_text
 from config import Config
 from strategies.base_strategy import BaseStrategy
 from strategies.smb_strategy import SMBStrategy
+from strategies.crypto_momentum_strategy import CryptoMomentumStrategy
 from strategies.swing_strategy import SwingStrategy
 from strategies.bollinger_mean_reversion_strategy import BollingerMeanReversionStrategy
 from strategies.news_strategy import NewsStrategy, _get_scan_sleep_seconds, get_sentiment_score
@@ -1282,7 +1283,36 @@ class TradingBot:
             data = pd.concat([data, current_bar])
             data.sort_index(inplace=True)
 
-        for strategy in strategies:
+        # Best-signal priority (Task 6): when multiple crypto strategies run on the
+        # same tick (SMB + Crypto Momentum), evaluate each and execute only the
+        # highest-confidence signal so they never double up on one symbol. The
+        # winning signal is reused below (not regenerated) so per-strategy throttle
+        # state set during evaluation doesn't suppress it on a second call.
+        iter_strategies = strategies
+        pre_signals: dict = {}
+        if is_crypto and len(strategies) > 1:
+            scored = []
+            for s in strategies:
+                try:
+                    _sig = (s.generate_signals(data, self.stock_data_client)
+                            if isinstance(s, SMBStrategy) else s.generate_signals(data))
+                except Exception as _ge:
+                    print(f"[Scalp] {symbol}: {s.name} signal eval failed — {_ge}")
+                    _sig = None
+                if _sig and _sig.get("signal") in ("buy", "sell"):
+                    scored.append((float(_sig.get("confidence", 0.0)), s, _sig))
+            if scored:
+                scored.sort(key=lambda x: x[0], reverse=True)
+                _conf, winner, winner_sig = scored[0]
+                if len(scored) > 1:
+                    print(f"[Scalp] {symbol}: {len(scored)} crypto signals — running "
+                          f"highest-confidence {winner.name} (conf={_conf:.2f})")
+                iter_strategies = [winner]
+                pre_signals[winner.name] = winner_sig
+            else:
+                iter_strategies = []
+
+        for strategy in iter_strategies:
             # Decay gate: a strategy disabled by the decay monitor is skipped entirely.
             _decay_disabled, _decay_mult, _decay_status = self._decay_adjustment(strategy, symbol)
             if _decay_disabled:
@@ -1290,10 +1320,12 @@ class TradingBot:
                 continue
 
             print(f"Running strategy: {strategy.name} for {symbol}")
-            if isinstance(strategy, SMBStrategy):
-                signal = strategy.generate_signals(data, self.stock_data_client)
-            else:
-                signal = strategy.generate_signals(data)
+            signal = pre_signals.get(strategy.name)
+            if signal is None:
+                if isinstance(strategy, SMBStrategy):
+                    signal = strategy.generate_signals(data, self.stock_data_client)
+                else:
+                    signal = strategy.generate_signals(data)
             
             if signal:
                 if self.trading_halted_for_day:
@@ -4199,6 +4231,10 @@ class TradingBot:
 
         self.add_scalp_strategy(SMBStrategy("SMB Late Scalp", ema_window=9, rr_ratio=3,
                                              db_engine=self._db_engine, base_capital=_initial_capital))
+        # Crypto momentum scalp (Task 6) — runs alongside SMB; best signal wins per tick.
+        if Config.CRYPTO_MOMENTUM_ENABLED:
+            self.add_scalp_strategy(CryptoMomentumStrategy("Crypto Momentum"))
+            print("[Scalp] Crypto Momentum strategy enabled alongside SMB Late Scalp")
 
         # Per-symbol swing strategies — parameters from Discovery Engine walk-forward validation
         self.swing_symbol_strategies = {
