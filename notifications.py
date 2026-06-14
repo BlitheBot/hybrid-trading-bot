@@ -579,6 +579,25 @@ async def notify_weekly_performance_brain(stats: dict):
     else:
         regime_lines = "_No regime-tagged trades closed this week._"
 
+    # Strategy decay summary (tier counts + re-validation queue depth).
+    decay = stats.get("decay_summary") or {}
+    decay_counts = decay.get("counts") or {}
+    if decay_counts:
+        decay_line = (
+            f"🟢 HEALTHY {decay_counts.get('HEALTHY', 0)} | "
+            f"🟡 DEGRADED {decay_counts.get('DEGRADED', 0)} | "
+            f"🟠 DECAYING {decay_counts.get('DECAYING', 0)} | "
+            f"🔴 CRITICAL {decay_counts.get('CRITICAL', 0)}"
+        )
+        pending = decay.get("pending_revalidations", 0)
+        disabled = decay.get("disabled") or []
+        decay_extra = f"\nRe-validation queue: {pending} pending"
+        if disabled:
+            decay_extra += f" | Disabled: {', '.join(disabled[:8])}"
+        decay_text = decay_line + decay_extra
+    else:
+        decay_text = "_No decay data yet (needs ≥30 closed signals per strategy)._"
+
     payload = {
         "text": "🧠 *Weekly Performance Brain Digest*",
         "blocks": [
@@ -601,8 +620,12 @@ async def notify_weekly_performance_brain(stats: dict):
                 "text": {"type": "mrkdwn", "text": f"*📊 Performance by Market Regime:*\n{regime_lines}"}
             },
             {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*🩺 Strategy Decay Status:*\n{decay_text}"}
+            },
+            {
                 "type": "context",
-                "elements": [{"type": "mrkdwn", "text": ":information_source: Performance Brain uses last 20 trades per strategy to scale next week's position sizes: WR >60% → +20%, WR <40% → −30%, floor at 10% of normal size. Regime breakdown compares live vs backtested edge per regime to detect decay."}]
+                "elements": [{"type": "mrkdwn", "text": ":information_source: Performance Brain uses last 20 trades per strategy to scale next week's position sizes: WR >60% → +20%, WR <40% → −30%, floor at 10% of normal size. Regime breakdown compares live vs backtested edge per regime to detect decay; decay monitor cuts size or disables strategies whose live Sharpe falls below backtest."}]
             }
         ]
     }

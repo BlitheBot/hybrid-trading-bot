@@ -14,7 +14,7 @@
 
 ## Architecture Overview
 
-A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. The swing screener runs every 5 minutes during market hours (9:30 AM–4:00 PM EDT, Mon–Fri) across up to 250 symbols pulled by volume from the `active_tickers` PostgreSQL table (6 priority symbols — JPM, SPY, COST, BRK.B, PG, V — always included). Per-symbol 4-hour cooldown is set the moment a signal enters the protection stack (debate gate), not on trade execution — this prevents the same symbol from being debated repeatedly in one session. Short selling is enabled (`SHORT_SELLING_ENABLED=True`): a SELL signal with no open long executes a short sale with ATR-based stop/target, full debate + fundamentals gate, and 1:2 minimum R/R. SHORT debate gate: bull must raise **4+ concrete fundamental/macro reasons** to block the trade (LONG path remains at 2+ bear objections). **Active short exit**: every swing cycle checks open shorts for thesis reversal (RSI < 55 AND MACD crosses above signal) — if both true, cancels OCO and covers at market immediately. The Discovery Engine uses the same 250-symbol universe from `active_tickers`. All positions use EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly sizing, and a 15-gate risk chain. Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy.
+A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. The swing screener runs every 5 minutes during market hours (9:30 AM–4:00 PM EDT, Mon–Fri) across up to 250 symbols pulled by volume from the `active_tickers` PostgreSQL table (6 priority symbols — JPM, SPY, COST, BRK.B, PG, V — always included). Per-symbol 4-hour cooldown is set the moment a signal enters the protection stack (debate gate), not on trade execution — this prevents the same symbol from being debated repeatedly in one session. Short selling is enabled (`SHORT_SELLING_ENABLED=True`): a SELL signal with no open long executes a short sale with ATR-based stop/target, full debate + fundamentals gate, and 1:2 minimum R/R. SHORT debate gate: bull must raise **4+ concrete fundamental/macro reasons** to block the trade (LONG path remains at 2+ bear objections). **Active short exit**: every swing cycle checks open shorts for thesis reversal (RSI < 55 AND MACD crosses above signal) — if both true, cancels OCO and covers at market immediately. The Discovery Engine uses the same 250-symbol universe from `active_tickers`. All positions use EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly sizing, and a 15-gate risk chain. Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy.
 
 **Signal conditions (swing_strategy.py):**
 - LONG: EMA50 > EMA200 AND MACD above signal within last 3 bars AND RSI in [35, 65] AND Kalman noise < 0.4 AND Hurst H ≥ 0.55
@@ -55,6 +55,7 @@ A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. T
 | `discovery/discovery_engine.py` | v1 — 243-combo EMA/RSI grid; scipy t-test → permutation gate; writes `strategy_results` |
 | `discovery/permutation_framework.py` | Masters 4-step MCPT validation; position-vector backtest + bar permutation; **regime-aware** per-regime MCPT; writes `validated_strategies` |
 | `discovery/regime_classifier.py` | 4-regime classifier (BULL_TREND/BEAR_TREND/HIGH_VOL/CHOPPY); `classify_regime()`, `get_current_regime()` (4h cache); SPY-only fallback when VIX missing |
+| `discovery/decay_monitor.py` | `StrategyDecayMonitor` — live vs backtested Sharpe decay detection; 4 response tiers; writes `strategy_decay_status` + `revalidation_queue` |
 | `discovery/discovery_engine_v2.py` | v2 — 5 strategy families; top-100 S&P 500; writes `discovery_results` JSONB |
 | `discovery/regime_adapter.py` | Returns best approved strategy per symbol + SPY regime |
 | `discovery/genetic_engine.py` | Genetic programming; 50-pop × 20-gen; IC fitness; graduates IC > 0.05 |
@@ -73,6 +74,9 @@ A Python asyncio trading bot running 24/7 on Railway with 21 concurrent loops. T
 - `discovery_results` — Discovery Engine v2 multi-strategy JSONB results; approval via dashboard
 - `validated_strategies` — strategies that cleared the permutation framework; stores IS/WF p-values, scores, params, and **per-regime validity** (`valid_bull_trend`, `valid_bear_trend`, `valid_high_vol`, `valid_choppy`, `best_regime`, `regime_sharpes` JSONB); authoritative "genuine edge" record consulted by the live regime gate
 - `signal_outcomes.regime_class` — 4-regime label captured at signal time (added via `ALTER TABLE IF NOT EXISTS`); powers the weekly regime performance breakdown
+- `signal_outcomes.decay_multiplier` — decay-monitor position multiplier applied to each trade (audit trail)
+- `strategy_decay_status` — per `(signal_type, symbol)` decay state: `decay_ratio`, `status`, `position_multiplier`, `consecutive_signals_below`, `re_validation_requested`, `disabled`
+- `revalidation_queue` — decay/manual re-validation requests (`status` pending/running/complete/failed); processed first by the Discovery Engine
 
 ---
 
@@ -115,6 +119,29 @@ Config: `REGIME_HIGH_VOL_VIX`, `REGIME_BULL_VIX_MAX`, `REGIME_BEAR_VIX_MIN`, `RE
 
 ---
 
+## Strategy Decay Monitoring (Loop 22)
+
+Detects validated strategies that stop working live and throttles/disables them before serious damage (`discovery/decay_monitor.py`, `StrategyDecayMonitor`). Keyed by `(signal_type, symbol)` — the granularity `signal_outcomes` records.
+
+- **Live performance**: live Sharpe / profit factor / win rate from the last 30 closed signals (`DECAY_LOOKBACK_SIGNALS`). **Minimum 30 closed signals (`DECAY_MIN_SIGNALS`) before any action** — never penalize thin data. Live Sharpe is per-trade, annualized by observed trade frequency (so it's comparable to the backtested annualized Sharpe) and capped at ±50 to survive degenerate near-identical-return data.
+- **Backtested baseline**: from `validated_strategies` (regime-specific Sharpe for the current regime, else overall). No baseline → not penalized unless live Sharpe is negative.
+- **Decay ratio** = live Sharpe / backtested Sharpe.
+
+**Response tiers** (`apply_decay_response`): 
+
+| Status | Trigger | Action |
+|---|---|---|
+| HEALTHY | ratio ≥ 0.8 | 1.0× — no action |
+| DEGRADED | 0.5 ≤ ratio < 0.8 | 0.5× size, Slack warning |
+| DECAYING | ratio < 0.5 (≥30 signals) | 0.25× size + re-validation request, urgent Slack |
+| CRITICAL | negative live Sharpe (≥15 recent signals) | disable + cancel/close positions + re-validation + PagerDuty (via `notify_alert` level CRITICAL) |
+
+CRITICAL is scale-robust (negative-Sharpe sign survives annualization) and overrides the ratio bands. `decay_monitor_loop` runs every 6h (`DECAY_LOOP_INTERVAL_SECONDS`), writes `strategy_decay_status`, and refreshes a gating cache. In `_process_symbol`: `disabled=True` skips the symbol; `position_multiplier < 1.0` stacks onto the multiplier chain with a 0.1× floor (`DECAY_MULTIPLIER_FLOOR`); the applied multiplier is logged to `signal_outcomes.decay_multiplier`. Fail-open throughout (any error logs a traceback and trading continues). Re-validation requests are processed first by the Discovery Engine `run()`, which resets decay status to HEALTHY on a successful re-promotion. Dashboard tab "🩺 Decay" shows color-coded status with Re-validate / Disable / Reset overrides; the Sunday digest adds a tier-count + queue-depth summary.
+
+Config: `DECAY_MONITOR_ENABLED`, `DECAY_MIN_SIGNALS`, `DECAY_CRITICAL_MIN_SIGNALS`, `DECAY_LOOKBACK_SIGNALS`, `DECAY_HEALTHY_RATIO`, `DECAY_DEGRADED_RATIO`, `DECAY_DEGRADED_MULT`, `DECAY_DECAYING_MULT`, `DECAY_MULTIPLIER_FLOOR`, `DECAY_LOOP_INTERVAL_SECONDS`, `DECAY_CACHE_SECONDS`.
+
+---
+
 ## Critical Environment Variables
 
 **Required:** `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ALPACA_BASE_URL`, `ANTHROPIC_API_KEY`, `FINNHUB_API_KEY`, `SLACK_ALERTS_WEBHOOK`, `SLACK_DECISIONS_WEBHOOK`, `SLACK_PERFORMANCE_WEBHOOK`, `SLACK_HEALTH_WEBHOOK`, `DATABASE_URL`
@@ -125,7 +152,7 @@ Config: `REGIME_HIGH_VOL_VIX`, `REGIME_BULL_VIX_MAX`, `REGIME_BEAR_VIX_MIN`, `RE
 
 ---
 
-## 21 Async Loops
+## 22 Async Loops
 
 | # | Method | Status |
 |---|---|---|
@@ -150,6 +177,7 @@ Config: `REGIME_HIGH_VOL_VIX`, `REGIME_BULL_VIX_MAX`, `REGIME_BEAR_VIX_MIN`, `RE
 | 19 | `webull_loop` | **Disabled** (417 error) |
 | 20 | `indicator_discovery_loop` | Active |
 | 21 | `grok_sentiment_loop` | Active (requires `XAI_API_KEY`) |
+| 22 | `decay_monitor_loop` | Active (`DECAY_MONITOR_ENABLED`, 6h cadence) |
 
 ---
 

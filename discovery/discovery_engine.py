@@ -21,6 +21,11 @@ from discovery.permutation_framework import (
     validate_strategy_edge_regime_aware,
 )
 from discovery.regime_classifier import CHOPPY, classify_regime, realized_vol_proxy
+from discovery.decay_monitor import (
+    fetch_pending_revalidations,
+    mark_revalidation,
+    reset_decay_status,
+)
 
 PARAM_GRID = {
     "ema_short":     [20, 30, 50],
@@ -479,6 +484,56 @@ class DiscoveryEngine:
         except Exception as e:
             print(f"[DiscoveryEngine] Slack error: {e}")
 
+    def _process_revalidation_queue(self, spy_regime_df) -> None:
+        """
+        Process pending decay-driven re-validation requests before the full scan.
+        Each request re-runs the regime-aware permutation gate for its symbol; on
+        a promotion the strategy's decay status is reset to HEALTHY. Sync — call
+        via asyncio.to_thread. Fail-open per request (one failure never blocks the
+        rest of the queue or the weekly scan).
+        """
+        from sqlalchemy import create_engine
+        import traceback as _tb
+        if not Config.DATABASE_URL:
+            return
+        engine = None
+        try:
+            engine = create_engine(Config.DATABASE_URL, pool_pre_ping=True)
+            pending = fetch_pending_revalidations(engine)
+            if not pending:
+                return
+            print(f"[Discovery] Processing {len(pending)} pending re-validation request(s) before weekly scan")
+            for req in pending:
+                sym, sname, rid = req["symbol"], req["strategy_name"], req["id"]
+                mark_revalidation(engine, rid, "running")
+                try:
+                    bars = _load_bars(sym, self._data_client)
+                    if bars is None or bars.empty:
+                        print(f"[Discovery] Re-validation {sym}: no bars — marking failed")
+                        mark_revalidation(engine, rid, "failed")
+                        continue
+                    regime_series = self._regime_series_for(spy_regime_df, bars)
+                    result = validate_strategy_edge_regime_aware(
+                        SwingPositionStrategy, {}, sym, bars, regime_series
+                    )
+                    mark_revalidation(engine, rid, "complete")
+                    if result.get("promoted"):
+                        reset_decay_status(engine, sname, sym)
+                        print(f"[Discovery] Re-validation {sym} {sname} — re-promoted, decay reset")
+                    else:
+                        print(f"[Discovery] Re-validation {sym} {sname} — still no edge ({result.get('reason')})")
+                except Exception:
+                    print(f"[Discovery] Re-validation {sym} raised:\n{_tb.format_exc()}")
+                    mark_revalidation(engine, rid, "failed")
+        except Exception:
+            print(f"[Discovery] Re-validation queue processing failed:\n{_tb.format_exc()}")
+        finally:
+            if engine is not None:
+                try:
+                    engine.dispose()
+                except Exception:
+                    pass
+
     def _regime_series_for(self, spy_regime_df, symbol_bars):
         """
         Align SPY regime labels to a symbol's bar index (forward-filled by date).
@@ -585,6 +640,13 @@ class DiscoveryEngine:
         except Exception as e:
             import traceback as _tb
             print(f"[DiscoveryEngine] SPY regime computation failed — regime gate disabled: {e}\n{_tb.format_exc()}")
+
+        # Decay-driven re-validation requests are validated first, before the scan.
+        try:
+            await asyncio.to_thread(self._process_revalidation_queue, spy_regime_df)
+        except Exception as e:
+            import traceback as _tb
+            print(f"[DiscoveryEngine] re-validation queue step failed (non-fatal): {e}\n{_tb.format_exc()}")
 
         validated_total = 0
         processed_total = 0

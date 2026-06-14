@@ -480,6 +480,65 @@ def _approve_strategy(row_id: int) -> bool:
         return False
 
 
+@st.cache_data(ttl=120)
+def fetch_decay_status() -> "pd.DataFrame | None":
+    """All rows from strategy_decay_status, ranked by severity."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(text("""
+                SELECT strategy_name, symbol, decay_ratio, status, position_multiplier,
+                       consecutive_signals_below, re_validation_requested, disabled, last_checked
+                FROM strategy_decay_status
+            """), conn)
+        if df.empty:
+            return df
+        severity = {"CRITICAL": 0, "DECAYING": 1, "DEGRADED": 2, "HEALTHY": 3}
+        df["_sev"] = df["status"].map(lambda s: severity.get(s, 9))
+        df = df.sort_values(["_sev", "decay_ratio"], na_position="last").drop(columns=["_sev"])
+        return df
+    except Exception as e:
+        st.error(f"Decay status query failed: {e}")
+        return None
+
+
+def _decay_action(strategy_name: str, symbol: str, action: str) -> bool:
+    """Manual override: 're-validate', 'disable', or 'reset'. Not cached."""
+    engine = _get_engine()
+    if engine is None:
+        return False
+    try:
+        with engine.begin() as conn:
+            if action == "disable":
+                conn.execute(text("""
+                    UPDATE strategy_decay_status
+                    SET disabled=TRUE, status='CRITICAL', position_multiplier=0.0, last_checked=NOW()
+                    WHERE strategy_name=:s AND symbol=:sym
+                """), {"s": strategy_name, "sym": symbol})
+            elif action == "reset":
+                conn.execute(text("""
+                    UPDATE strategy_decay_status
+                    SET disabled=FALSE, status='HEALTHY', position_multiplier=1.0,
+                        re_validation_requested=FALSE, consecutive_signals_below=0, last_checked=NOW()
+                    WHERE strategy_name=:s AND symbol=:sym
+                """), {"s": strategy_name, "sym": symbol})
+            elif action == "re-validate":
+                conn.execute(text("""
+                    INSERT INTO revalidation_queue (strategy_name, symbol, reason, status)
+                    VALUES (:s, :sym, 'manual', 'pending')
+                """), {"s": strategy_name, "sym": symbol})
+                conn.execute(text("""
+                    UPDATE strategy_decay_status SET re_validation_requested=TRUE
+                    WHERE strategy_name=:s AND symbol=:sym
+                """), {"s": strategy_name, "sym": symbol})
+        return True
+    except Exception as e:
+        st.error(f"Decay action '{action}' failed: {e}")
+        return False
+
+
 @st.cache_data(ttl=300)
 def fetch_golive_readiness() -> dict:
     """Computes all 5 go-live criteria from signal_outcomes and discovery tables."""
@@ -1356,7 +1415,7 @@ if _mobile_view:
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
 
-tab_account, tab_positions, tab_tradelog, tab_discovery, tab_analytics, tab_perf, tab_intel = st.tabs([
+tab_account, tab_positions, tab_tradelog, tab_discovery, tab_analytics, tab_perf, tab_intel, tab_decay = st.tabs([
     "💰 Account",
     "📊 Positions",
     "📋 Trade Log",
@@ -1364,6 +1423,7 @@ tab_account, tab_positions, tab_tradelog, tab_discovery, tab_analytics, tab_perf
     "📈 Analytics",
     "🧠 Performance",
     "📡 Signal Intel",
+    "🩺 Decay",
 ])
 
 # ── Tab 1: Account ─────────────────────────────────────────────────────────────
@@ -2300,3 +2360,75 @@ with tab_intel:
         )
     else:
         st.info("Correlation data unavailable — needs Alpaca bars for at least 2 symbols.")
+
+
+# ── Tab 8: Strategy Decay ──────────────────────────────────────────────────────
+
+with tab_decay:
+    st.header("🩺 Strategy Decay Monitor")
+    if not _db_available():
+        st.warning("DATABASE_URL is not configured — decay status unavailable.")
+    else:
+        df_decay = fetch_decay_status()
+        if df_decay is None or df_decay.empty:
+            st.info(
+                "No decay status yet. The decay monitor activates once a strategy/symbol "
+                "has at least 30 closed signals in signal_outcomes."
+            )
+        else:
+            counts = df_decay["status"].value_counts().to_dict()
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("🟢 Healthy",  counts.get("HEALTHY", 0))
+            c2.metric("🟡 Degraded", counts.get("DEGRADED", 0))
+            c3.metric("🟠 Decaying", counts.get("DECAYING", 0))
+            c4.metric("🔴 Critical", counts.get("CRITICAL", 0))
+
+            _decay_row_colors = {
+                "CRITICAL": "background-color: #5c1a1a",
+                "DECAYING": "background-color: #5c3a1a",
+                "DEGRADED": "background-color: #5c551a",
+                "HEALTHY":  "background-color: #1a5c2a",
+            }
+
+            def _decay_row_style(row):
+                return [_decay_row_colors.get(row["status"], "")] * len(row)
+
+            show_cols = [
+                "symbol", "strategy_name", "decay_ratio", "status", "position_multiplier",
+                "consecutive_signals_below", "re_validation_requested", "disabled", "last_checked",
+            ]
+            show_cols = [c for c in show_cols if c in df_decay.columns]
+            styled_decay = (
+                df_decay[show_cols].style
+                .apply(_decay_row_style, axis=1)
+                .format({"decay_ratio": "{:.2f}", "position_multiplier": "{:.2f}"}, na_rep="—")
+            )
+            st.dataframe(styled_decay, width="stretch", hide_index=True)
+            st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+            # ── Manual override controls ────────────────────────────────────────
+            st.markdown("---")
+            st.subheader("Manual Override")
+            _opts = [f"{r.symbol} / {r.strategy_name}" for r in df_decay.itertuples()]
+            sel = st.selectbox("Select strategy/symbol", _opts, key="decay_sel")
+            if sel:
+                sel_symbol, sel_strategy = [s.strip() for s in sel.split("/", 1)]
+                b1, b2, b3 = st.columns(3)
+                if b1.button("🔄 Re-validate now", key="decay_reval"):
+                    if _decay_action(sel_strategy, sel_symbol, "re-validate"):
+                        st.success(f"Re-validation queued for {sel_symbol} {sel_strategy}")
+                        st.cache_data.clear()
+                if b2.button("🛑 Disable strategy", key="decay_disable"):
+                    if _decay_action(sel_strategy, sel_symbol, "disable"):
+                        st.success(f"Disabled {sel_symbol} {sel_strategy}")
+                        st.cache_data.clear()
+                if b3.button("✅ Reset to healthy", key="decay_reset"):
+                    if _decay_action(sel_strategy, sel_symbol, "reset"):
+                        st.success(f"Reset {sel_symbol} {sel_strategy} to HEALTHY")
+                        st.cache_data.clear()
+
+            st.caption(
+                "Tiers: HEALTHY ≥0.8 (1.0×) · DEGRADED 0.5–0.8 (0.5×) · "
+                "DECAYING <0.5 (0.25× + re-validation) · CRITICAL negative live Sharpe "
+                "(disabled + positions closed + PagerDuty)."
+            )

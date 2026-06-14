@@ -67,6 +67,7 @@ from discovery.regime_adapter import apply_to_swing_strategy
 from discovery.regime_classifier import (
     classify_regime, BULL_TREND, BEAR_TREND, HIGH_VOL, CHOPPY,
 )
+from discovery.decay_monitor import StrategyDecayMonitor
 from discovery.grok_sentiment import refresh_grok_sentiment, get_grok_sentiment
 from utils import get_historical_bars, get_finnhub_price
 
@@ -402,6 +403,8 @@ class TradingBot:
         self._regime_cache = None             # (regime_str, timestamp)
         self._regime_class_cache = None       # 4-regime taxonomy: (regime_str, timestamp)
         self._current_regime_class = CHOPPY   # latest 4-regime label for entry logging
+        self._decay_monitor = StrategyDecayMonitor(engine=self._db_engine)
+        self._decay_status_map: dict = {}     # (signal_type, symbol) → {disabled, position_multiplier, status}
         self.daily_pnl = 0.0
         self.start_of_day_equity = 0.0
         self.last_pnl_reset_date = datetime.now(pytz.timezone('America/New_York')).date()
@@ -603,6 +606,10 @@ class TradingBot:
                 conn.execute(sql_text(
                     "ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS regime_class VARCHAR(20)"
                 ))
+                # Decay multiplier applied to this trade (audit trail for decay monitor).
+                conn.execute(sql_text(
+                    "ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS decay_multiplier FLOAT DEFAULT 1.0"
+                ))
                 count = conn.execute(sql_text("SELECT COUNT(*) FROM signal_outcomes")).scalar()
             _health_state["db_connected"] = True
             print(f"[DB] signal_outcomes table verified — {count} existing rows")
@@ -613,7 +620,8 @@ class TradingBot:
     def _log_trade_entry(self, symbol: str, signal_type: str, entry_price: float,
                           ema_short: int, ema_long: int, rsi_at_entry: float,
                           macd_at_entry: float, regime: str, entry_time,
-                          regime_class: str | None = None) -> int | None:
+                          regime_class: str | None = None,
+                          decay_multiplier: float = 1.0) -> int | None:
         if not self._db_engine:
             return None
         try:
@@ -621,16 +629,16 @@ class TradingBot:
                 result = conn.execute(sql_text("""
                     INSERT INTO signal_outcomes
                         (symbol, signal_type, entry_time, entry_price, ema_short, ema_long,
-                         rsi_at_entry, macd_at_entry, market_regime, regime_class)
+                         rsi_at_entry, macd_at_entry, market_regime, regime_class, decay_multiplier)
                     VALUES (:symbol, :signal_type, :entry_time, :entry_price, :ema_short, :ema_long,
-                            :rsi_at_entry, :macd_at_entry, :market_regime, :regime_class)
+                            :rsi_at_entry, :macd_at_entry, :market_regime, :regime_class, :decay_multiplier)
                     RETURNING id
                 """), {
                     "symbol": symbol, "signal_type": signal_type, "entry_time": entry_time,
                     "entry_price": float(entry_price), "ema_short": int(ema_short),
                     "ema_long": int(ema_long), "rsi_at_entry": float(rsi_at_entry),
                     "macd_at_entry": float(macd_at_entry), "market_regime": regime,
-                    "regime_class": regime_class,
+                    "regime_class": regime_class, "decay_multiplier": float(decay_multiplier),
                 })
                 row_id = result.fetchone()[0]
             print(f"[DB] Logged {signal_type} entry for {symbol} (row={row_id})")
@@ -856,6 +864,28 @@ class TradingBot:
         except Exception as e:
             print(f"[Regime] {symbol}: validated_strategies lookup failed — fail-open: {e}")
             return True, [], False
+
+    # ── Strategy decay gating (Loop 22 support) ───────────────────────────────
+
+    def _decay_key_for_strategy(self, strategy) -> str:
+        """Map a live strategy object to its signal_type — the decay-status key."""
+        disc_type = getattr(strategy, 'discovery_strategy_type', None)
+        if isinstance(strategy, (SwingStrategy, BollingerMeanReversionStrategy)) and disc_type:
+            return f"discovery_{disc_type}"
+        if isinstance(strategy, SwingStrategy):
+            return 'swing_long'
+        if isinstance(strategy, BollingerMeanReversionStrategy):
+            return 'swing_bb'
+        return 'scalp_long'
+
+    def _decay_adjustment(self, strategy, symbol: str) -> tuple[bool, float, str | None]:
+        """Return (disabled, position_multiplier, status) from the cached decay map."""
+        if not Config.DECAY_MONITOR_ENABLED:
+            return False, 1.0, None
+        info = self._decay_status_map.get((self._decay_key_for_strategy(strategy), symbol))
+        if not info:
+            return False, 1.0, None
+        return info["disabled"], float(info.get("position_multiplier", 1.0)), info.get("status")
 
     # ── Fundamentals check (Task 3) ───────────────────────────────────────────
 
@@ -1222,6 +1252,12 @@ class TradingBot:
             data.sort_index(inplace=True)
 
         for strategy in strategies:
+            # Decay gate: a strategy disabled by the decay monitor is skipped entirely.
+            _decay_disabled, _decay_mult, _decay_status = self._decay_adjustment(strategy, symbol)
+            if _decay_disabled:
+                print(f"[Decay] {symbol} {strategy.name} DISABLED — skipping")
+                continue
+
             print(f"Running strategy: {strategy.name} for {symbol}")
             if isinstance(strategy, SMBStrategy):
                 signal = strategy.generate_signals(data, self.stock_data_client)
@@ -1582,10 +1618,15 @@ class TradingBot:
                         earnings_mult   = getattr(strategy, 'earnings_override_multiplier', 1.0)
                         debate_mult     = getattr(strategy, 'debate_size_multiplier', 1.0)
                         confidence_mult = signal.get('confidence_multiplier', 1.0)
+                        # Decay multiplier stacks with the rest, floored at 0.1x.
+                        decay_mult = max(_decay_mult, Config.DECAY_MULTIPLIER_FLOOR) if _decay_mult < 1.0 else 1.0
+                        if decay_mult < 1.0:
+                            print(f"[Decay] {symbol} applying decay multiplier {decay_mult}x (status={_decay_status})")
                         scaled_risk_percent = (
                             risk_percent * self.risk_multiplier
                             * earnings_mult * vix_risk_mult * confidence_mult
                             * perf_mult * debate_mult * sentiment_mult * grok_mult
+                            * decay_mult
                         )
                         # Floor: no trade can go below 10% of normal size regardless of stacked multipliers
                         scaled_risk_percent = max(
@@ -1629,7 +1670,7 @@ class TradingBot:
                                 symbol, signal_type, float(signal.get('entry_price', 0)),
                                 getattr(strategy, 'ema_short', 50), getattr(strategy, 'ema_long', 200),
                                 float(signal.get('rsi_at_entry', 0)), float(signal.get('macd_at_entry', 0)),
-                                regime, entry_time, self._current_regime_class,
+                                regime, entry_time, self._current_regime_class, decay_mult,
                             )
                             if row_id:
                                 async with self._trade_ids_lock:
@@ -2343,8 +2384,17 @@ class TradingBot:
             except Exception as _re:
                 print(f"[PerfBrain] Regime breakdown query failed: {_re}")
 
+            # Strategy decay summary — tier counts + re-validation queue depth.
+            decay_summary = {}
+            try:
+                from discovery.decay_monitor import summarize_decay_status
+                decay_summary = summarize_decay_status(self._db_engine)
+            except Exception as _de:
+                print(f"[PerfBrain] Decay summary query failed: {_de}")
+
             return {
                 "regime_breakdown":  regime_breakdown,
+                "decay_summary":     decay_summary,
                 "total_trades":      total_trades,
                 "best_signal_type":  best_type,
                 "best_ev":           round(best_ev, 3)  if best_type  else None,
@@ -3881,6 +3931,81 @@ class TradingBot:
         )
         print("[Startup] ===================================")
 
+    async def _cancel_symbol_positions(self, symbol: str) -> None:
+        """Cancel open orders and close any open position for a symbol (CRITICAL decay)."""
+        import traceback as _tb
+        try:
+            try:
+                open_ords = await asyncio.to_thread(
+                    self.trading_client.get_orders,
+                    GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol]),
+                )
+                for o in open_ords:
+                    await asyncio.to_thread(self.trading_client.cancel_order_by_id, o.id)
+                if open_ords:
+                    print(f"[Decay] {symbol}: cancelled {len(open_ords)} open order(s)")
+            except Exception as _oe:
+                print(f"[Decay] {symbol}: order cancel failed (non-fatal) — {_oe}")
+            try:
+                await asyncio.to_thread(self.trading_client.get_open_position, symbol)
+            except Exception:
+                return  # no open position to close
+            await asyncio.to_thread(self.trading_client.close_position, symbol)
+            print(f"[Decay] {symbol}: position closed due to CRITICAL decay")
+        except Exception:
+            print(f"[Decay] {symbol}: cancel positions failed:\n{_tb.format_exc()}")
+
+    async def decay_monitor_loop(self):
+        """
+        Loop 22 — every 6 hours, scan every strategy/symbol with >= 30 closed
+        signals for decay and apply the tiered response (size cut / re-validation /
+        disable + close). Fail-open: any exception logs a full traceback and the
+        loop continues. The gating cache is refreshed each run for _process_symbol.
+        """
+        print("🩺 Starting Strategy Decay Monitor Loop (Loop 22 — 6h cadence)...")
+        # Prime the gating cache at startup so disabled strategies are blocked
+        # before the first scan completes.
+        try:
+            self._decay_status_map = await asyncio.to_thread(self._decay_monitor.load_status_map)
+            print(f"[Decay] Loaded {len(self._decay_status_map)} decay status entries at startup")
+        except Exception as _le:
+            print(f"[Decay] startup status load failed (non-fatal): {_le}")
+
+        while True:
+            try:
+                if not Config.DECAY_MONITOR_ENABLED:
+                    await asyncio.sleep(Config.DECAY_LOOP_INTERVAL_SECONDS)
+                    continue
+
+                current_regime = await self._get_current_regime_class()
+                results = await asyncio.to_thread(
+                    self._decay_monitor.get_decay_status_all_strategies, current_regime, False
+                )
+                print(f"[Decay] Scan complete — {len(results)} combo(s) with >= {Config.DECAY_MIN_SIGNALS} signals")
+
+                for r in results:
+                    try:
+                        action = await asyncio.to_thread(
+                            self._decay_monitor.apply_decay_response,
+                            r["strategy_name"], r["symbol"], r,
+                        )
+                        if action.get("notify"):
+                            msg, level = action["notify"]
+                            asyncio.create_task(notifications.notify_alert(msg, level=level))
+                        if action.get("cancel_positions"):
+                            await self._cancel_symbol_positions(r["symbol"])
+                    except Exception:
+                        import traceback as _tb
+                        print(f"[Decay] response failed for {r.get('symbol')}/{r.get('strategy_name')}:\n{_tb.format_exc()}")
+
+                # Refresh the gating cache used by _process_symbol.
+                self._decay_status_map = await asyncio.to_thread(self._decay_monitor.load_status_map)
+            except Exception:
+                import traceback as _tb
+                print(f"[Decay] monitor loop error (fail-open):\n{_tb.format_exc()}")
+
+            await asyncio.sleep(Config.DECAY_LOOP_INTERVAL_SECONDS)
+
     async def start_dual_engine(self):
         print("🚀 Hybrid Trading Bot starting...")
 
@@ -4008,6 +4133,7 @@ class TradingBot:
             self.webull_loop(),
             self.indicator_discovery_loop(),
             self.grok_sentiment_loop(),
+            self.decay_monitor_loop(),
         )
 
 if __name__ == "__main__":

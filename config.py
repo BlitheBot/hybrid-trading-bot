@@ -176,3 +176,16 @@ class Config:
     REGIME_CACHE_SECONDS = 14400    # live regime cache TTL (4 hours)
     REGIME_MIN_BARS = 50            # min bars in a regime to score / validate it
     REGIME_GATING_ENABLED = os.getenv("REGIME_GATING_ENABLED", "true").lower() != "false"
+
+    # Strategy decay monitoring — detects validated strategies that stop working live
+    DECAY_MONITOR_ENABLED = os.getenv("DECAY_MONITOR_ENABLED", "true").lower() != "false"
+    DECAY_MIN_SIGNALS = 30          # min closed signals before any decay action (never penalize thin data)
+    DECAY_CRITICAL_MIN_SIGNALS = 15 # min recent signals for the negative-Sharpe critical check
+    DECAY_LOOKBACK_SIGNALS = 30     # window of recent closed signals analyzed
+    DECAY_HEALTHY_RATIO = 0.8       # ratio >= this => HEALTHY (1.0x)
+    DECAY_DEGRADED_RATIO = 0.5      # ratio in [0.5, 0.8) => DEGRADED (0.5x)
+    DECAY_DEGRADED_MULT = 0.5       # DEGRADED position multiplier
+    DECAY_DECAYING_MULT = 0.25      # DECAYING position multiplier
+    DECAY_MULTIPLIER_FLOOR = 0.1    # floor applied when stacking decay multiplier
+    DECAY_LOOP_INTERVAL_SECONDS = 21600   # decay monitor loop cadence (6 hours)
+    DECAY_CACHE_SECONDS = 3600      # get_decay_status_all_strategies cache TTL (1 hour)
