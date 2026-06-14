@@ -77,10 +77,13 @@ A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. T
 - `signal_outcomes.decay_multiplier` — decay-monitor position multiplier applied to each trade (audit trail)
 - `strategy_decay_status` — per `(signal_type, symbol)` decay state: `decay_ratio`, `status`, `position_multiplier`, `consecutive_signals_below`, `re_validation_requested`, `disabled`
 - `revalidation_queue` — decay/manual re-validation requests (`status` pending/running/complete/failed); `discovery_version` ('v1'/'v2', default 'v2') marks which engine owns each request. v1 grid-search engine processes only `discovery_version='v1'`; v2 (regime-aware, live) re-validates the full universe on its weekly Friday run rather than draining this queue
+- `data_partitions` — per-symbol 70/15/15 train/val/holdout boundary dates (Task 2 out-of-sample integrity wall); one row per symbol, upserted at Discovery Engine startup
 
 ---
 
 ## Strategy Validation Pipeline (Discovery Engine v1)
+
+**Out-of-sample integrity wall (Task 2):** `discovery/data_partitioner.py` `DataPartitioner` splits each symbol's bars 70% train / 15% validation / 15% **holdout**. Guarded accessors raise `PartitionViolation` (a `ValueError`): `get_training()` is always allowed, `get_validation()` needs `unlock_validation()`, `get_holdout()` needs `unlock_holdout(reason=...)` (reserved until a live-deploy decision). The Discovery Engine calls `get_non_holdout()` (train+val) so the holdout never enters optimization/validation; boundaries log at startup (`[Partition] {symbol} train=…→… val=…→… holdout=…→…`) and persist to the `data_partitions` table. Unit tests: `discovery/test_data_partitioner.py`.
 
 Every parameter combo passes through **two mandatory gates** before being marked `validated`:
 

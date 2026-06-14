@@ -21,6 +21,7 @@ from discovery.permutation_framework import (
     validate_strategy_edge_regime_aware,
 )
 from discovery.regime_classifier import CHOPPY, classify_regime, realized_vol_proxy
+from discovery.data_partitioner import DataPartitioner, PartitionViolation
 from discovery.decay_monitor import (
     fetch_pending_revalidations,
     mark_revalidation,
@@ -514,6 +515,13 @@ class DiscoveryEngine:
                         print(f"[Discovery] Re-validation {sym}: no bars — marking failed")
                         mark_revalidation(engine, rid, "failed")
                         continue
+                    # Same holdout wall (Task 2) so re-validation never sees holdout.
+                    try:
+                        part = DataPartitioner(bars, sym)
+                        part.log_boundaries()
+                        bars = part.get_non_holdout()
+                    except (ValueError, PartitionViolation) as e:
+                        print(f"[Partition] {sym}: partitioning failed ({e}) — using full series")
                     regime_series = self._regime_series_for(spy_regime_df, bars)
                     result = validate_strategy_edge_regime_aware(
                         SwingPositionStrategy, {}, sym, bars, regime_series
@@ -665,7 +673,19 @@ class DiscoveryEngine:
                 print(f"[DiscoveryEngine] {symbol}: no data, skipping")
                 continue
 
-            print(f"[DiscoveryEngine] {symbol}: {len(bars)} bars. Running {total_combos} combos...")
+            # Out-of-sample integrity wall (Task 2): reserve the final 15% holdout —
+            # optimization and validation run only on the train+val (non-holdout)
+            # region. Boundaries are logged + persisted before any optimization.
+            try:
+                partitioner = DataPartitioner(bars, symbol)
+                partitioner.log_boundaries()
+                if db_conn:
+                    partitioner.persist(db_conn)
+                bars = partitioner.get_non_holdout()
+            except (ValueError, PartitionViolation) as e:
+                print(f"[Partition] {symbol}: partitioning failed ({e}) — using full series")
+
+            print(f"[DiscoveryEngine] {symbol}: {len(bars)} bars (holdout reserved). Running {total_combos} combos...")
             symbol_validated = 0
             ttest_passers: list[dict] = []   # combos that clear the SciPy t-test gate
 
