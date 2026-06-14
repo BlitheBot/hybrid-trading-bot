@@ -42,6 +42,7 @@ from __future__ import annotations
 import itertools
 import os
 import traceback
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -57,6 +58,120 @@ REPORTS_DIR = Path(__file__).parent / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 _TRADING_DAYS = 252
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Transaction cost model (Task 1)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class CostModel:
+    """Per-bar transaction cost rates as plain fractions of notional.
+
+    Frozen + module-level so instances pickle cleanly into spawned MCPT workers.
+
+    - ``spread_per_side`` / ``impact_per_side``: deducted on every unit of position
+      turnover (a flat→long entry and a long→flat exit each cost one side).
+    - ``borrow_daily``: deducted each bar a short position is held (annual rate / 252).
+    """
+    spread_per_side: float = 0.0
+    impact_per_side: float = 0.0
+    borrow_daily: float = 0.0
+
+    @property
+    def per_turnover(self) -> float:
+        return self.spread_per_side + self.impact_per_side
+
+
+# A no-cost model used wherever costs are disabled — keeps scoring identical to
+# the pre-Task-1 behaviour when COST_MODELING_ENABLED is false.
+ZERO_COST = CostModel()
+
+
+def _classify_spread(dollar_volume: float) -> float:
+    """Per-side spread cost from average daily dollar volume."""
+    if dollar_volume > Config.COST_LIQUID_DOLLAR_VOLUME:
+        return Config.COST_SPREAD_LIQUID_PCT
+    return Config.COST_SPREAD_ILLIQUID_PCT
+
+
+def _classify_impact(adv_fraction: float) -> float:
+    """Per-side market-impact cost from order size as a fraction of ADV."""
+    if adv_fraction < 0.001:
+        return Config.COST_IMPACT_SMALL_PCT
+    if adv_fraction <= 0.005:
+        return Config.COST_IMPACT_MEDIUM_PCT
+    return Config.COST_IMPACT_LARGE_PCT
+
+
+def build_cost_model(df: pd.DataFrame, *, hard_to_borrow: bool | None = None) -> CostModel:
+    """Construct a :class:`CostModel` for one symbol from its OHLCV bars.
+
+    Dollar volume is the median of close*volume over the available bars (median
+    is robust to spikes). Returns :data:`ZERO_COST` when cost modeling is disabled
+    so callers never special-case it.
+    """
+    if not Config.COST_MODELING_ENABLED:
+        return ZERO_COST
+
+    dollar_volume = 0.0
+    try:
+        if "volume" in df.columns:
+            dv = (df["close"].to_numpy(dtype=float) * df["volume"].to_numpy(dtype=float))
+            dv = dv[np.isfinite(dv)]
+            if dv.size:
+                dollar_volume = float(np.median(dv))
+    except (KeyError, ValueError, TypeError):
+        # No usable volume column — fall back to the illiquid (conservative) tier.
+        dollar_volume = 0.0
+
+    spread = _classify_spread(dollar_volume)
+    impact = _classify_impact(Config.COST_ADV_FRACTION)
+    htb = Config.COST_HARD_TO_BORROW if hard_to_borrow is None else hard_to_borrow
+    borrow_annual = Config.COST_BORROW_HARD_ANNUAL if htb else Config.COST_BORROW_EASY_ANNUAL
+    return CostModel(
+        spread_per_side=spread,
+        impact_per_side=impact,
+        borrow_daily=borrow_annual / _TRADING_DAYS,
+    )
+
+
+def _per_bar_cost_array(position_vector: np.ndarray, cost: CostModel) -> np.ndarray:
+    """Per-bar cost drag aligned to the strategy-return vector (length n-1).
+
+    Cost at entry-bar ``t`` covers turnover establishing ``pos[t]`` plus borrow on a
+    short held into ``t+1``. Index 0 treats the prior position as flat (initial entry).
+    """
+    pos = np.asarray(position_vector, dtype=float)
+    n = pos.size
+    if n < 2:
+        return np.zeros(max(n - 1, 0), dtype=float)
+    prev = np.concatenate(([0.0], pos[:-1]))           # pos[t-1], flat before bar 0
+    turnover = np.abs(pos - prev)                       # units traded at bar t
+    trade_cost = turnover * cost.per_turnover
+    borrow = np.where(pos < 0.0, cost.borrow_daily, 0.0)
+    return (trade_cost + borrow)[:-1]                   # align to strategy_returns
+
+
+def cost_breakdown(position_vector: np.ndarray, cost: CostModel,
+                   mask: np.ndarray | None = None) -> tuple[float, float, float]:
+    """Total (spread, impact, borrow) cost drag over the (optionally masked) path."""
+    pos = np.asarray(position_vector, dtype=float)
+    n = pos.size
+    if n < 2:
+        return 0.0, 0.0, 0.0
+    prev = np.concatenate(([0.0], pos[:-1]))
+    turnover = np.abs(pos - prev)[:-1]
+    borrow = np.where(pos < 0.0, cost.borrow_daily, 0.0)[:-1]
+    if mask is not None:
+        m = np.asarray(mask, dtype=bool)[:n][:-1]
+        turnover = turnover[m]
+        borrow = borrow[m]
+    return (
+        float(turnover.sum() * cost.spread_per_side),
+        float(turnover.sum() * cost.impact_per_side),
+        float(borrow.sum()),
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -110,6 +225,7 @@ def calculate_objective_score(
     returns: np.ndarray,
     method: str = "sharpe",
     mask: np.ndarray | None = None,
+    cost: CostModel | None = None,
 ) -> float:
     """
     The single scoring function used everywhere in the framework.
@@ -121,6 +237,9 @@ def calculate_objective_score(
     ``mask`` (optional, aligned to ``position_vector``) restricts scoring to bars
     where the mask is True — used for regime-specific scoring. The position bar t
     determines inclusion (a position held during regime R is scored under R).
+
+    ``cost`` (optional) deducts per-bar transaction costs (spread + impact on
+    turnover, borrow on shorts) before scoring, so the score is net of costs.
     """
     pos = np.asarray(position_vector, dtype=float)
     ret = np.asarray(returns, dtype=float)
@@ -131,6 +250,8 @@ def calculate_objective_score(
     ret = ret[:n]
     # S_t * R_{t+1}: drop the final position (no t+1 return for it).
     strategy_returns = pos[:-1] * ret[1:]
+    if cost is not None:
+        strategy_returns = strategy_returns - _per_bar_cost_array(pos, cost)
     if mask is not None:
         m = np.asarray(mask, dtype=bool)[:n][:-1]
         strategy_returns = strategy_returns[m]
@@ -363,10 +484,12 @@ def get_permutation(data, start_index: int = 0, seed: int | None = None):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _optimize_score(strategy, grid: list[dict], df: pd.DataFrame, method: str,
-                    mask: np.ndarray | None = None) -> tuple[float, dict]:
+                    mask: np.ndarray | None = None,
+                    cost: CostModel | None = None) -> tuple[float, dict]:
     """Best objective score (and params) across the grid for one path.
 
     ``mask`` (aligned to ``df``) restricts scoring to a regime's bars.
+    ``cost`` (optional) makes the optimization net of transaction costs.
     """
     returns = calculate_log_returns(df["close"].to_numpy())
     best_score = -np.inf
@@ -377,7 +500,7 @@ def _optimize_score(strategy, grid: list[dict], df: pd.DataFrame, method: str,
         except Exception:
             print(f"[Permutation] position_vector failed for {params}:\n{traceback.format_exc()}")
             continue
-        score = calculate_objective_score(pos, returns, method, mask=mask)
+        score = calculate_objective_score(pos, returns, method, mask=mask, cost=cost)
         if score > best_score:
             best_score = score
             best_params = params
@@ -394,6 +517,7 @@ def _walk_forward_score(
     test_window: int,
     method: str,
     mask: np.ndarray | None = None,
+    cost: CostModel | None = None,
 ) -> float:
     """
     Rolling walk-forward: optimize on each train window, apply best params to the
@@ -412,7 +536,7 @@ def _walk_forward_score(
     while start + train_window + test_window <= n:
         train_mask = None if mask_arr is None else mask_arr[start:start + train_window]
         train = df.iloc[start:start + train_window]
-        _, best_params = _optimize_score(strategy, grid, train, method, mask=train_mask)
+        _, best_params = _optimize_score(strategy, grid, train, method, mask=train_mask, cost=cost)
         if not best_params:
             start += test_window
             continue
@@ -426,6 +550,8 @@ def _walk_forward_score(
         test_ret = calculate_log_returns(test["close"].to_numpy())
         if pos.size >= 2:
             strat_ret = pos[:-1] * test_ret[1:]
+            if cost is not None:
+                strat_ret = strat_ret - _per_bar_cost_array(pos, cost)
             if mask_arr is not None:
                 tm = mask_arr[start + train_window:start + train_window + test_window][:pos.size][:-1]
                 strat_ret = strat_ret[tm]
@@ -442,12 +568,12 @@ def _walk_forward_score(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _insample_worker(payload: tuple) -> float:
-    iteration, base_seed, df, grid, method, strat_name, mask = payload
+    iteration, base_seed, df, grid, method, strat_name, mask, cost = payload
     seed = base_seed + iteration
     try:
         strategy = _STRATEGY_REGISTRY[strat_name]()
         perm = get_permutation(df, start_index=0, seed=seed)
-        score, _ = _optimize_score(strategy, grid, perm, method, mask=mask)
+        score, _ = _optimize_score(strategy, grid, perm, method, mask=mask, cost=cost)
         return float(score)
     except Exception:
         print(f"[Permutation] in-sample worker {iteration} failed:\n{traceback.format_exc()}")
@@ -455,12 +581,12 @@ def _insample_worker(payload: tuple) -> float:
 
 
 def _walkforward_worker(payload: tuple) -> float:
-    iteration, base_seed, df, grid, method, strat_name, train_window, test_window, mask = payload
+    iteration, base_seed, df, grid, method, strat_name, train_window, test_window, mask, cost = payload
     seed = base_seed + iteration
     try:
         strategy = _STRATEGY_REGISTRY[strat_name]()
         perm = get_permutation(df, start_index=train_window, seed=seed)
-        score = _walk_forward_score(strategy, grid, perm, train_window, test_window, method, mask=mask)
+        score = _walk_forward_score(strategy, grid, perm, train_window, test_window, method, mask=mask, cost=cost)
         return float(score)
     except Exception:
         print(f"[Permutation] walk-forward worker {iteration} failed:\n{traceback.format_exc()}")
@@ -533,6 +659,7 @@ def run_insample_permutation_test(
     base_seed: int = 1_000,
     mask: np.ndarray | None = None,
     regime_label: str = "",
+    cost: CostModel | None = None,
 ) -> tuple[bool, float, float]:
     """
     Returns (passed, p_value, real_score).
@@ -542,21 +669,21 @@ def run_insample_permutation_test(
     Passes when p <= Config.PERMUTATION_P_THRESHOLD.
 
     ``mask`` restricts scoring to a regime's bars; ``regime_label`` tags the logs
-    and report filename.
+    and report filename. ``cost`` makes real + permuted scoring net of costs.
     """
     method = method or Config.PERMUTATION_OBJECTIVE
     strategy = strategy_class()
     grid = strategy.param_grid()
     tag = f"{symbol}/{regime_label}" if regime_label else symbol
 
-    real_score, real_params = _optimize_score(strategy, grid, insample_data, method, mask=mask)
+    real_score, real_params = _optimize_score(strategy, grid, insample_data, method, mask=mask, cost=cost)
     print(
         f"[Permutation] {tag} in-sample baseline {method}={real_score:.4f} "
         f"params={real_params}"
     )
 
     payloads = [
-        (i, base_seed, insample_data, grid, method, strategy.name, mask)
+        (i, base_seed, insample_data, grid, method, strategy.name, mask, cost)
         for i in range(n_iterations)
     ]
     raw = _run_parallel(_insample_worker, payloads)
@@ -603,6 +730,7 @@ def run_walkforward_permutation_test(
     base_seed: int = 5_000,
     mask: np.ndarray | None = None,
     regime_label: str = "",
+    cost: CostModel | None = None,
 ) -> tuple[bool, float, float]:
     """
     Returns (passed, p_value, real_score).
@@ -612,18 +740,18 @@ def run_walkforward_permutation_test(
     p = count(WF_perm >= WF_real) / N. Passes when p <= the configured threshold.
 
     ``mask`` restricts out-of-sample scoring to a regime's bars; ``regime_label``
-    tags logs and the report filename.
+    tags logs and the report filename. ``cost`` makes scoring net of costs.
     """
     method = method or Config.PERMUTATION_OBJECTIVE
     strategy = strategy_class()
     grid = strategy.param_grid()
     tag = f"{symbol}/{regime_label}" if regime_label else symbol
 
-    real_score = _walk_forward_score(strategy, grid, full_data, train_window, test_window, method, mask=mask)
+    real_score = _walk_forward_score(strategy, grid, full_data, train_window, test_window, method, mask=mask, cost=cost)
     print(f"[Permutation] {tag} walk-forward baseline {method}={real_score:.4f}")
 
     payloads = [
-        (i, base_seed, full_data, grid, method, strategy.name, train_window, test_window, mask)
+        (i, base_seed, full_data, grid, method, strategy.name, train_window, test_window, mask, cost)
         for i in range(n_iterations)
     ]
     raw = _run_parallel(_walkforward_worker, payloads)
@@ -690,13 +818,16 @@ def _ensure_validated_table(conn) -> None:
             ("valid_choppy", "BOOLEAN DEFAULT FALSE"),
             ("best_regime", "VARCHAR(20)"),
             ("regime_sharpes", "JSONB"),
+            ("gross_sharpe_before_costs", "FLOAT"),
+            ("net_sharpe_after_costs", "FLOAT"),
         ):
             cur.execute(f"ALTER TABLE validated_strategies ADD COLUMN IF NOT EXISTS {col} {ddl}")
     conn.commit()
 
 
 def _write_validated(symbol, strategy_name, params, method,
-                     insample_p, walkforward_p, insample_score, walkforward_score) -> None:
+                     insample_p, walkforward_p, insample_score, walkforward_score,
+                     gross_sharpe=None, net_sharpe=None) -> None:
     import json
     conn = None
     try:
@@ -709,12 +840,15 @@ def _write_validated(symbol, strategy_name, params, method,
             cur.execute("""
                 INSERT INTO validated_strategies (
                     symbol, strategy_name, parameters, objective_method,
-                    insample_p, walkforward_p, insample_score, walkforward_score
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                    insample_p, walkforward_p, insample_score, walkforward_score,
+                    gross_sharpe_before_costs, net_sharpe_after_costs
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (
                 symbol, strategy_name, json.dumps(params), method,
                 float(insample_p), float(walkforward_p),
                 float(insample_score), float(walkforward_score),
+                None if gross_sharpe is None else float(gross_sharpe),
+                None if net_sharpe is None else float(net_sharpe),
             ))
         conn.commit()
         print(f"[Permutation] Persisted validated strategy {symbol}/{strategy_name} to DB")
@@ -775,13 +909,14 @@ def validate_strategy_edge(strategy_class, params: dict, symbol: str, full_data:
         print(f"[Permutation] {symbol}: {result['reason']} — skipping permutation gate")
         return result
 
+    cost = build_cost_model(full_data)
     split = int(n * 0.8)
     insample = full_data.iloc[:split]
 
     is_passed, is_p, is_score = run_insample_permutation_test(
         strategy_class, params, insample,
         n_iterations=Config.PERMUTATION_INSAMPLE_ITERS,
-        method=method, symbol=symbol,
+        method=method, symbol=symbol, cost=cost,
     )
     result["insample_p"] = is_p
     result["insample_score"] = is_score
@@ -792,7 +927,7 @@ def validate_strategy_edge(strategy_class, params: dict, symbol: str, full_data:
     wf_passed, wf_p, wf_score = run_walkforward_permutation_test(
         strategy_class, params, full_data, train_window, test_window,
         n_iterations=Config.PERMUTATION_WALKFORWARD_ITERS,
-        method=method, symbol=symbol,
+        method=method, symbol=symbol, cost=cost,
     )
     result["walkforward_p"] = wf_p
     result["walkforward_score"] = wf_score
@@ -800,8 +935,32 @@ def validate_strategy_edge(strategy_class, params: dict, symbol: str, full_data:
         result["reason"] = f"walk-forward MCPT failed (p={wf_p:.4f})"
         return result
 
-    strategy_name = strategy_class().name
-    _write_validated(symbol, strategy_name, params, method, is_p, wf_p, is_score, wf_score)
+    # Cost gate: re-score the best in-sample config gross vs net on the full path.
+    strategy = strategy_class()
+    grid = strategy.param_grid()
+    full_returns = calculate_log_returns(full_data["close"].to_numpy())
+    _, best_params = _optimize_score(strategy, grid, insample, method, cost=cost)
+    gross_sharpe = net_sharpe = 0.0
+    spread_c = impact_c = borrow_c = 0.0
+    if best_params:
+        pos_full = strategy.position_vector(full_data, best_params)
+        gross_sharpe = calculate_objective_score(pos_full, full_returns, "sharpe")
+        net_sharpe = calculate_objective_score(pos_full, full_returns, "sharpe", cost=cost)
+        spread_c, impact_c, borrow_c = cost_breakdown(pos_full, cost)
+    result["gross_sharpe"] = gross_sharpe
+    result["net_sharpe"] = net_sharpe
+    print(
+        f"[Costs] {symbol} gross Sharpe={gross_sharpe:.2f} → net Sharpe={net_sharpe:.2f} "
+        f"(spread={spread_c:.3%} impact={impact_c:.3%} borrow={borrow_c:.3%})"
+    )
+    if Config.COST_MODELING_ENABLED and net_sharpe <= Config.COST_MIN_NET_SHARPE:
+        result["reason"] = f"unprofitable after costs (net Sharpe={net_sharpe:.2f})"
+        print(f"[Costs] {symbol} REJECTED — net Sharpe {net_sharpe:.2f} <= {Config.COST_MIN_NET_SHARPE}")
+        return result
+
+    strategy_name = strategy.name
+    _write_validated(symbol, strategy_name, params, method, is_p, wf_p, is_score, wf_score,
+                     gross_sharpe=gross_sharpe, net_sharpe=net_sharpe)
     result["promoted"] = True
     result["reason"] = "passed both gates"
     print(
@@ -826,7 +985,8 @@ def _scale_regime_iters(base: int, n_regime_bars: int, total_bars: int) -> int:
 
 
 def _write_validated_regime(symbol, strategy_name, params, method,
-                            regime_scores: dict, valid_flags: dict, best_regime) -> None:
+                            regime_scores: dict, valid_flags: dict, best_regime,
+                            gross_sharpe=None, net_sharpe=None) -> None:
     import json
     conn = None
     try:
@@ -845,8 +1005,9 @@ def _write_validated_regime(symbol, strategy_name, params, method,
                     symbol, strategy_name, parameters, objective_method,
                     insample_p, walkforward_p, insample_score, walkforward_score,
                     valid_bull_trend, valid_bear_trend, valid_high_vol, valid_choppy,
-                    best_regime, regime_sharpes
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    best_regime, regime_sharpes,
+                    gross_sharpe_before_costs, net_sharpe_after_costs
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (
                 symbol, strategy_name, json.dumps(params), method,
                 ref.get("insample_p"), ref.get("walkforward_p"),
@@ -854,6 +1015,8 @@ def _write_validated_regime(symbol, strategy_name, params, method,
                 bool(valid_flags.get("BULL_TREND")), bool(valid_flags.get("BEAR_TREND")),
                 bool(valid_flags.get("HIGH_VOL")), bool(valid_flags.get("CHOPPY")),
                 best_regime, json.dumps(regime_scores),
+                None if gross_sharpe is None else float(gross_sharpe),
+                None if net_sharpe is None else float(net_sharpe),
             ))
         conn.commit()
         print(f"[Permutation] Persisted regime-validated strategy {symbol}/{strategy_name} (best={best_regime})")
@@ -932,6 +1095,7 @@ def validate_strategy_edge_regime_aware(
     strategy = strategy_class()
     grid = strategy.param_grid()
     full_returns = calculate_log_returns(full_data["close"].to_numpy())
+    cost = build_cost_model(full_data)
 
     regime_scores: dict = {}
     valid_flags: dict = {}
@@ -942,16 +1106,21 @@ def validate_strategy_edge_regime_aware(
         n_is = int(is_mask.sum())
         n_full = int(full_mask.sum())
 
-        # Per-regime metrics (best in-sample config under the configured method).
-        best_score, best_params = _optimize_score(strategy, grid, insample, method, mask=is_mask)
-        sharpe = pf = 0.0
+        # Per-regime metrics (best in-sample config, optimized net of costs).
+        best_score, best_params = _optimize_score(strategy, grid, insample, method, mask=is_mask, cost=cost)
+        gross_sharpe = net_sharpe = pf = 0.0
+        spread_c = impact_c = borrow_c = 0.0
         if best_params:
             pos_full = strategy.position_vector(full_data, best_params)
-            sharpe = calculate_objective_score(pos_full, full_returns, "sharpe", mask=full_mask)
-            pf = calculate_objective_score(pos_full, full_returns, "profit_factor", mask=full_mask)
+            gross_sharpe = calculate_objective_score(pos_full, full_returns, "sharpe", mask=full_mask)
+            net_sharpe = calculate_objective_score(pos_full, full_returns, "sharpe", mask=full_mask, cost=cost)
+            pf = calculate_objective_score(pos_full, full_returns, "profit_factor", mask=full_mask, cost=cost)
+            spread_c, impact_c, borrow_c = cost_breakdown(pos_full, cost, mask=full_mask)
 
         entry = {
-            "sharpe": round(float(sharpe), 4),
+            "sharpe": round(float(net_sharpe), 4),          # net-of-cost Sharpe (realistic edge)
+            "gross_sharpe": round(float(gross_sharpe), 4),
+            "net_sharpe": round(float(net_sharpe), 4),
             "profit_factor": round(float(pf), 4),
             "n_bars": n_full,
             "insample_p": None,
@@ -969,11 +1138,16 @@ def validate_strategy_edge_regime_aware(
             regime_scores[regime] = entry
             continue
 
+        print(
+            f"[Costs] {symbol}/{regime} gross Sharpe={gross_sharpe:.2f} → net Sharpe={net_sharpe:.2f} "
+            f"(spread={spread_c:.3%} impact={impact_c:.3%} borrow={borrow_c:.3%})"
+        )
+
         is_iters = _scale_regime_iters(Config.PERMUTATION_INSAMPLE_ITERS, n_is, split)
         is_passed, is_p, _is_score = run_insample_permutation_test(
             strategy_class, params, insample,
             n_iterations=is_iters, method=method, symbol=symbol,
-            mask=is_mask, regime_label=regime,
+            mask=is_mask, regime_label=regime, cost=cost,
         )
         entry["insample_p"] = is_p
         entry["p_value"] = is_p
@@ -987,12 +1161,19 @@ def validate_strategy_edge_regime_aware(
         wf_passed, wf_p, wf_score = run_walkforward_permutation_test(
             strategy_class, params, full_data, train_window, test_window,
             n_iterations=wf_iters, method=method, symbol=symbol,
-            mask=full_mask, regime_label=regime,
+            mask=full_mask, regime_label=regime, cost=cost,
         )
         entry["walkforward_p"] = wf_p
         entry["walkforward_score"] = round(float(wf_score), 4)
         entry["p_value"] = wf_p
-        valid_flags[regime] = bool(wf_passed)
+        # Cost gate: a regime is validated only if it also clears net profitability.
+        cost_ok = (not Config.COST_MODELING_ENABLED) or (net_sharpe > Config.COST_MIN_NET_SHARPE)
+        if wf_passed and not cost_ok:
+            print(
+                f"[Costs] {symbol}/{regime} REJECTED — net Sharpe {net_sharpe:.2f} "
+                f"<= {Config.COST_MIN_NET_SHARPE} despite passing MCPT"
+            )
+        valid_flags[regime] = bool(wf_passed and cost_ok)
         regime_scores[regime] = entry
 
     valid_regimes = [r for r in REGIMES if valid_flags.get(r)]
@@ -1006,9 +1187,11 @@ def validate_strategy_edge_regime_aware(
     result["promoted"] = bool(valid_regimes)
 
     if valid_regimes:
+        ref = regime_scores.get(best_regime, {})
         _write_validated_regime(
             symbol, strategy.name, params, method,
             regime_scores, valid_flags, best_regime,
+            gross_sharpe=ref.get("gross_sharpe"), net_sharpe=ref.get("net_sharpe"),
         )
         result["reason"] = f"validated for {valid_regimes} (best={best_regime})"
         print(

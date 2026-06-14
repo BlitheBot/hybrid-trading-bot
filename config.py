@@ -167,6 +167,21 @@ class Config:
     PERMUTATION_WORKERS = 0                 # multiprocessing workers; 0 = cpu_count() - 1
     PERMUTATION_MOMENT_TOLERANCE = 0.01     # 1% tolerance for moment-preservation validation
 
+    # Transaction cost model (Task 1) — applied inside the permutation backtester
+    # so strategies are only validated if they survive realistic costs.
+    COST_MODELING_ENABLED = os.getenv("COST_MODELING_ENABLED", "true").lower() != "false"
+    COST_LIQUID_DOLLAR_VOLUME = float(os.getenv("COST_LIQUID_DOLLAR_VOLUME", "100000000"))  # >$100M avg daily $vol = liquid
+    COST_SPREAD_LIQUID_PCT = float(os.getenv("COST_SPREAD_LIQUID_PCT", "0.0005"))    # 0.05% per side, liquid
+    COST_SPREAD_ILLIQUID_PCT = float(os.getenv("COST_SPREAD_ILLIQUID_PCT", "0.0010"))  # 0.10% per side, $10M-$100M
+    COST_IMPACT_SMALL_PCT = float(os.getenv("COST_IMPACT_SMALL_PCT", "0.0010"))   # order < 0.1% ADV
+    COST_IMPACT_MEDIUM_PCT = float(os.getenv("COST_IMPACT_MEDIUM_PCT", "0.0025"))  # 0.1%-0.5% ADV
+    COST_IMPACT_LARGE_PCT = float(os.getenv("COST_IMPACT_LARGE_PCT", "0.0050"))   # > 0.5% ADV
+    COST_ADV_FRACTION = float(os.getenv("COST_ADV_FRACTION", "0.0005"))  # assumed order size as fraction of ADV (default <0.1%)
+    COST_BORROW_EASY_ANNUAL = float(os.getenv("COST_BORROW_EASY_ANNUAL", "0.0050"))   # 0.50% annualized easy-to-borrow
+    COST_BORROW_HARD_ANNUAL = float(os.getenv("COST_BORROW_HARD_ANNUAL", "0.0200"))   # 2.00% annualized hard-to-borrow
+    COST_HARD_TO_BORROW = os.getenv("COST_HARD_TO_BORROW", "false").lower() == "true"  # treat shorts as hard-to-borrow
+    COST_MIN_NET_SHARPE = float(os.getenv("COST_MIN_NET_SHARPE", "0.0"))  # validated strategies must exceed this net-of-cost Sharpe
+
     # Regime classifier (4 market regimes) + live regime gating
     REGIME_HIGH_VOL_VIX = 30.0      # VIX > this => HIGH_VOL (overrides trend)
     REGIME_BULL_VIX_MAX = 20.0      # BULL_TREND requires VIX < this

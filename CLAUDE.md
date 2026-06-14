@@ -95,6 +95,13 @@ Every parameter combo passes through **two mandatory gates** before being marked
    - Config: `PERMUTATION_ENABLED`, `PERMUTATION_P_THRESHOLD`, `PERMUTATION_INSAMPLE_ITERS`, `PERMUTATION_WALKFORWARD_ITERS`, `PERMUTATION_OBJECTIVE`, `PERMUTATION_WORKERS`.
    - Unit tests: `discovery/test_permutation_framework.py` (moment preservation, final-close invariance, training-period preservation, objective directionality).
 
+**Transaction cost gate (Task 1):** `calculate_objective_score` is cost-aware via an optional `CostModel` (`build_cost_model(df)` derives it per symbol). Costs are deducted per bar *inside* the position-vector backtester so real **and** permuted paths are scored net of costs:
+   - **Spread**: 0.05% per side if avg daily $vol > $100M, else 0.10% per side; deducted on every unit of position turnover (entry and exit each = one side).
+   - **Market impact**: 0.10% (<0.1% ADV) / 0.25% (0.1–0.5% ADV) / 0.50% (>0.5% ADV); order size assumed `COST_ADV_FRACTION` (default 0.05% ADV = small tier). Also charged on turnover.
+   - **Borrow**: 0.50%/yr easy-to-borrow, 2.00%/yr hard-to-borrow (`COST_HARD_TO_BORROW`); annual/252 deducted each bar a short (`pos < 0`) is held.
+   - A regime is promoted only if it clears MCPT **and** net-of-cost Sharpe > `COST_MIN_NET_SHARPE` (default 0). `validated_strategies` gains `gross_sharpe_before_costs` / `net_sharpe_after_costs`; `regime_sharpes` JSONB `sharpe` is now the net Sharpe (with explicit `gross_sharpe`/`net_sharpe` keys). Log: `[Costs] {symbol}/{regime} gross Sharpe=… → net Sharpe=… (spread=… impact=… borrow=…)`.
+   - Config: `COST_MODELING_ENABLED`, `COST_LIQUID_DOLLAR_VOLUME`, `COST_SPREAD_LIQUID_PCT`, `COST_SPREAD_ILLIQUID_PCT`, `COST_IMPACT_SMALL_PCT`, `COST_IMPACT_MEDIUM_PCT`, `COST_IMPACT_LARGE_PCT`, `COST_ADV_FRACTION`, `COST_BORROW_EASY_ANNUAL`, `COST_BORROW_HARD_ANNUAL`, `COST_HARD_TO_BORROW`, `COST_MIN_NET_SHARPE`. Unit tests: `discovery/test_transaction_costs.py`.
+
 Per-symbol summary log line: `[Discovery] {symbol}: {n_combos} combos tested → {n_ttest} passed t-test → {n_permutation} passed permutation → {n_promoted} promoted`.
 
 ---
