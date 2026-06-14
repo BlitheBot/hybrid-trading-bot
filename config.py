@@ -41,6 +41,17 @@ class Config:
     SCALP_SYMBOLS = ["BTC/USD", "ETH/USD"]
     CRYPTO_SCALP_STOP_LOSS_PERCENT = 4.0 # Wider stop losses for crypto scalp trades (4-8%)
 
+    # Crypto Momentum Strategy (Task 6) — simpler/more-frequent EMA crossover scalp
+    # that runs alongside the SMB late scalp; best signal (higher confidence) wins.
+    CRYPTO_MOMENTUM_ENABLED = os.getenv("CRYPTO_MOMENTUM_ENABLED", "true").lower() != "false"
+    CRYPTO_MOMENTUM_EMA_FAST = int(os.getenv("CRYPTO_MOMENTUM_EMA_FAST", "9"))
+    CRYPTO_MOMENTUM_EMA_SLOW = int(os.getenv("CRYPTO_MOMENTUM_EMA_SLOW", "21"))
+    CRYPTO_MOMENTUM_VOL_MULT = float(os.getenv("CRYPTO_MOMENTUM_VOL_MULT", "1.2"))  # vol > 1.2x avg of last 20 bars
+    CRYPTO_MOMENTUM_ATR_STOP_MULT = float(os.getenv("CRYPTO_MOMENTUM_ATR_STOP_MULT", "1.5"))
+    CRYPTO_MOMENTUM_ATR_TARGET_MULT = float(os.getenv("CRYPTO_MOMENTUM_ATR_TARGET_MULT", "3.0"))  # R/R = 2.0
+    CRYPTO_MOMENTUM_COOLDOWN_MINUTES = int(os.getenv("CRYPTO_MOMENTUM_COOLDOWN_MINUTES", "15"))
+    CRYPTO_MOMENTUM_MIN_MOVE_PCT = float(os.getenv("CRYPTO_MOMENTUM_MIN_MOVE_PCT", "0.001"))  # 0.1% min move since last signal
+
     # Swing Bot Parameters (Stocks)
     SWING_SYMBOLS = ["JPM", "SPY", "COST", "BRK.B", "PG", "V"]
     SWING_EQUITY_RISK_PERCENT = 1.0 # Smaller position sizes for swing trades
@@ -137,12 +148,27 @@ class Config:
     DISCOVERY_DEBATE_ENABLED = True      # Discovery Engine only — Claude reviews each validated strategy
     SLACK_VERBOSE = False                # False = critical/trade alerts only; True = all signals fire
 
+    # Enhanced signal quality scoring (Task 5)
+    # Composite 0-10 score from technical/sentiment/regime/insider/volume components.
+    SIGNAL_QUALITY_ENABLED = os.getenv("SIGNAL_QUALITY_ENABLED", "true").lower() != "false"  # compute + log + store always
+    SIGNAL_QUALITY_GATING_ENABLED = os.getenv("SIGNAL_QUALITY_GATING_ENABLED", "false").lower() != "false"  # block trades below min + scale size; off by default until MACD calibration verified in live logs
+    SIGNAL_QUALITY_MIN_SCORE = float(os.getenv("SIGNAL_QUALITY_MIN_SCORE", "5.0"))  # minimum composite score to trade
+
     # Performance Brain
     PERFORMANCE_SCALING_ENABLED = True  # adjust position size based on last 20-trade win rate
     POSITION_SIZE_FLOOR = 0.1           # floor: no trade below 10% of SWING_EQUITY_RISK_PERCENT
 
     # Portfolio heat cap
     PORTFOLIO_HEAT_CAP = 0.15   # max aggregate open-position risk as % of equity
+
+    # Risk Management Upgrade (Task 8) — all env-var configurable
+    MAX_SECTOR_CONCENTRATION_PCT = float(os.getenv("MAX_SECTOR_CONCENTRATION_PCT", "30.0"))  # max % of exposure in one GICS sector
+    MAX_SINGLE_POSITION_PCT = float(os.getenv("MAX_SINGLE_POSITION_PCT", "5.0"))             # max single position as % of equity at entry
+    WEEKLY_LOSS_LIMIT_PCT = float(os.getenv("WEEKLY_LOSS_LIMIT_PCT", "-3.0"))                # weekly P&L below this → size reduction
+    WEEKLY_LOSS_SIZE_REDUCTION = float(os.getenv("WEEKLY_LOSS_SIZE_REDUCTION", "0.5"))       # multiplier applied for rest of week
+    CONSECUTIVE_LOSS_LIMIT = int(os.getenv("CONSECUTIVE_LOSS_LIMIT", "5"))                   # consecutive losers → pause entries
+    CONSECUTIVE_LOSS_PAUSE_HOURS = float(os.getenv("CONSECUTIVE_LOSS_PAUSE_HOURS", "2.0"))   # pause duration on tripping
+    RISK_STATE_CACHE_SECONDS = int(os.getenv("RISK_STATE_CACHE_SECONDS", "300"))             # risk-state recompute TTL
 
     # Backtester / Strategy Discovery Engine
     BACKTEST_START_DATE = "2019-01-01"
@@ -154,6 +180,18 @@ class Config:
     DISCOVERY_SYMBOLS = ["JPM", "SPY", "COST", "BRK.B", "PG"]
     DISCOVERY_MIN_TRADES = 10
     DISCOVERY_P_VALUE_THRESHOLD = 0.05
+    # Multi-factor discovery families (Task 3): run mean-reversion, volume-breakout
+    # and insider-flow families alongside the EMA/MACD/RSI momentum family.
+    DISCOVERY_MULTI_FAMILY_ENABLED = os.getenv("DISCOVERY_MULTI_FAMILY_ENABLED", "true").lower() != "false"
+
+    # Correlation-aware portfolio construction (Task 4)
+    PORTFOLIO_OPTIMIZER_ENABLED = os.getenv("PORTFOLIO_OPTIMIZER_ENABLED", "true").lower() != "false"
+    PORTFOLIO_MAX_CORRELATION = float(os.getenv("PORTFOLIO_MAX_CORRELATION", "0.7"))  # add only if corr w/ all selected < this
+    PORTFOLIO_MAX_SIZE = int(os.getenv("PORTFOLIO_MAX_SIZE", "20"))                   # max strategy/symbol combos
+    PORTFOLIO_MIN_SHARPE = float(os.getenv("PORTFOLIO_MIN_SHARPE", "0.5"))           # min combined portfolio Sharpe to deploy
+    PORTFOLIO_MIN_OVERLAP = int(os.getenv("PORTFOLIO_MIN_OVERLAP", "10"))            # min overlapping daily obs to trust a correlation
+    # When on, the swing screener only evaluates symbols in the current optimal portfolio.
+    PORTFOLIO_GATING_ENABLED = os.getenv("PORTFOLIO_GATING_ENABLED", "true").lower() != "false"
     DATABASE_URL = os.getenv("DATABASE_URL")
 
     # Permutation Validation Framework (Timothy Masters 4-step MCPT)
@@ -166,6 +204,21 @@ class Config:
     PERMUTATION_OBJECTIVE = "profit_factor" # objective function: "profit_factor" or "sharpe"
     PERMUTATION_WORKERS = 0                 # multiprocessing workers; 0 = cpu_count() - 1
     PERMUTATION_MOMENT_TOLERANCE = 0.01     # 1% tolerance for moment-preservation validation
+
+    # Transaction cost model (Task 1) — applied inside the permutation backtester
+    # so strategies are only validated if they survive realistic costs.
+    COST_MODELING_ENABLED = os.getenv("COST_MODELING_ENABLED", "true").lower() != "false"
+    COST_LIQUID_DOLLAR_VOLUME = float(os.getenv("COST_LIQUID_DOLLAR_VOLUME", "100000000"))  # >$100M avg daily $vol = liquid
+    COST_SPREAD_LIQUID_PCT = float(os.getenv("COST_SPREAD_LIQUID_PCT", "0.0005"))    # 0.05% per side, liquid
+    COST_SPREAD_ILLIQUID_PCT = float(os.getenv("COST_SPREAD_ILLIQUID_PCT", "0.0010"))  # 0.10% per side, $10M-$100M
+    COST_IMPACT_SMALL_PCT = float(os.getenv("COST_IMPACT_SMALL_PCT", "0.0010"))   # order < 0.1% ADV
+    COST_IMPACT_MEDIUM_PCT = float(os.getenv("COST_IMPACT_MEDIUM_PCT", "0.0025"))  # 0.1%-0.5% ADV
+    COST_IMPACT_LARGE_PCT = float(os.getenv("COST_IMPACT_LARGE_PCT", "0.0050"))   # > 0.5% ADV
+    COST_ADV_FRACTION = float(os.getenv("COST_ADV_FRACTION", "0.0005"))  # assumed order size as fraction of ADV (default <0.1%)
+    COST_BORROW_EASY_ANNUAL = float(os.getenv("COST_BORROW_EASY_ANNUAL", "0.0050"))   # 0.50% annualized easy-to-borrow
+    COST_BORROW_HARD_ANNUAL = float(os.getenv("COST_BORROW_HARD_ANNUAL", "0.0200"))   # 2.00% annualized hard-to-borrow
+    COST_HARD_TO_BORROW = os.getenv("COST_HARD_TO_BORROW", "false").lower() == "true"  # treat shorts as hard-to-borrow
+    COST_MIN_NET_SHARPE = float(os.getenv("COST_MIN_NET_SHARPE", "0.0"))  # validated strategies must exceed this net-of-cost Sharpe
 
     # Regime classifier (4 market regimes) + live regime gating
     REGIME_HIGH_VOL_VIX = 30.0      # VIX > this => HIGH_VOL (overrides trend)

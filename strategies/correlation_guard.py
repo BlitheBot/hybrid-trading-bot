@@ -3,8 +3,24 @@ import numpy as np
 import pandas as pd
 
 
+# Finnhub's finnhubIndustry strings → normalized sector buckets used by sector_exposure_ok.
+_FINNHUB_INDUSTRY_TO_SECTOR: dict[str, str] = {
+    "Technology": "Technology",
+    "Financial Services": "Financials",
+    "Healthcare": "Healthcare",
+    "Consumer Cyclical": "Consumer/Discretionary",
+    "Consumer Defensive": "Consumer/Defensive",
+    "Energy": "Energy",
+    "Industrials": "Industrials",
+    "Basic Materials": "Materials",
+    "Real Estate": "Real Estate",
+    "Utilities": "Utilities",
+    "Communication Services": "Communication Services",
+}
+
+
 class CorrelationGuard:
-    SECTOR_MAP = {
+    SECTOR_MAP: dict[str, str] = {
         "JPM":   "Financials",
         "V":     "Financials",
         "BRK.B": "Financials",
@@ -12,7 +28,56 @@ class CorrelationGuard:
         "PG":    "Consumer/Defensive",
         "SPY":   "Broad market",
     }
-    _CACHE_TTL = 30 * 60  # seconds
+    _SECTOR_ENRICH_TTL = 7 * 24 * 3600  # 7-day cache — sectors rarely change
+    _sector_enriched_at: float = 0.0    # class-level timestamp; reset once per week
+    _CACHE_TTL = 30 * 60  # seconds (price-data cache)
+
+    @classmethod
+    def enrich_sector_map(
+        cls,
+        symbols: list[str],
+        finnhub_api_key: str | None,
+        max_symbols: int = 50,
+    ) -> int:
+        """Fetch GICS-equivalent sectors from Finnhub and update SECTOR_MAP in-place.
+
+        Queries /stock/profile2 for each symbol (up to max_symbols) that is not
+        already in the map. Results are cached for _SECTOR_ENRICH_TTL seconds so
+        Railway restarts don't hammer the Finnhub rate limit. Returns the number
+        of new entries added.
+
+        Fail-open: any network or API error logs a warning and continues.
+        """
+        if not finnhub_api_key:
+            print("[SectorMap] No Finnhub API key — sector enrichment skipped")
+            return 0
+        now = time.monotonic()
+        if now - cls._sector_enriched_at < cls._SECTOR_ENRICH_TTL:
+            return 0  # already fresh
+
+        import requests as _req
+
+        new_entries = 0
+        candidates = [s for s in symbols[:max_symbols] if s not in cls.SECTOR_MAP]
+        for sym in candidates:
+            try:
+                resp = _req.get(
+                    "https://finnhub.io/api/v1/stock/profile2",
+                    params={"symbol": sym, "token": finnhub_api_key},
+                    timeout=5,
+                )
+                data = resp.json() if resp.status_code == 200 else {}
+                industry = data.get("finnhubIndustry") or ""
+                sector = _FINNHUB_INDUSTRY_TO_SECTOR.get(industry, industry or None)
+                if sector:
+                    cls.SECTOR_MAP[sym] = sector
+                    new_entries += 1
+            except Exception as exc:
+                print(f"[SectorMap] {sym}: Finnhub profile fetch failed — {exc}")
+        cls._sector_enriched_at = now
+        print(f"[SectorMap] Enriched sector map: +{new_entries} symbols "
+              f"(total {len(cls.SECTOR_MAP)} mapped)")
+        return new_entries
 
     def __init__(
         self,

@@ -52,6 +52,7 @@ from sqlalchemy import create_engine, text as sql_text
 from config import Config
 from strategies.base_strategy import BaseStrategy
 from strategies.smb_strategy import SMBStrategy
+from strategies.crypto_momentum_strategy import CryptoMomentumStrategy
 from strategies.swing_strategy import SwingStrategy
 from strategies.bollinger_mean_reversion_strategy import BollingerMeanReversionStrategy
 from strategies.news_strategy import NewsStrategy, _get_scan_sleep_seconds, get_sentiment_score
@@ -70,6 +71,9 @@ from discovery.regime_classifier import (
 from discovery.decay_monitor import StrategyDecayMonitor
 from discovery.grok_sentiment import refresh_grok_sentiment, get_grok_sentiment
 from utils import get_historical_bars, get_finnhub_price
+import signal_quality
+import performance_brain
+import risk_limits
 
 # ── Sentry error monitoring (optional — omit SENTRY_DSN to disable) ─────────
 try:
@@ -412,6 +416,10 @@ class TradingBot:
         self.risk_multiplier = 1.0
         self.active_signals = {}
         self.last_loss_times = {}
+        # Risk Management Upgrade (Task 8) state
+        self._risk_state_cache = None          # (timestamp, dict) — consecutive losses + weekly P&L
+        self._entries_paused_until = None       # datetime — consecutive-loss pause expiry
+        self._last_consec_loss_alert = None     # de-dup the Slack pause alert
         self._alerted_negative_ev: set[str] = set()
         self._last_ev_check_date = None
         self.last_evaluated_price = {}
@@ -610,6 +618,10 @@ class TradingBot:
                 conn.execute(sql_text(
                     "ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS decay_multiplier FLOAT DEFAULT 1.0"
                 ))
+                # Composite signal-quality score at entry (Task 5).
+                conn.execute(sql_text(
+                    "ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS composite_score FLOAT"
+                ))
                 count = conn.execute(sql_text("SELECT COUNT(*) FROM signal_outcomes")).scalar()
             _health_state["db_connected"] = True
             print(f"[DB] signal_outcomes table verified — {count} existing rows")
@@ -621,7 +633,8 @@ class TradingBot:
                           ema_short: int, ema_long: int, rsi_at_entry: float,
                           macd_at_entry: float, regime: str, entry_time,
                           regime_class: str | None = None,
-                          decay_multiplier: float = 1.0) -> int | None:
+                          decay_multiplier: float = 1.0,
+                          composite_score: float | None = None) -> int | None:
         if not self._db_engine:
             return None
         try:
@@ -629,9 +642,11 @@ class TradingBot:
                 result = conn.execute(sql_text("""
                     INSERT INTO signal_outcomes
                         (symbol, signal_type, entry_time, entry_price, ema_short, ema_long,
-                         rsi_at_entry, macd_at_entry, market_regime, regime_class, decay_multiplier)
+                         rsi_at_entry, macd_at_entry, market_regime, regime_class, decay_multiplier,
+                         composite_score)
                     VALUES (:symbol, :signal_type, :entry_time, :entry_price, :ema_short, :ema_long,
-                            :rsi_at_entry, :macd_at_entry, :market_regime, :regime_class, :decay_multiplier)
+                            :rsi_at_entry, :macd_at_entry, :market_regime, :regime_class, :decay_multiplier,
+                            :composite_score)
                     RETURNING id
                 """), {
                     "symbol": symbol, "signal_type": signal_type, "entry_time": entry_time,
@@ -639,6 +654,7 @@ class TradingBot:
                     "ema_long": int(ema_long), "rsi_at_entry": float(rsi_at_entry),
                     "macd_at_entry": float(macd_at_entry), "market_regime": regime,
                     "regime_class": regime_class, "decay_multiplier": float(decay_multiplier),
+                    "composite_score": None if composite_score is None else float(composite_score),
                 })
                 row_id = result.fetchone()[0]
             print(f"[DB] Logged {signal_type} entry for {symbol} (row={row_id})")
@@ -864,6 +880,28 @@ class TradingBot:
         except Exception as e:
             print(f"[Regime] {symbol}: validated_strategies lookup failed — fail-open: {e}")
             return True, [], False
+
+    def _load_portfolio_symbols(self) -> tuple[set, bool]:
+        """Return (symbols_in_current_optimal_portfolio, has_data).
+
+        Reads the most recent ``strategy_portfolio`` build (Task 4). Fail-open: no
+        DB / no table / empty / error → (empty set, False) so the caller proceeds.
+        Sync — call via asyncio.to_thread.
+        """
+        if not self._db_engine:
+            return set(), False
+        try:
+            with self._db_engine.connect() as conn:
+                rows = conn.execute(sql_text("""
+                    SELECT symbol FROM strategy_portfolio
+                    WHERE build_id = (SELECT build_id FROM strategy_portfolio
+                                      ORDER BY selected_at DESC LIMIT 1)
+                """)).mappings().fetchall()
+            symbols = {r["symbol"] for r in rows}
+            return symbols, bool(symbols)
+        except Exception as e:
+            print(f"[Portfolio] strategy_portfolio lookup failed — fail-open: {e}")
+            return set(), False
 
     # ── Strategy decay gating (Loop 22 support) ───────────────────────────────
 
@@ -1251,7 +1289,36 @@ class TradingBot:
             data = pd.concat([data, current_bar])
             data.sort_index(inplace=True)
 
-        for strategy in strategies:
+        # Best-signal priority (Task 6): when multiple crypto strategies run on the
+        # same tick (SMB + Crypto Momentum), evaluate each and execute only the
+        # highest-confidence signal so they never double up on one symbol. The
+        # winning signal is reused below (not regenerated) so per-strategy throttle
+        # state set during evaluation doesn't suppress it on a second call.
+        iter_strategies = strategies
+        pre_signals: dict = {}
+        if is_crypto and len(strategies) > 1:
+            scored = []
+            for s in strategies:
+                try:
+                    _sig = (s.generate_signals(data, self.stock_data_client)
+                            if isinstance(s, SMBStrategy) else s.generate_signals(data))
+                except Exception as _ge:
+                    print(f"[Scalp] {symbol}: {s.name} signal eval failed — {_ge}")
+                    _sig = None
+                if _sig and _sig.get("signal") in ("buy", "sell"):
+                    scored.append((float(_sig.get("confidence", 0.0)), s, _sig))
+            if scored:
+                scored.sort(key=lambda x: x[0], reverse=True)
+                _conf, winner, winner_sig = scored[0]
+                if len(scored) > 1:
+                    print(f"[Scalp] {symbol}: {len(scored)} crypto signals — running "
+                          f"highest-confidence {winner.name} (conf={_conf:.2f})")
+                iter_strategies = [winner]
+                pre_signals[winner.name] = winner_sig
+            else:
+                iter_strategies = []
+
+        for strategy in iter_strategies:
             # Decay gate: a strategy disabled by the decay monitor is skipped entirely.
             _decay_disabled, _decay_mult, _decay_status = self._decay_adjustment(strategy, symbol)
             if _decay_disabled:
@@ -1259,10 +1326,12 @@ class TradingBot:
                 continue
 
             print(f"Running strategy: {strategy.name} for {symbol}")
-            if isinstance(strategy, SMBStrategy):
-                signal = strategy.generate_signals(data, self.stock_data_client)
-            else:
-                signal = strategy.generate_signals(data)
+            signal = pre_signals.get(strategy.name)
+            if signal is None:
+                if isinstance(strategy, SMBStrategy):
+                    signal = strategy.generate_signals(data, self.stock_data_client)
+                else:
+                    signal = strategy.generate_signals(data)
             
             if signal:
                 if self.trading_halted_for_day:
@@ -1295,6 +1364,42 @@ class TradingBot:
                             continue
                     except Exception as _heat_err:
                         print(f"[HeatCap] Position check failed for {symbol}: {_heat_err}")
+
+                # ── Risk Management Upgrade (Task 8): account-level gates ───────
+                _risk_state = await asyncio.to_thread(self._get_risk_state)
+                _now_utc = datetime.now(pytz.utc)
+                # Consecutive-loss pause — block all new entries during the cooldown.
+                if self._entries_paused_until and _now_utc < self._entries_paused_until:
+                    print(f"[Risk] {symbol}: new entries paused until "
+                          f"{self._entries_paused_until:%H:%M UTC} (consecutive losses) — SKIP")
+                    continue
+                if risk_limits.consecutive_loss_tripped(
+                    _risk_state["consecutive_losses"], Config.CONSECUTIVE_LOSS_LIMIT
+                ):
+                    self._entries_paused_until = _now_utc + timedelta(
+                        hours=Config.CONSECUTIVE_LOSS_PAUSE_HOURS)
+                    _cl_msg = (f"{_risk_state['consecutive_losses']} consecutive losing trades "
+                               f"— pausing new entries for {Config.CONSECUTIVE_LOSS_PAUSE_HOURS:g}h")
+                    print(f"[Risk] {symbol}: {_cl_msg} — SKIP (FAIL)")
+                    if (self._last_consec_loss_alert is None
+                            or (_now_utc - self._last_consec_loss_alert).total_seconds() > 3600):
+                        asyncio.create_task(notifications.notify_alert(
+                            f"⛔ Risk: {_cl_msg}", level="CRITICAL"))
+                        self._last_consec_loss_alert = _now_utc
+                    continue
+                print(f"[Risk] {symbol}: consecutive-loss check PASS "
+                      f"({_risk_state['consecutive_losses']}/{Config.CONSECUTIVE_LOSS_LIMIT})")
+                # Weekly loss limit — reduce new-position sizing for the rest of the week.
+                weekly_loss_mult = risk_limits.weekly_loss_reduction(
+                    _risk_state["weekly_pnl_pct"], Config.WEEKLY_LOSS_LIMIT_PCT,
+                    Config.WEEKLY_LOSS_SIZE_REDUCTION,
+                )
+                if weekly_loss_mult < 1.0:
+                    print(f"[Risk] {symbol}: weekly P&L {_risk_state['weekly_pnl_pct']:.2f}% < "
+                          f"{Config.WEEKLY_LOSS_LIMIT_PCT}% — new sizes ×{weekly_loss_mult} (FAIL)")
+                else:
+                    print(f"[Risk] {symbol}: weekly P&L {_risk_state['weekly_pnl_pct']:.2f}% "
+                          f"within limit (PASS)")
 
                 if signal['signal'] == "buy":
                     try:
@@ -1332,6 +1437,36 @@ class TradingBot:
                             f"[CORRELATION] Proceeding with elevated correlation "
                             f"{_corr_result['avg_correlation']:.2f} to open positions"
                         )
+
+                    # ── Sector concentration cap (Task 8) ──────────────────────
+                    _positions_mv = [
+                        (p.symbol, abs(float(getattr(p, "market_value", 0) or 0)))
+                        for p in _all_pos
+                    ]
+                    _sec_ok, _sec, _sec_share, _sec_reason = risk_limits.sector_exposure_ok(
+                        CorrelationGuard.SECTOR_MAP, symbol, _positions_mv,
+                        Config.MAX_SECTOR_CONCENTRATION_PCT,
+                    )
+                    if not _sec_ok:
+                        print(f"[Risk] {symbol}: sector concentration FAIL — {_sec_reason}")
+                        asyncio.create_task(notifications.notify_trade_skipped(
+                            symbol, strategy.name, f"Sector cap: {_sec_reason}"))
+                        continue
+                    print(f"[Risk] {symbol}: sector concentration PASS "
+                          f"({_sec} {_sec_share:.1f}% ≤ {Config.MAX_SECTOR_CONCENTRATION_PCT:.0f}%)")
+
+                    # ── Single-position size cap (Task 8): ≤ 5% equity at entry ─
+                    _eq_ref = _health_state.get("equity_usd") or self.start_of_day_equity or 0.0
+                    _entry_px = float(signal.get("entry_price") or 0)
+                    _pos_cap = risk_limits.single_position_share_cap(
+                        _eq_ref, _entry_px, Config.MAX_SINGLE_POSITION_PCT)
+                    if _pos_cap > 0:
+                        _existing_cap = signal.get("adv_cap_shares")
+                        signal["adv_cap_shares"] = (
+                            min(_existing_cap, _pos_cap) if _existing_cap else _pos_cap)
+                        print(f"[Risk] {symbol}: single-position cap "
+                              f"{_pos_cap} shares (≤{Config.MAX_SINGLE_POSITION_PCT:.0f}% equity) "
+                              f"→ effective share cap {signal['adv_cap_shares']}")
 
                     # Short interest signal: enrichment for swing buy signals only
                     if isinstance(strategy, SwingStrategy):
@@ -1456,16 +1591,17 @@ class TradingBot:
                 perf_note = None
                 if signal_type and Config.PERFORMANCE_SCALING_ENABLED:
                     perf_mult = await asyncio.to_thread(
-                        self._get_performance_multiplier, signal_type
+                        self._get_performance_multiplier, signal_type, symbol,
+                        self._current_regime_class,
                     )
                     if perf_mult > 1.0:
                         perf_note = (
-                            f"🧠 Performance Brain: {signal_type} WR >60% "
+                            f"🧠 Performance Brain: {signal_type} momentum/regime/time "
                             f"→ size +{int((perf_mult - 1) * 100)}%"
                         )
                     elif perf_mult < 1.0:
                         perf_note = (
-                            f"🧠 Performance Brain: {signal_type} WR <40% "
+                            f"🧠 Performance Brain: {signal_type} momentum/regime/time "
                             f"→ size {int((perf_mult - 1) * 100)}%"
                         )
 
@@ -1532,6 +1668,65 @@ class TradingBot:
                             grok_note = f"🐦 Grok X/Twitter bearish (score {_gscr}/10) → size −50%"
                             print(f"[GrokSentiment] {symbol}: bearish {_gscr}/10 → 0.5× reduction")
 
+                # ── Enhanced signal quality scoring (Task 5) ────────────────────
+                # Composite 0-10 score from technical/sentiment/regime/insider/volume.
+                # Gates buys below SIGNAL_QUALITY_MIN_SCORE and scales size 0.5x-1.5x.
+                quality_mult = 1.0
+                composite_val = None
+                quality_note = None
+                if Config.SIGNAL_QUALITY_ENABLED and signal.get('signal') == 'buy':
+                    try:
+                        import pandas_ta as _ta
+                        _es_p = int(getattr(strategy, 'ema_short', 50) or 50)
+                        _el_p = int(getattr(strategy, 'ema_long', 200) or 200)
+                        _closes = data['close']
+                        _es_series = _ta.ema(_closes, length=_es_p)
+                        _el_series = _ta.ema(_closes, length=_el_p)
+                        _es_val = float(_es_series.iloc[-1]) if _es_series is not None and len(_es_series) and pd.notna(_es_series.iloc[-1]) else None
+                        _el_val = float(_el_series.iloc[-1]) if _el_series is not None and len(_el_series) and pd.notna(_el_series.iloc[-1]) else None
+                        _gscore = float(_grok.get('score')) if (_grok and _grok.get('score') is not None) else None
+                        # Regime alignment from validated_strategies (fail-open -> neutral).
+                        _rg_ok, _rg_valid, _rg_has = await asyncio.to_thread(
+                            self._regime_gate_ok, symbol, self._current_regime_class
+                        )
+                        _regime_aligned = _rg_ok if _rg_has else None
+                        try:
+                            _cur_vol = float(data['volume'].iloc[-1])
+                            _adv_val = float(data['volume'].tail(20).mean())
+                        except (KeyError, IndexError, ValueError, TypeError):
+                            _cur_vol = _adv_val = None
+                        sq = signal_quality.evaluate(
+                            rsi=signal.get('rsi_at_entry'),
+                            macd_histogram=signal.get('macd_histogram_at_entry'),
+                            ema_short_val=_es_val, ema_long_val=_el_val,
+                            grok_score=_gscore,
+                            validated_for_regime=_regime_aligned,
+                            insider_aligned=None,   # no historical Form 4 feed wired yet
+                            current_volume=_cur_vol, adv=_adv_val,
+                            direction='long',
+                            min_score=Config.SIGNAL_QUALITY_MIN_SCORE,
+                        )
+                        composite_val = round(sq.composite, 2)
+                        _c = sq.components
+                        print(
+                            f"[Signal] {symbol} composite score={sq.composite:.1f}/10 | "
+                            f"tech={_c['technical']} sent={_c['sentiment']} regime={_c['regime']} "
+                            f"insider={_c['insider']} vol={_c['volume']}"
+                        )
+                        if Config.SIGNAL_QUALITY_GATING_ENABLED:
+                            if not sq.passes:
+                                _sq_msg = (f"Signal quality {sq.composite:.1f} < "
+                                           f"{Config.SIGNAL_QUALITY_MIN_SCORE} — skip")
+                                print(f"[Signal] {symbol}: {_sq_msg}")
+                                asyncio.create_task(notifications.notify_trade_skipped(
+                                    symbol, strategy.name, _sq_msg))
+                                continue
+                            quality_mult = sq.size_multiplier
+                            quality_note = f"🎯 Signal quality {sq.composite:.1f}/10 → size {quality_mult:.2f}×"
+                    except Exception as _sqe:
+                        import traceback as _tb
+                        print(f"[Signal] {symbol}: quality scoring failed (fail-open): {_sqe}\n{_tb.format_exc()}")
+
                 _notes = [n for n in [
                     getattr(strategy, 'discovery_size_note', None),
                     getattr(strategy, 'earnings_size_note', None),
@@ -1542,6 +1737,7 @@ class TradingBot:
                     kelly_note,
                     sentiment_note,
                     grok_note,
+                    quality_note,
                 ] if n]
 
                 # Short selling: when a sell signal fires with no open long position,
@@ -1610,7 +1806,11 @@ class TradingBot:
                         ))
                         continue
                     if _adv > 0 and _ep > 0:
-                        signal['adv_cap_shares'] = max(1, int(_adv * 0.01))
+                        _adv_cap = max(1, int(_adv * 0.01))
+                        # Keep the most restrictive of the ADV cap and any single-
+                        # position cap (Task 8) already set on the signal.
+                        _prior_cap = signal.get('adv_cap_shares')
+                        signal['adv_cap_shares'] = min(_prior_cap, _adv_cap) if _prior_cap else _adv_cap
 
                 entry_time = datetime.now(pytz.utc)
                 if not _skip_execute_trade:
@@ -1626,7 +1826,7 @@ class TradingBot:
                             risk_percent * self.risk_multiplier
                             * earnings_mult * vix_risk_mult * confidence_mult
                             * perf_mult * debate_mult * sentiment_mult * grok_mult
-                            * decay_mult
+                            * decay_mult * quality_mult * weekly_loss_mult
                         )
                         # Floor: no trade can go below 10% of normal size regardless of stacked multipliers
                         scaled_risk_percent = max(
@@ -1671,6 +1871,7 @@ class TradingBot:
                                 getattr(strategy, 'ema_short', 50), getattr(strategy, 'ema_long', 200),
                                 float(signal.get('rsi_at_entry', 0)), float(signal.get('macd_at_entry', 0)),
                                 regime, entry_time, self._current_regime_class, decay_mult,
+                                composite_val,
                             )
                             if row_id:
                                 async with self._trade_ids_lock:
@@ -2246,42 +2447,118 @@ class TradingBot:
         except Exception as e:
             print(f"[Heatmap] Unexpected error: {e}")
 
-    def _get_performance_multiplier(self, signal_type: str) -> float:
+    def _get_risk_state(self) -> dict:
+        """Account-level risk state (Task 8): consecutive losses + weekly P&L proxy.
+
+        Cached for RISK_STATE_CACHE_SECONDS. Weekly P&L is approximated as the sum
+        of closed-trade pnl_pct over the last 7 days (equal-weight book proxy — no
+        per-trade dollar P&L is stored). Sync — call via asyncio.to_thread.
         """
-        Returns a position-size multiplier based on the last 20 closed trades for signal_type.
-        WR > 60% → 1.2x  |  WR < 40% → 0.7x  |  < 10 trades → 1.0x (no penalty for new strategies)
-        Sync — called via asyncio.to_thread from _process_symbol.
+        now = datetime.now(pytz.utc)
+        if self._risk_state_cache:
+            ts, cached = self._risk_state_cache
+            if (now - ts).total_seconds() < Config.RISK_STATE_CACHE_SECONDS:
+                return cached
+        state = {"consecutive_losses": 0, "weekly_pnl_pct": 0.0}
+        if self._db_engine:
+            try:
+                with self._db_engine.connect() as conn:
+                    recent = conn.execute(sql_text("""
+                        SELECT pnl_pct FROM signal_outcomes
+                        WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                        ORDER BY exit_time DESC LIMIT 50
+                    """)).mappings().fetchall()
+                    week_ago = now - timedelta(days=7)
+                    wk = conn.execute(sql_text("""
+                        SELECT COALESCE(SUM(pnl_pct), 0) AS wk FROM signal_outcomes
+                        WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                          AND exit_time >= :wa
+                    """), {"wa": week_ago}).mappings().fetchone()
+                state["consecutive_losses"] = risk_limits.count_leading_losses(
+                    [float(r["pnl_pct"]) for r in recent]
+                )
+                state["weekly_pnl_pct"] = float(wk["wk"]) if wk and wk["wk"] is not None else 0.0
+            except Exception as e:
+                print(f"[Risk] risk-state query failed (fail-open): {e}")
+        self._risk_state_cache = (now, state)
+        return state
+
+    def _get_performance_multiplier(self, signal_type: str, symbol: str | None = None,
+                                    current_regime: str | None = None) -> float:
         """
-        if not Config.PERFORMANCE_SCALING_ENABLED:
+        Enhanced Performance Brain (Task 7). Combines three signals into one
+        position-size multiplier, clamped to [0.5, 1.5]:
+
+          * momentum (base): wins 3+ of last 5 closed signals → 1.2x (hot),
+            loses 3+ of last 5 → 0.7x (cold), otherwise 1.0x (neutral).
+          * regime bonus: +0.1x if the current regime has been net-profitable
+            historically for this strategy.
+          * time-of-day bonus: +0.1x if the current session window (morning
+            9:30–11:30 vs afternoon 13:30–16:00) is this strategy's stronger one,
+            −0.1x if it's the weaker one.
+
+        Sync — called via asyncio.to_thread from _process_symbol. Fail-open: any
+        error or missing data leaves the corresponding term neutral.
+        """
+        if not Config.PERFORMANCE_SCALING_ENABLED or not self._db_engine:
             return 1.0
-        if not self._db_engine:
-            return 1.0
+
         try:
             with self._db_engine.connect() as conn:
-                row = conn.execute(sql_text("""
-                    SELECT COUNT(*) AS total,
-                           COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::float
-                               / NULLIF(COUNT(*), 0) AS win_rate
-                    FROM (
-                        SELECT pnl_pct
+                # ── Momentum: last 5 closed signals for this strategy ──────────
+                recent = conn.execute(sql_text("""
+                    SELECT pnl_pct FROM signal_outcomes
+                    WHERE signal_type = :st AND exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                    ORDER BY exit_time DESC LIMIT 5
+                """), {"st": signal_type}).mappings().fetchall()
+                recent_pnls = [float(r["pnl_pct"]) for r in recent]
+
+                # ── Regime stats: is the current regime net-profitable here? ───
+                reg_avg, reg_n = None, 0
+                if current_regime:
+                    rrow = conn.execute(sql_text("""
+                        SELECT AVG(pnl_pct) AS avg_pnl, COUNT(*) AS n
                         FROM signal_outcomes
-                        WHERE signal_type = :st
-                          AND exit_time IS NOT NULL
-                          AND pnl_pct IS NOT NULL
-                        ORDER BY exit_time DESC
-                        LIMIT 20
-                    ) recent
+                        WHERE signal_type = :st AND regime_class = :rc
+                          AND exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                    """), {"st": signal_type, "rc": current_regime}).mappings().fetchone()
+                    if rrow:
+                        reg_n = int(rrow["n"] or 0)
+                        reg_avg = float(rrow["avg_pnl"]) if rrow["avg_pnl"] is not None else None
+
+                # ── Time-of-day stats: morning vs afternoon avg P&L ────────────
+                trow = conn.execute(sql_text("""
+                    SELECT
+                      AVG(CASE WHEN m BETWEEN 570 AND 690 THEN pnl_pct END) AS morning_avg,
+                      COUNT(CASE WHEN m BETWEEN 570 AND 690 THEN 1 END)     AS morning_n,
+                      AVG(CASE WHEN m BETWEEN 810 AND 960 THEN pnl_pct END) AS afternoon_avg,
+                      COUNT(CASE WHEN m BETWEEN 810 AND 960 THEN 1 END)     AS afternoon_n
+                    FROM (
+                      SELECT pnl_pct,
+                             (EXTRACT(HOUR FROM entry_time AT TIME ZONE 'America/New_York') * 60
+                              + EXTRACT(MINUTE FROM entry_time AT TIME ZONE 'America/New_York'))::int AS m
+                      FROM signal_outcomes
+                      WHERE signal_type = :st AND exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                    ) t
                 """), {"st": signal_type}).mappings().fetchone()
 
-            total = int(row["total"]) if row and row["total"] else 0
-            if total < 10:
-                return 1.0
-            wr = float(row["win_rate"] or 0)
-            if wr > 0.60:
-                return 1.2
-            if wr < 0.40:
-                return 0.7
-            return 1.0
+            now_et = datetime.now(pytz.timezone("America/New_York"))
+            cur_min = now_et.hour * 60 + now_et.minute
+            momentum = performance_brain.momentum_multiplier(recent_pnls)
+            reg_bonus = performance_brain.regime_bonus(reg_avg, reg_n)
+            t_bonus = performance_brain.time_of_day_bonus(
+                float(trow["morning_avg"]) if trow and trow["morning_avg"] is not None else None,
+                int(trow["morning_n"] or 0) if trow else 0,
+                float(trow["afternoon_avg"]) if trow and trow["afternoon_avg"] is not None else None,
+                int(trow["afternoon_n"] or 0) if trow else 0,
+                cur_min,
+            )
+            mult = performance_brain.combine(momentum, reg_bonus, t_bonus)
+            print(
+                f"[PerfBrain] {symbol or signal_type} multiplier={mult:.2f} | "
+                f"momentum={momentum:.1f} regime_bonus={reg_bonus:.1f} time_bonus={t_bonus:.1f}"
+            )
+            return mult
         except Exception as e:
             print(f"[PerfBrain] Multiplier query failed for {signal_type}: {e}")
             return 1.0
@@ -2731,6 +3008,18 @@ class TradingBot:
             # 4-regime classification for live regime gating (cached 4h).
             current_regime_class = await self._get_current_regime_class(spy_bars)
 
+            # Correlation-aware portfolio gate (Task 4): load the current optimal
+            # portfolio's symbol set once per cycle. Fail-open when no portfolio exists.
+            portfolio_symbols, portfolio_has_data = set(), False
+            if Config.PORTFOLIO_GATING_ENABLED:
+                portfolio_symbols, portfolio_has_data = await asyncio.to_thread(
+                    self._load_portfolio_symbols
+                )
+                if portfolio_has_data:
+                    print(f"[Portfolio] Gating swing screener to {len(portfolio_symbols)} portfolio symbols")
+                else:
+                    print("[Portfolio] No optimal portfolio yet — screening all symbols (fail-open)")
+
             adx_regime = self._get_market_regime_adx(spy_bars)
             preferred_strategy_type = {
                 "trending": "ema_trend",
@@ -2932,6 +3221,14 @@ class TradingBot:
                     risk_to_use *= Config.BEAR_MARKET_SIZE_REDUCTION
                     strategy.bear_market_note = "🐻 Bear market mode — position size reduced 50%"
                     print(f"[Swing] {symbol}: bear market mode — risk_to_use={risk_to_use:.3f}%")
+
+                # Portfolio gate (Task 4) — only evaluate symbols in the current
+                # optimal portfolio. Fail-open when no portfolio has been built yet.
+                if Config.PORTFOLIO_GATING_ENABLED and portfolio_has_data:
+                    if symbol not in portfolio_symbols:
+                        print(f"[Portfolio] {symbol} not in optimal portfolio — SKIP")
+                        continue
+                    print(f"[Portfolio] {symbol} in optimal portfolio — PROCEED")
 
                 # Live regime gate — only trade a symbol when its validated strategy
                 # covers the current regime. Fail-open when no regime data exists.
@@ -4087,6 +4384,10 @@ class TradingBot:
 
         self.add_scalp_strategy(SMBStrategy("SMB Late Scalp", ema_window=9, rr_ratio=3,
                                              db_engine=self._db_engine, base_capital=_initial_capital))
+        # Crypto momentum scalp (Task 6) — runs alongside SMB; best signal wins per tick.
+        if Config.CRYPTO_MOMENTUM_ENABLED:
+            self.add_scalp_strategy(CryptoMomentumStrategy("Crypto Momentum"))
+            print("[Scalp] Crypto Momentum strategy enabled alongside SMB Late Scalp")
 
         # Per-symbol swing strategies — parameters from Discovery Engine walk-forward validation
         self.swing_symbol_strategies = {
@@ -4109,8 +4410,16 @@ class TradingBot:
         if self._db_engine:
             print("[TickerPrioritizer] Pre-populating active_tickers before loop startup...")
             try:
-                from discovery.ticker_prioritizer import refresh_active_tickers
+                from discovery.ticker_prioritizer import refresh_active_tickers, get_active_tickers
                 await asyncio.to_thread(refresh_active_tickers, self._db_engine, self.stock_data_client)
+                # Enrich sector map from Finnhub for the top 50 active symbols.
+                # Fail-open — any errors are logged inside enrich_sector_map.
+                _top_syms = await asyncio.to_thread(get_active_tickers, self._db_engine)
+                await asyncio.to_thread(
+                    CorrelationGuard.enrich_sector_map,
+                    _top_syms[:50],
+                    Config.FINNHUB_API_KEY,
+                )
             except Exception as _tp_e:
                 print(f"[TickerPrioritizer] Pre-populate error: {_tp_e}")
         await asyncio.gather(
