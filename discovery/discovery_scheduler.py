@@ -82,17 +82,50 @@ class DiscoveryScheduler:
 
         symbols = get_discovery_candidates(db_engine, top_n=250)
         if not symbols:
-            symbols = list(Config.SWING_SYMBOLS)
-            print(
-                f"[IndicatorDiscovery] symbol_universe empty — falling back to "
-                f"SWING_SYMBOLS ({len(symbols)} symbols)"
-            )
+            # symbol_universe is populated Sunday midnight; fall back to last-known
+            # active_tickers (no recency filter) rather than the tiny SWING_SYMBOLS list.
+            from .ticker_prioritizer import get_active_tickers
+            symbols = get_active_tickers(db_engine)[:250]
+            if symbols:
+                print(
+                    f"[IndicatorDiscovery] symbol_universe empty — using last-populated "
+                    f"active_tickers ({len(symbols)} symbols)"
+                )
+            else:
+                symbols = list(Config.SWING_SYMBOLS)
+                print(
+                    f"[IndicatorDiscovery] Both symbol_universe and active_tickers empty — "
+                    f"falling back to SWING_SYMBOLS ({len(symbols)} symbols)"
+                )
         else:
             print(f"[IndicatorDiscovery] {len(symbols)} symbols from symbol_universe")
 
+        # Pre-flight: count how many candidate symbols have parquet bars cached by
+        # discovery_engine_v2. Log clearly so the log makes it obvious when v2 hasn't
+        # run yet rather than silently skipping most symbols.
+        cached = [s for s in symbols if (_DATA_DIR / f"{s}.parquet").exists()]
+        n_cached, n_total = len(cached), len(symbols)
+        if n_cached == 0:
+            print(
+                f"[IndicatorDiscovery] WARNING: 0 of {n_total} candidate symbols have "
+                f"cached bar files in discovery/data/. discovery_engine_v2 must complete "
+                f"its Friday run first — parquet files are written there. "
+                f"All symbols will be skipped this run."
+            )
+            self._slack(
+                f":warning: Indicator Discovery skipped — no parquet bar cache found. "
+                f"discovery_engine_v2 must run first (Friday) to populate discovery/data/. "
+                f"Check Railway logs."
+            )
+        else:
+            print(
+                f"[IndicatorDiscovery] {n_cached}/{n_total} symbols have cached bars "
+                f"— {n_total - n_cached} will be skipped (no parquet cache from v2)"
+            )
+
         self._slack(
             f":dna: Indicator Discovery Engine starting overnight run — "
-            f"{len(symbols)} symbols | population=50 | 20 generations each."
+            f"{n_cached}/{n_total} symbols have cached bars | population=50 | 20 generations each."
         )
 
         engine = GeneticEngine(
@@ -109,9 +142,10 @@ class DiscoveryScheduler:
         for symbol in symbols:
             bars_df = self._load_bars(symbol)
             if bars_df.empty:
-                msg = f"{symbol}: no cached bars — skipping (run discovery_engine_v2 first)"
-                print(f"[IndicatorDiscovery] {msg}")
-                symbol_summaries.append(msg)
+                print(
+                    f"[IndicatorDiscovery] {symbol}: no cached bars — skipping "
+                    f"(discovery_engine_v2 must write {symbol}.parquet to discovery/data/ first)"
+                )
                 continue
 
             regime = self._detect_regime(bars_df)

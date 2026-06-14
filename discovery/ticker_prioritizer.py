@@ -96,17 +96,32 @@ def refresh_active_tickers(db_engine, stock_data_client) -> None:
 
 
 def get_active_tickers(db_engine) -> list[str]:
-    """Return tickers from active_tickers updated within the last 35 minutes, ordered by rank."""
+    """Return tickers from active_tickers ordered by rank, using the last populated values.
+
+    The 30-minute refresh only runs during market hours, so at nights and weekends
+    the table is stale — that is fine. We still want the last-known ranking rather
+    than an empty list, so there is no recency filter. A staleness log line is
+    emitted so callers can see how old the data is.
+    """
     if db_engine is None:
         return []
-    cutoff = datetime.utcnow() - timedelta(minutes=35)
     try:
         with db_engine.connect() as conn:
             rows = conn.execute(sql_text("""
-                SELECT ticker FROM active_tickers
-                WHERE last_updated > :cutoff
+                SELECT ticker, last_updated
+                FROM active_tickers
                 ORDER BY rank ASC
-            """), {"cutoff": cutoff}).mappings().fetchall()
+            """)).mappings().fetchall()
+        if not rows:
+            print("[TickerPrioritizer] active_tickers is empty — no data to return")
+            return []
+        age_minutes = int(
+            (datetime.utcnow() - rows[0]["last_updated"].replace(tzinfo=None)).total_seconds() / 60
+        )
+        print(
+            f"[TickerPrioritizer] get_active_tickers: {len(rows)} tickers "
+            f"(last updated {age_minutes}m ago)"
+        )
         return [r["ticker"] for r in rows]
     except Exception as e:
         print(f"[TickerPrioritizer] get_active_tickers error: {e}")
