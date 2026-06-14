@@ -14,7 +14,7 @@
 
 ## Architecture Overview
 
-A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. The swing screener runs every 5 minutes during market hours (9:30 AM–4:00 PM EDT, Mon–Fri) across up to 250 symbols pulled by volume from the `active_tickers` PostgreSQL table (6 priority symbols — JPM, SPY, COST, BRK.B, PG, V — always included). Per-symbol 4-hour cooldown is set the moment a signal enters the protection stack (debate gate), not on trade execution — this prevents the same symbol from being debated repeatedly in one session. Short selling is enabled (`SHORT_SELLING_ENABLED=True`): a SELL signal with no open long executes a short sale with ATR-based stop/target, full debate + fundamentals gate, and 1:2 minimum R/R. SHORT debate gate: bull must raise **4+ concrete fundamental/macro reasons** to block the trade (LONG path remains at 2+ bear objections). **Active short exit**: every swing cycle checks open shorts for thesis reversal (RSI < 55 AND MACD crosses above signal) — if both true, cancels OCO and covers at market immediately. The Discovery Engine uses the same 250-symbol universe from `active_tickers`. All positions use EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly sizing, and a 15-gate risk chain. Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy.
+A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. The swing screener runs every 5 minutes during market hours (9:30 AM–4:00 PM EDT, Mon–Fri) across up to 250 symbols pulled by volume from the `active_tickers` PostgreSQL table (6 priority symbols — JPM, SPY, COST, BRK.B, PG, V — always included). Per-symbol 4-hour cooldown is set the moment a signal enters the protection stack (debate gate), not on trade execution — this prevents the same symbol from being debated repeatedly in one session. Short selling is enabled (`SHORT_SELLING_ENABLED=True`): a SELL signal with no open long executes a short sale with ATR-based stop/target, full debate + fundamentals gate, and 1:2 minimum R/R. SHORT debate gate: bull must raise **4+ concrete fundamental/macro reasons** to block the trade (LONG path remains at 2+ bear objections). **Active short exit**: every swing cycle checks open shorts for thesis reversal (RSI < 55 AND MACD crosses above signal) — if both true, cancels OCO and covers at market immediately. The Discovery Engine uses the same 250-symbol universe from `active_tickers`. All positions use EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly sizing, composite signal-quality scoring (Task 5), correlation-aware portfolio gating (Task 4), and a multi-gate risk chain (incl. Task 8 sector/position/weekly/consecutive-loss limits). Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy.
 
 **Signal conditions (swing_strategy.py):**
 - LONG: EMA50 > EMA200 AND MACD above signal within last 3 bars AND RSI in [35, 65] AND Kalman noise < 0.4 AND Hurst H ≥ 0.55
@@ -28,7 +28,15 @@ A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. T
 
 | File | Purpose |
 |---|---|
-| `bot.py` | Main TradingBot class — 21 async loops, full gate chain, all trade execution |
+| `bot.py` | Main TradingBot class — 22 async loops, full gate chain, all trade execution |
+| `signal_quality.py` | Task 5 composite signal-quality scorer (technical/sentiment/regime/insider/volume → 0–10 + size multiplier) |
+| `performance_brain.py` | Task 7 size-multiplier math (momentum + regime bonus + time-of-day bonus) |
+| `risk_limits.py` | Task 8 pure risk-limit decision functions (sector/position/weekly/consecutive-loss) |
+| `discovery/data_partitioner.py` | Task 2 70/15/15 train/val/holdout wall with guarded accessors |
+| `discovery/portfolio_optimizer.py` | Task 4 correlation-aware optimal portfolio selection → `strategy_portfolio` |
+| `discovery/strategies/mean_reversion_strategy.py` | Task 3 family 2 — BB+RSI mean reversion (position-vector) |
+| `discovery/strategies/volume_breakout_strategy.py` | Task 3 family 3 — Donchian+OBV volume breakout (position-vector) |
+| `discovery/strategies/insider_flow_strategy.py` | Task 3 family 4 — Form 4 insider flow, long-only (position-vector) |
 | `config.py` | All config constants; reads `.env` via `load_dotenv()` at import time (critical) |
 | `llm_client.py` | Unified LLM abstraction — routes to Anthropic, OpenRouter, or Moonshot |
 | `notifications.py` | Slack webhook functions for alerts/decisions/health/performance channels |
@@ -190,7 +198,29 @@ Config: `DECAY_MONITOR_ENABLED`, `DECAY_MIN_SIGNALS`, `DECAY_CRITICAL_MIN_SIGNAL
 
 **Recommended:** `OPENROUTER_API_KEY` (DeepSeek Flash for debate + news NLP), `SLACK_SIGNING_SECRET`
 
-**Optional:** `GROK_API_KEY`, `QUIVER_API_KEY`, `SENTRY_DSN`, `NOTION_API_KEY`, `NOTION_DATABASE_ID`, `PAGERDUTY_ROUTING_KEY`, `HEALTH_PORT` (default 8502), `LLM_PROVIDER`, `OPENAI_COMPATIBLE_API_KEY`
+**Optional:** `GROK_API_KEY`, `XAI_API_KEY`, `QUIVER_API_KEY`, `SENTRY_DSN`, `NOTION_API_KEY`, `NOTION_DATABASE_ID`, `PAGERDUTY_ROUTING_KEY`, `HEALTH_PORT` (default 8502), `LLM_PROVIDER`, `OPENAI_COMPATIBLE_API_KEY`, `SHORT_SELLING_ENABLED` (default true)
+
+**Feature flags & tuning (Tasks 1–8 — all have safe defaults):**
+- **Transaction costs (T1):** `COST_MODELING_ENABLED`=true, `COST_LIQUID_DOLLAR_VOLUME`=100000000, `COST_SPREAD_LIQUID_PCT`=0.0005, `COST_SPREAD_ILLIQUID_PCT`=0.0010, `COST_IMPACT_SMALL_PCT`=0.0010, `COST_IMPACT_MEDIUM_PCT`=0.0025, `COST_IMPACT_LARGE_PCT`=0.0050, `COST_ADV_FRACTION`=0.0005, `COST_BORROW_EASY_ANNUAL`=0.0050, `COST_BORROW_HARD_ANNUAL`=0.0200, `COST_HARD_TO_BORROW`=false, `COST_MIN_NET_SHARPE`=0.0
+- **Multi-family discovery (T3):** `DISCOVERY_MULTI_FAMILY_ENABLED`=true
+- **Portfolio optimizer (T4):** `PORTFOLIO_OPTIMIZER_ENABLED`=true, `PORTFOLIO_MAX_CORRELATION`=0.7, `PORTFOLIO_MAX_SIZE`=20, `PORTFOLIO_MIN_SHARPE`=0.5, `PORTFOLIO_MIN_OVERLAP`=10, `PORTFOLIO_GATING_ENABLED`=true
+- **Signal quality (T5):** `SIGNAL_QUALITY_ENABLED`=true, `SIGNAL_QUALITY_GATING_ENABLED`=true, `SIGNAL_QUALITY_MIN_SCORE`=5.0
+- **Crypto momentum (T6):** `CRYPTO_MOMENTUM_ENABLED`=true, `CRYPTO_MOMENTUM_EMA_FAST`=9, `CRYPTO_MOMENTUM_EMA_SLOW`=21, `CRYPTO_MOMENTUM_VOL_MULT`=1.2, `CRYPTO_MOMENTUM_ATR_STOP_MULT`=1.5, `CRYPTO_MOMENTUM_ATR_TARGET_MULT`=3.0, `CRYPTO_MOMENTUM_COOLDOWN_MINUTES`=15, `CRYPTO_MOMENTUM_MIN_MOVE_PCT`=0.001
+- **Risk limits (T8):** `MAX_SECTOR_CONCENTRATION_PCT`=30.0, `MAX_SINGLE_POSITION_PCT`=5.0, `WEEKLY_LOSS_LIMIT_PCT`=-3.0, `WEEKLY_LOSS_SIZE_REDUCTION`=0.5, `CONSECUTIVE_LOSS_LIMIT`=5, `CONSECUTIVE_LOSS_PAUSE_HOURS`=2.0, `RISK_STATE_CACHE_SECONDS`=300
+- **Permutation/regime/decay:** see the respective sections above. **`DECAY_MONITOR_ENABLED=false` is set in Railway** — the decay monitor loop (Loop 22) is currently disabled in production; do not change this flag.
+
+---
+
+## Known Issues & Technical Debt
+
+- **`DECAY_MONITOR_ENABLED=false` in Railway** — Loop 22 is disabled in production; decay throttling/disabling does not run live. Code is intact and re-enables via the flag.
+- **Insider-flow backtest (T3) & signal-quality insider component (T5)** — no historical per-bar Form 4 feed is wired in. `InsiderFlowPositionStrategy` returns all-flat (never validates); the T5 insider component passes `insider_aligned=None` → NEUTRAL 5.0. Both await a queryable Form 4 history.
+- **Signal quality gate (T5) covers the long/buy path only** — shorts route through `_execute_short` and are not yet scored/gated by composite quality.
+- **Weekly loss limit (T8) uses a P&L proxy** — sum of closed-trade `pnl_pct` over 7 days (equal-weight book), not true equity-based portfolio return; no per-trade dollar P&L is stored in `signal_outcomes`.
+- **Sector map is small** — `CorrelationGuard.SECTOR_MAP` only classifies the 6 priority symbols; unknown symbols are unconstrained by the sector cap. Extend it as the live universe grows beyond the priority set.
+- **Transaction-cost order size is assumed, not measured** — impact tier uses `COST_ADV_FRACTION` (default <0.1% ADV) rather than the actual order/ADV ratio per backtest trade.
+- **Two Discovery Engines coexist** — v1 (`discovery_engine.py`, grid + MCPT + the Task 1–4 additions) and v2 (`discovery_engine_v2.py`, JSONB families). Tasks 1–4 are wired into v1; v2 is a separate lineage.
+- **CRLF/encoding** — repo files are LF; git warns on CRLF conversion on Windows. Test print glyphs use ASCII to survive the cp1252 console.
 
 ---
 
@@ -223,20 +253,34 @@ Config: `DECAY_MONITOR_ENABLED`, `DECAY_MIN_SIGNALS`, `DECAY_CRITICAL_MIN_SIGNAL
 
 ---
 
-## 15-Gate Chain (`_process_symbol`, in order)
+## Gate Chain (in order)
 
+**Swing loop, once per cycle, then per symbol before `_process_symbol`:**
+- A. Portfolio gate (Task 4) — symbol must be in the current `strategy_portfolio` (fail-open if none; `PORTFOLIO_GATING_ENABLED`)
+- B. Live regime gate — strategy must be validated for the current regime (fail-open; `REGIME_GATING_ENABLED`)
+
+**`_process_symbol`, in order:**
 1. `trading_halted_for_day`
 2. `_bot_paused`
 3. Symbol + strategy cooldown
-4. Already in position
-5. Portfolio heat cap
-6. Correlation guard
-7. FINRA short interest veto
-8. Fundamentals gate (Finnhub)
-9. Earnings filter
-10. Bull/bear debate (SHORT: bull needs 4+ concrete reasons to block; LONG: bear needs 2+)
-11. Strategy circuit breaker
-12. VIX extreme gate (>40)
-13. VIX spike gate (>35)
-14. ADX regime filter
-15. Candlestick confirmation
+4. Decay gate (skip if strategy `disabled`; else stack `position_multiplier`)
+5. Best-signal crypto selection (Task 6 — only highest-confidence crypto signal proceeds)
+6. Portfolio heat cap
+7. **Consecutive-loss pause (Task 8)** — entries paused after 5 losers in a row
+8. **Weekly loss limit (Task 8)** — 0.5× sizing when 7-day P&L < −3% (size, not block)
+9. Already in position
+10. Correlation guard
+11. **Sector concentration cap (Task 8)** — block if sector ≥ 30% of exposure
+12. **Single-position cap (Task 8)** — ≤ 5% equity at entry (share cap)
+13. FINRA short interest veto
+14. **Signal quality gate (Task 5)** — composite ≥ 5.0; size scales 0.5×–1.5×
+15. Fundamentals gate (Finnhub)
+16. Earnings filter
+17. Bull/bear debate (SHORT: bull needs 4+ concrete reasons to block; LONG: bear needs 2+)
+18. Strategy circuit breaker
+19. VIX extreme gate (>40)
+20. VIX spike gate (>35)
+21. ADX regime filter
+22. Candlestick confirmation
+
+**Size multiplier stack** (applied to `scaled_risk_percent`): `risk_multiplier × earnings × vix × confidence × perf_brain × debate × news_sentiment × grok × decay × signal_quality × weekly_loss`, floored at `POSITION_SIZE_FLOOR` × base.
