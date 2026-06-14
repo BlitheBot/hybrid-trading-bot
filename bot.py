@@ -1617,6 +1617,37 @@ class TradingBot:
                         elif _si["signal"] == 1:
                             signal["si_boost_note"] = _si["note"]
 
+                        # Week-over-week short-interest confirmation bonus (Task 4 of
+                        # overnight build). Distinct from the FINRA veto above: rewards
+                        # size when the WoW change in short-volume ratio confirms the
+                        # thesis. SHORT (sell): SI rising > +10% → +0.2x. LONG (buy):
+                        # SI falling > -15% (squeeze) → +0.3x. Fail-open: no data → skip.
+                        if Config.SHORT_INTEREST_CONFIRM_ENABLED:
+                            try:
+                                from discovery.data_feeds.finra_historical import (
+                                    get_recent_wow_change, short_interest_size_adjustment,
+                                )
+                                _wow = await asyncio.to_thread(get_recent_wow_change, symbol)
+                                if _wow is not None:
+                                    _adj = short_interest_size_adjustment(
+                                        signal.get('signal'), _wow,
+                                        Config.SHORT_INTEREST_RISING_THRESHOLD,
+                                        Config.SHORT_INTEREST_FALLING_THRESHOLD,
+                                        Config.SHORT_INTEREST_SHORT_BONUS,
+                                        Config.SHORT_INTEREST_LONG_BONUS,
+                                    )
+                                    if _adj > 0:
+                                        signal['short_interest_size_mult'] = 1.0 + _adj
+                                        signal['si_wow_note'] = (
+                                            f"🩳 Short interest WoW {_wow:+.1%} → size +{_adj:.1f}×"
+                                        )
+                                    print(f"[ShortInt] {symbol} WoW change={_wow:+.1%} → size adjustment={_adj:+.1f}x")
+                                else:
+                                    print(f"[ShortInt] {symbol} WoW change=n/a → size adjustment=+0.0x (no data)")
+                            except Exception as _sie:
+                                import traceback as _tb
+                                print(f"[ShortInt] {symbol} WoW confirmation failed (non-fatal): {_sie}\n{_tb.format_exc()}")
+
                     # Pre-execute hook: fundamentals check + bull/bear debate (swing only)
                     if pre_execute_hook:
                         # Set 4-hour cooldown the moment a signal enters the protection stack,
@@ -1863,6 +1894,7 @@ class TradingBot:
                     getattr(strategy, 'earnings_size_note', None),
                     getattr(strategy, 'bear_market_note', None),
                     signal.get('si_boost_note'),
+                    signal.get('si_wow_note'),
                     vix_note,
                     perf_note,
                     kelly_note,
@@ -1963,11 +1995,12 @@ class TradingBot:
                         decay_mult = max(_decay_mult, Config.DECAY_MULTIPLIER_FLOOR) if _decay_mult < 1.0 else 1.0
                         if decay_mult < 1.0:
                             print(f"[Decay] {symbol} applying decay multiplier {decay_mult}x (status={_decay_status})")
+                        short_int_mult = signal.get('short_interest_size_mult', 1.0)
                         scaled_risk_percent = (
                             risk_percent * self.risk_multiplier
                             * earnings_mult * vix_risk_mult * confidence_mult
                             * perf_mult * debate_mult * sentiment_mult * grok_mult
-                            * decay_mult * quality_mult * weekly_loss_mult
+                            * decay_mult * quality_mult * weekly_loss_mult * short_int_mult
                         )
                         # Floor: no trade can go below 10% of normal size regardless of stacked multipliers
                         scaled_risk_percent = max(
@@ -3020,7 +3053,10 @@ class TradingBot:
         try:
             account      = await asyncio.to_thread(self.trading_client.get_account)
             equity       = float(account.equity)
-            risk_dollars = equity * (risk_percent * self.risk_multiplier * sentiment_mult / 100.0)
+            # Week-over-week short-interest confirmation bonus (Task 4): rising SI
+            # confirms a short → larger size. Set on the signal in _process_symbol.
+            short_int_mult = float(signal.get('short_interest_size_mult', 1.0))
+            risk_dollars = equity * (risk_percent * self.risk_multiplier * sentiment_mult * short_int_mult / 100.0)
             shares_raw   = max(1, int(risk_dollars / short_risk))
             max_dollars  = float(account.buying_power) * (Config.MAX_BUYING_POWER_UTILIZATION_PERCENT / 100.0)
             shares_bp    = max(1, int(max_dollars / entry_price))
@@ -3028,6 +3064,7 @@ class TradingBot:
             print(
                 f"[Swing] {symbol}: sizing — equity={equity:.0f} risk%={risk_percent:.3f} "
                 f"risk_mult={self.risk_multiplier:.2f} sent_mult={sentiment_mult:.2f} "
+                f"short_int_mult={short_int_mult:.2f} "
                 f"risk_$={risk_dollars:.2f} shares_risk={shares_raw} "
                 f"bp_cap={shares_bp} final_shares={shares}"
             )

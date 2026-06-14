@@ -257,6 +257,31 @@ def get_recent_wow_change(symbol: str, lookback_days: int = 7) -> float | None:
         return None
 
 
+def short_interest_size_adjustment(
+    direction: str,
+    wow_change: float | None,
+    rising_threshold: float,
+    falling_threshold: float,
+    short_bonus: float,
+    long_bonus: float,
+) -> float:
+    """
+    Pure decision for the live WoW short-interest size bonus (Task 4).
+
+    Returns the additive size bonus (e.g. 0.2 == +0.2x):
+      * SHORT ('sell') + short interest rising  > +rising_threshold   → short_bonus
+      * LONG  ('buy')  + short interest falling  < -falling_threshold  → long_bonus
+      * otherwise (incl. no data)                                      → 0.0
+    """
+    if wow_change is None:
+        return 0.0
+    if direction == "sell" and wow_change > rising_threshold:
+        return short_bonus
+    if direction == "buy" and wow_change < -falling_threshold:
+        return long_bonus
+    return 0.0
+
+
 if __name__ == "__main__":
     # Offline smoke test of the parser + WoW math (no network).
     sample = (
