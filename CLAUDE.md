@@ -83,6 +83,14 @@ A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. T
 
 ## Strategy Validation Pipeline (Discovery Engine v1)
 
+**Multi-factor strategy families (Task 3):** the Discovery Engine validates **4 position-vector families** per symbol each weekly run (gated by `DISCOVERY_MULTI_FAMILY_ENABLED`, default on), each implementing the `SwingPositionStrategy` interface (`name`/`param_grid()`/`position_vector()`) and flowing through the full cost + regime + MCPT pipeline:
+1. **Momentum** — `SwingPositionStrategy` (`swing_ema_macd_rsi`): EMA/MACD/RSI (existing family 1).
+2. **Mean reversion** — `discovery/strategies/mean_reversion_strategy.py` `MeanReversionPositionStrategy` (`mean_reversion_bb_rsi`): long on lower-BB touch + RSI<35, short on upper-BB touch + RSI>65, exit on mean (middle-band) cross. Grid: bb_period [15,20,25] × bb_std [1.5,2.0,2.5] × rsi_period [10,14] (18).
+3. **Volume breakout** — `discovery/strategies/volume_breakout_strategy.py` `VolumeBreakoutPositionStrategy` (`volume_breakout_obv`): Donchian break of prior N-day high/low + volume > mult×ADV + OBV trending; Donchian channel exit. Grid: breakout_period [15,20,25] × volume_mult [1.5,2.0,2.5] × obv_lookback [3,5] (18).
+4. **Insider flow** — `discovery/strategies/insider_flow_strategy.py` `InsiderFlowPositionStrategy` (`insider_flow_form4`, long-only): cumulative Form 4 buys ≥ threshold in last `lookback` days AND close > EMA; exit on EMA cross. Grid: insider_threshold [$50k,$100k,$250k] × lookback [3,5,7] × ema_period [20,50] (18). **Known limitation:** needs a per-bar `insider_buy_value` column; OHLCV-only bars have none, so it returns all-flat (never validates) until a historical Form 4 feed is wired in — does not crash the pipeline.
+
+Families register into `permutation_framework._STRATEGY_REGISTRY` (so spawned MCPT workers resolve them by name) and `DISCOVERY_FAMILIES`. The best-net-Sharpe family per symbol wins deployment; log `[Discovery] {symbol}: best family across {n} promoted = {name} (net Sharpe=…)`. Unit tests: `discovery/test_strategy_families.py`.
+
 **Out-of-sample integrity wall (Task 2):** `discovery/data_partitioner.py` `DataPartitioner` splits each symbol's bars 70% train / 15% validation / 15% **holdout**. Guarded accessors raise `PartitionViolation` (a `ValueError`): `get_training()` is always allowed, `get_validation()` needs `unlock_validation()`, `get_holdout()` needs `unlock_holdout(reason=...)` (reserved until a live-deploy decision). The Discovery Engine calls `get_non_holdout()` (train+val) so the holdout never enters optimization/validation; boundaries log at startup (`[Partition] {symbol} train=…→… val=…→… holdout=…→…`) and persist to the `data_partitions` table. Unit tests: `discovery/test_data_partitioner.py`.
 
 Every parameter combo passes through **two mandatory gates** before being marked `validated`:

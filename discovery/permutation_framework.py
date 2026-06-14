@@ -347,6 +347,28 @@ class SwingPositionStrategy:
 _STRATEGY_REGISTRY = {SwingPositionStrategy.name: SwingPositionStrategy}
 
 
+def register_strategy(cls) -> None:
+    """Register a position-vector strategy family so MCPT workers resolve it by name."""
+    _STRATEGY_REGISTRY[cls.name] = cls
+
+
+# Multi-factor discovery families (Task 3). Imported here — not at the top — so the
+# strategy modules never need to import this module back (no cycle), and so every
+# spawned MCPT worker re-populates the registry on import. SwingPositionStrategy is
+# the momentum family (family 1).
+DISCOVERY_FAMILIES = [SwingPositionStrategy]
+try:
+    from discovery.strategies.mean_reversion_strategy import MeanReversionPositionStrategy
+    from discovery.strategies.volume_breakout_strategy import VolumeBreakoutPositionStrategy
+    from discovery.strategies.insider_flow_strategy import InsiderFlowPositionStrategy
+
+    for _fam in (MeanReversionPositionStrategy, VolumeBreakoutPositionStrategy, InsiderFlowPositionStrategy):
+        register_strategy(_fam)
+        DISCOVERY_FAMILIES.append(_fam)
+except Exception:
+    print(f"[Permutation] discovery family registration failed:\n{traceback.format_exc()}")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Step 2 — Bar Permutation Noise Generator
 # ──────────────────────────────────────────────────────────────────────────────

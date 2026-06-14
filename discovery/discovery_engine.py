@@ -20,6 +20,16 @@ from discovery.permutation_framework import (
     SwingPositionStrategy,
     validate_strategy_edge_regime_aware,
 )
+from discovery.strategies.mean_reversion_strategy import MeanReversionPositionStrategy
+from discovery.strategies.volume_breakout_strategy import VolumeBreakoutPositionStrategy
+from discovery.strategies.insider_flow_strategy import InsiderFlowPositionStrategy
+
+# Multi-factor families run in addition to the swing momentum family (family 1).
+_EXTRA_FAMILIES = [
+    MeanReversionPositionStrategy,
+    VolumeBreakoutPositionStrategy,
+    InsiderFlowPositionStrategy,
+]
 from discovery.regime_classifier import CHOPPY, classify_regime, realized_vol_proxy
 from discovery.data_partitioner import DataPartitioner, PartitionViolation
 from discovery.decay_monitor import (
@@ -561,6 +571,60 @@ class DiscoveryEngine:
             print(f"[DiscoveryEngine] regime alignment failed — defaulting to CHOPPY: {e}")
             return [CHOPPY] * n
 
+    @staticmethod
+    def _best_net_sharpe(edge_result) -> float | None:
+        """Net-of-cost Sharpe of a regime-aware validation result's best regime."""
+        if not edge_result or not edge_result.get("best_regime"):
+            return None
+        rs = edge_result.get("regime_scores", {}).get(edge_result["best_regime"], {})
+        return rs.get("net_sharpe", rs.get("sharpe"))
+
+    async def _run_extra_families(self, symbol, bars, spy_regime_df, swing_edge_result) -> int:
+        """Validate the non-swing discovery families for one symbol.
+
+        Each family runs the full regime-aware permutation + cost gate and writes
+        its own row(s) to validated_strategies. Returns the number of families
+        promoted (for the engine's running validated total). Logs the best family
+        per symbol across all four (swing included) by net-of-cost Sharpe.
+        """
+        regime_series = self._regime_series_for(spy_regime_df, bars)
+        # candidates: name -> net Sharpe of best regime (only promoted families)
+        candidates: dict[str, float] = {}
+        swing_net = self._best_net_sharpe(swing_edge_result)
+        if swing_edge_result and swing_edge_result.get("promoted") and swing_net is not None:
+            candidates[SwingPositionStrategy.name] = swing_net
+
+        promoted_count = 0
+        for fam in _EXTRA_FAMILIES:
+            try:
+                res = await asyncio.to_thread(
+                    validate_strategy_edge_regime_aware, fam, {}, symbol, bars, regime_series
+                )
+                if res.get("promoted"):
+                    promoted_count += 1
+                    net = self._best_net_sharpe(res)
+                    if net is not None:
+                        candidates[fam.name] = net
+                    print(
+                        f"[Discovery] {symbol} family={fam.name} — PROMOTED "
+                        f"valid={res.get('valid_regimes')} best={res.get('best_regime')}"
+                    )
+                else:
+                    print(f"[Discovery] {symbol} family={fam.name} — no edge ({res.get('reason')})")
+            except Exception:
+                import traceback as _tb
+                print(f"[Discovery] {symbol} family={fam.name} raised:\n{_tb.format_exc()}")
+
+        if candidates:
+            best_name = max(candidates, key=candidates.get)
+            print(
+                f"[Discovery] {symbol}: best family across {len(candidates)} promoted = "
+                f"{best_name} (net Sharpe={candidates[best_name]:.2f})"
+            )
+        else:
+            print(f"[Discovery] {symbol}: no family promoted across all 4 families")
+        return promoted_count
+
     def _upsert_result(self, conn, symbol, params, wf_df, p_value, status,
                        permutation_tested=False):
         if wf_df.empty:
@@ -743,6 +807,7 @@ class DiscoveryEngine:
             n_ttest = len(ttest_passers)
             n_permutation = 0
             n_promoted = 0
+            swing_edge_result = None
 
             if n_ttest == 0:
                 edge_promoted = False
@@ -766,6 +831,7 @@ class DiscoveryEngine:
                         SwingPositionStrategy, ttest_passers[0]["params"], symbol, bars,
                         regime_series,
                     )
+                    swing_edge_result = edge_result
                     edge_promoted = bool(edge_result.get("promoted"))
                     if edge_promoted:
                         print(
@@ -800,6 +866,19 @@ class DiscoveryEngine:
                 f"{n_ttest} passed t-test → {n_permutation} passed permutation → "
                 f"{n_promoted} promoted"
             )
+
+            # ── Multi-factor families (Task 3): mean-reversion, volume-breakout,
+            #    insider-flow run alongside the swing momentum family. Best net-of-
+            #    cost Sharpe across all four wins deployment for this symbol.
+            if Config.DISCOVERY_MULTI_FAMILY_ENABLED and Config.PERMUTATION_ENABLED:
+                try:
+                    n_fam = await self._run_extra_families(
+                        symbol, bars, spy_regime_df, swing_edge_result
+                    )
+                    validated_total += n_fam
+                except Exception:
+                    import traceback as _tb
+                    print(f"[Discovery] {symbol}: multi-factor families raised:\n{_tb.format_exc()}")
 
         if db_conn:
             db_conn.close()

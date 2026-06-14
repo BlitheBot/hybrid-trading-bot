@@ -154,6 +154,9 @@ class Config:
     DISCOVERY_SYMBOLS = ["JPM", "SPY", "COST", "BRK.B", "PG"]
     DISCOVERY_MIN_TRADES = 10
     DISCOVERY_P_VALUE_THRESHOLD = 0.05
+    # Multi-factor discovery families (Task 3): run mean-reversion, volume-breakout
+    # and insider-flow families alongside the EMA/MACD/RSI momentum family.
+    DISCOVERY_MULTI_FAMILY_ENABLED = os.getenv("DISCOVERY_MULTI_FAMILY_ENABLED", "true").lower() != "false"
     DATABASE_URL = os.getenv("DATABASE_URL")
 
     # Permutation Validation Framework (Timothy Masters 4-step MCPT)
