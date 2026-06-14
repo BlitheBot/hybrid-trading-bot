@@ -76,7 +76,7 @@ A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. T
 - `signal_outcomes.regime_class` — 4-regime label captured at signal time (added via `ALTER TABLE IF NOT EXISTS`); powers the weekly regime performance breakdown
 - `signal_outcomes.decay_multiplier` — decay-monitor position multiplier applied to each trade (audit trail)
 - `strategy_decay_status` — per `(signal_type, symbol)` decay state: `decay_ratio`, `status`, `position_multiplier`, `consecutive_signals_below`, `re_validation_requested`, `disabled`
-- `revalidation_queue` — decay/manual re-validation requests (`status` pending/running/complete/failed); processed first by the Discovery Engine
+- `revalidation_queue` — decay/manual re-validation requests (`status` pending/running/complete/failed); `discovery_version` ('v1'/'v2', default 'v2') marks which engine owns each request. v1 grid-search engine processes only `discovery_version='v1'`; v2 (regime-aware, live) re-validates the full universe on its weekly Friday run rather than draining this queue
 
 ---
 

@@ -499,10 +499,12 @@ class DiscoveryEngine:
         engine = None
         try:
             engine = create_engine(Config.DATABASE_URL, pool_pre_ping=True)
-            pending = fetch_pending_revalidations(engine)
+            # Only v1-owned requests — v2 (regime-aware) re-validates naturally on
+            # its own weekly run, so it never queues work for this v1 engine.
+            pending = fetch_pending_revalidations(engine, discovery_version="v1")
             if not pending:
                 return
-            print(f"[Discovery] Processing {len(pending)} pending re-validation request(s) before weekly scan")
+            print(f"[Discovery] Processing {len(pending)} pending v1 re-validation request(s) before weekly scan")
             for req in pending:
                 sym, sname, rid = req["symbol"], req["strategy_name"], req["id"]
                 mark_revalidation(engine, rid, "running")

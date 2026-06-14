@@ -169,22 +169,36 @@ def ensure_decay_tables(engine) -> None:
         """))
         conn.execute(sql_text("""
             CREATE TABLE IF NOT EXISTS revalidation_queue (
-                id            SERIAL PRIMARY KEY,
-                strategy_name VARCHAR(50),
-                symbol        VARCHAR(10),
-                reason        VARCHAR(20),
-                requested_at  TIMESTAMP DEFAULT NOW(),
-                status        VARCHAR(20) DEFAULT 'pending'
+                id                SERIAL PRIMARY KEY,
+                strategy_name     VARCHAR(50),
+                symbol            VARCHAR(10),
+                reason            VARCHAR(20),
+                discovery_version VARCHAR(10) DEFAULT 'v2',
+                requested_at      TIMESTAMP DEFAULT NOW(),
+                status            VARCHAR(20) DEFAULT 'pending'
             )
         """))
+        # discovery_version disambiguates which engine owns a request (v1 grid
+        # search vs v2 regime-aware). Added via ALTER for existing databases.
+        conn.execute(sql_text(
+            "ALTER TABLE revalidation_queue ADD COLUMN IF NOT EXISTS "
+            "discovery_version VARCHAR(10) DEFAULT 'v2'"
+        ))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Re-validation queue helpers (also used by the Discovery Engine)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def request_revalidation(engine, strategy_name: str, symbol: str, reason: str = "decay") -> None:
-    """Enqueue a re-validation request (deduped against existing pending rows)."""
+def request_revalidation(engine, strategy_name: str, symbol: str, reason: str = "decay",
+                         discovery_version: str = "v2") -> None:
+    """
+    Enqueue a re-validation request (deduped against existing pending rows).
+
+    ``discovery_version`` records which engine owns the request — defaults to 'v2',
+    the live regime-aware pipeline, which re-validates the full universe on its
+    weekly Friday run. The v1 grid-search engine only processes 'v1' requests.
+    """
     if engine is None:
         return
     try:
@@ -197,29 +211,40 @@ def request_revalidation(engine, strategy_name: str, symbol: str, reason: str = 
             if existing:
                 return
             conn.execute(sql_text("""
-                INSERT INTO revalidation_queue (strategy_name, symbol, reason, status)
-                VALUES (:s, :sym, :reason, 'pending')
-            """), {"s": strategy_name, "sym": symbol, "reason": reason})
+                INSERT INTO revalidation_queue (strategy_name, symbol, reason, discovery_version, status)
+                VALUES (:s, :sym, :reason, :ver, 'pending')
+            """), {"s": strategy_name, "sym": symbol, "reason": reason, "ver": discovery_version})
             conn.execute(sql_text("""
                 UPDATE strategy_decay_status SET re_validation_requested=TRUE
                 WHERE strategy_name=:s AND symbol=:sym
             """), {"s": strategy_name, "sym": symbol})
-        print(f"[Decay] Re-validation requested for {symbol} {strategy_name} — reason: {reason}")
+        print(f"[Decay] Re-validation requested for {symbol} {strategy_name} "
+              f"— reason: {reason}, engine: {discovery_version}")
     except Exception:
         print(f"[Decay] request_revalidation failed:\n{traceback.format_exc()}")
 
 
-def fetch_pending_revalidations(engine) -> list[dict]:
+def fetch_pending_revalidations(engine, discovery_version: str | None = None) -> list[dict]:
+    """
+    Pending re-validation requests. When ``discovery_version`` is given, only
+    requests owned by that engine are returned — so the v1 engine never picks up
+    v2-owned requests (and vice versa).
+    """
     if engine is None:
         return []
     try:
         ensure_decay_tables(engine)
+        query = """
+            SELECT id, strategy_name, symbol, reason, discovery_version
+            FROM revalidation_queue WHERE status='pending'
+        """
+        params = {}
+        if discovery_version is not None:
+            query += " AND discovery_version=:ver"
+            params["ver"] = discovery_version
+        query += " ORDER BY requested_at ASC"
         with engine.connect() as conn:
-            rows = conn.execute(sql_text("""
-                SELECT id, strategy_name, symbol, reason
-                FROM revalidation_queue WHERE status='pending'
-                ORDER BY requested_at ASC
-            """)).mappings().fetchall()
+            rows = conn.execute(sql_text(query), params).mappings().fetchall()
         return [dict(r) for r in rows]
     except Exception:
         print(f"[Decay] fetch_pending_revalidations failed:\n{traceback.format_exc()}")
