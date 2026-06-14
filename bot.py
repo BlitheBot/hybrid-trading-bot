@@ -67,6 +67,7 @@ from strategies.webull_strategy import WebullStrategy
 from discovery.regime_adapter import apply_to_swing_strategy
 from discovery.regime_classifier import (
     classify_regime, BULL_TREND, BEAR_TREND, HIGH_VOL, CHOPPY,
+    compute_cross_asset_signals, regime_confidence,
 )
 from discovery.decay_monitor import StrategyDecayMonitor
 from discovery.grok_sentiment import refresh_grok_sentiment, get_grok_sentiment
@@ -412,6 +413,8 @@ class TradingBot:
         self._regime_cache = None             # (regime_str, timestamp)
         self._regime_class_cache = None       # 4-regime taxonomy: (regime_str, timestamp)
         self._current_regime_class = CHOPPY   # latest 4-regime label for entry logging
+        self._regime_confidence = 50          # cross-asset confirmation confidence 0-100 (Task 3)
+        self._regime_cross_asset = {}         # latest cross-asset signal detail (Task 3)
         self._decay_monitor = StrategyDecayMonitor(engine=self._db_engine)
         self._decay_status_map: dict = {}     # (signal_type, symbol) → {disabled, position_multiplier, status}
         self.daily_pnl = 0.0
@@ -909,6 +912,24 @@ class TradingBot:
             f"[Regime] Current market regime: {regime} | "
             f"SPY EMA50={ema50:.2f} EMA200={ema200:.2f} VIX={vix_disp:.1f}"
         )
+
+        # Cross-asset confirmation (Task 3): supplementary signals adjust a confidence
+        # score (they never override the primary regime). Fully fail-open.
+        try:
+            signals = await asyncio.to_thread(
+                compute_cross_asset_signals, self.stock_data_client, vix
+            )
+            conf = regime_confidence(regime, signals)
+            print(
+                f"[Regime] {regime} confidence={conf}% | "
+                f"VIX_structure={signals['vix_structure']} credit={signals['credit']} "
+                f"rotation={signals['rotation']} dollar={signals['dollar']}"
+            )
+            self._regime_confidence = conf
+            self._regime_cross_asset = signals
+        except Exception as e:
+            print(f"[Regime] cross-asset confirmation failed (non-fatal): {e}")
+
         self._regime_class_cache = (regime, time.time())
         self._current_regime_class = regime
         return regime
