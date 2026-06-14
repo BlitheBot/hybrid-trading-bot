@@ -3962,6 +3962,12 @@ class TradingBot:
         disable + close). Fail-open: any exception logs a full traceback and the
         loop continues. The gating cache is refreshed each run for _process_symbol.
         """
+        # Honor the kill switch at startup: log clearly and stay idle so the
+        # disabled state is observable in Railway logs and no DB work is done.
+        if not Config.DECAY_MONITOR_ENABLED:
+            print("[Decay] Monitor disabled via DECAY_MONITOR_ENABLED=false at startup — Loop 22 idle")
+            return
+
         print("🩺 Starting Strategy Decay Monitor Loop (Loop 22 — 6h cadence)...")
         # Prime the gating cache at startup so disabled strategies are blocked
         # before the first scan completes.
@@ -3973,10 +3979,6 @@ class TradingBot:
 
         while True:
             try:
-                if not Config.DECAY_MONITOR_ENABLED:
-                    await asyncio.sleep(Config.DECAY_LOOP_INTERVAL_SECONDS)
-                    continue
-
                 current_regime = await self._get_current_regime_class()
                 results = await asyncio.to_thread(
                     self._decay_monitor.get_decay_status_all_strategies, current_regime, False
