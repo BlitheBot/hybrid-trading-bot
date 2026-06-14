@@ -634,6 +634,68 @@ class TradingBot:
             _health_state["db_connected"] = False
             print(f"[DB] Table setup failed: {e}")
 
+    def _ensure_signal_cooldowns_table(self) -> None:
+        if not self._db_engine:
+            return
+        try:
+            with self._db_engine.begin() as conn:
+                conn.execute(sql_text("""
+                    CREATE TABLE IF NOT EXISTS signal_cooldowns (
+                        symbol           VARCHAR(20) PRIMARY KEY,
+                        last_signal_time TIMESTAMP WITH TIME ZONE,
+                        updated_at       TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    )
+                """))
+            print("[Cooldown] signal_cooldowns table verified")
+        except Exception as e:
+            print(f"[Cooldown] Table setup failed (non-fatal): {e}")
+
+    def _load_signal_cooldowns(self) -> None:
+        """Restore in-memory _swing_signal_times from DB after a Railway redeploy.
+
+        Only loads cooldowns that are still within the 4-hour window so stale rows
+        don't block a symbol indefinitely.
+        """
+        if not self._db_engine:
+            return
+        try:
+            with self._db_engine.connect() as conn:
+                rows = conn.execute(sql_text("""
+                    SELECT symbol, last_signal_time
+                    FROM signal_cooldowns
+                    WHERE last_signal_time > NOW() - INTERVAL '4 hours'
+                """)).mappings().fetchall()
+            loaded = 0
+            for row in rows:
+                ts = row["last_signal_time"]
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=pytz.utc)
+                self._swing_signal_times[row["symbol"]] = ts
+                loaded += 1
+            if loaded:
+                print(
+                    f"[Cooldown] Loaded {loaded} active symbol cooldowns from DB "
+                    f"— re-entry protection survives this restart"
+                )
+        except Exception as e:
+            print(f"[Cooldown] Failed to load cooldowns from DB (non-fatal): {e}")
+
+    def _persist_signal_cooldown(self, symbol: str, ts: datetime) -> None:
+        """Write a cooldown timestamp to signal_cooldowns so it survives the next restart."""
+        if not self._db_engine:
+            return
+        try:
+            with self._db_engine.begin() as conn:
+                conn.execute(sql_text("""
+                    INSERT INTO signal_cooldowns (symbol, last_signal_time, updated_at)
+                    VALUES (:symbol, :ts, NOW())
+                    ON CONFLICT (symbol) DO UPDATE SET
+                        last_signal_time = EXCLUDED.last_signal_time,
+                        updated_at = NOW()
+                """), {"symbol": symbol, "ts": ts})
+        except Exception as e:
+            print(f"[Cooldown] Failed to persist cooldown for {symbol} (non-fatal): {e}")
+
     def _log_trade_entry(self, symbol: str, signal_type: str, entry_price: float,
                           ema_short: int, ema_long: int, rsi_at_entry: float,
                           macd_at_entry: float, regime: str, entry_time,
@@ -1541,6 +1603,9 @@ class TradingBot:
                         _now_utc = datetime.now(pytz.utc)
                         _next_eligible = _now_utc + timedelta(hours=4)
                         self._swing_signal_times[symbol] = _now_utc
+                        asyncio.create_task(
+                            asyncio.to_thread(self._persist_signal_cooldown, symbol, _now_utc)
+                        )
                         print(
                             f"[Swing] {symbol} cooldown set — "
                             f"next eligible {_next_eligible.strftime('%Y-%m-%d %H:%M UTC')}"
@@ -1791,10 +1856,20 @@ class TradingBot:
                 if signal['signal'] == 'sell':
                     _has_long = False
                     try:
-                        _pos      = await asyncio.to_thread(
+                        _pos = await asyncio.to_thread(
                             self.trading_client.get_open_position, symbol
                         )
-                        _has_long = getattr(_pos, 'side', 'long') == 'long'
+                        _pos_side = str(getattr(_pos, 'side', '')).lower()
+                        if _pos_side == 'short':
+                            # Already short — block duplicate entry.
+                            # PositionSide is a str-enum; 'short' == 'long' is always False,
+                            # so without this check _has_long=False would trigger _execute_short
+                            # again even when a short already exists.
+                            print(
+                                f"[Swing] {symbol}: already in SHORT position — skipping re-entry"
+                            )
+                            continue
+                        _has_long = (_pos_side == 'long')
                     except Exception:
                         _has_long = False
 
@@ -2787,6 +2862,18 @@ class TradingBot:
             print(f"[Swing] {symbol}: SHORT skipped — no valid entry price in signal")
             return
 
+        # Defense-in-depth: abort if any position or pending order already exists.
+        # This catches duplicates that slip past the cycle-start _short_positions dict
+        # (e.g., transient get_all_positions() API failure) and the Layer 1 position check.
+        _already_in = await asyncio.to_thread(
+            strategy.is_already_in_position, symbol, self.trading_client
+        )
+        if _already_in:
+            print(
+                f"[Swing] {symbol}: position or pending order already exists — aborting SHORT"
+            )
+            return
+
         # Fundamentals gate
         fund_proceed, fund_reason = await self._check_fundamentals(symbol)
         if not fund_proceed:
@@ -2801,6 +2888,9 @@ class TradingBot:
         _now_utc = datetime.now(pytz.utc)
         _next_eligible = _now_utc + timedelta(hours=4)
         self._swing_signal_times[symbol] = _now_utc
+        asyncio.create_task(
+            asyncio.to_thread(self._persist_signal_cooldown, symbol, _now_utc)
+        )
         print(
             f"[Swing] {symbol} cooldown set — "
             f"next eligible {_next_eligible.strftime('%Y-%m-%d %H:%M UTC')}"
@@ -4424,6 +4514,10 @@ class TradingBot:
 
         # Ensure signal_outcomes table exists (creates if missing on Railway PostgreSQL)
         await asyncio.to_thread(self._ensure_signal_outcomes_table)
+        # Cooldown table + restore from DB — must run before any swing cycle starts
+        # so that cooldowns set before the last Railway redeploy are still honoured.
+        await asyncio.to_thread(self._ensure_signal_cooldowns_table)
+        self._load_signal_cooldowns()
 
         _initial_capital = self.start_of_day_equity or 0.0
 
