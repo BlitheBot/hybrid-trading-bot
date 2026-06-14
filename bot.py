@@ -72,6 +72,7 @@ from discovery.decay_monitor import StrategyDecayMonitor
 from discovery.grok_sentiment import refresh_grok_sentiment, get_grok_sentiment
 from utils import get_historical_bars, get_finnhub_price
 import signal_quality
+import performance_brain
 
 # ── Sentry error monitoring (optional — omit SENTRY_DSN to disable) ─────────
 try:
@@ -1519,16 +1520,17 @@ class TradingBot:
                 perf_note = None
                 if signal_type and Config.PERFORMANCE_SCALING_ENABLED:
                     perf_mult = await asyncio.to_thread(
-                        self._get_performance_multiplier, signal_type
+                        self._get_performance_multiplier, signal_type, symbol,
+                        self._current_regime_class,
                     )
                     if perf_mult > 1.0:
                         perf_note = (
-                            f"🧠 Performance Brain: {signal_type} WR >60% "
+                            f"🧠 Performance Brain: {signal_type} momentum/regime/time "
                             f"→ size +{int((perf_mult - 1) * 100)}%"
                         )
                     elif perf_mult < 1.0:
                         perf_note = (
-                            f"🧠 Performance Brain: {signal_type} WR <40% "
+                            f"🧠 Performance Brain: {signal_type} momentum/regime/time "
                             f"→ size {int((perf_mult - 1) * 100)}%"
                         )
 
@@ -2370,42 +2372,82 @@ class TradingBot:
         except Exception as e:
             print(f"[Heatmap] Unexpected error: {e}")
 
-    def _get_performance_multiplier(self, signal_type: str) -> float:
+    def _get_performance_multiplier(self, signal_type: str, symbol: str | None = None,
+                                    current_regime: str | None = None) -> float:
         """
-        Returns a position-size multiplier based on the last 20 closed trades for signal_type.
-        WR > 60% → 1.2x  |  WR < 40% → 0.7x  |  < 10 trades → 1.0x (no penalty for new strategies)
-        Sync — called via asyncio.to_thread from _process_symbol.
+        Enhanced Performance Brain (Task 7). Combines three signals into one
+        position-size multiplier, clamped to [0.5, 1.5]:
+
+          * momentum (base): wins 3+ of last 5 closed signals → 1.2x (hot),
+            loses 3+ of last 5 → 0.7x (cold), otherwise 1.0x (neutral).
+          * regime bonus: +0.1x if the current regime has been net-profitable
+            historically for this strategy.
+          * time-of-day bonus: +0.1x if the current session window (morning
+            9:30–11:30 vs afternoon 13:30–16:00) is this strategy's stronger one,
+            −0.1x if it's the weaker one.
+
+        Sync — called via asyncio.to_thread from _process_symbol. Fail-open: any
+        error or missing data leaves the corresponding term neutral.
         """
-        if not Config.PERFORMANCE_SCALING_ENABLED:
+        if not Config.PERFORMANCE_SCALING_ENABLED or not self._db_engine:
             return 1.0
-        if not self._db_engine:
-            return 1.0
+
         try:
             with self._db_engine.connect() as conn:
-                row = conn.execute(sql_text("""
-                    SELECT COUNT(*) AS total,
-                           COUNT(CASE WHEN pnl_pct > 0 THEN 1 END)::float
-                               / NULLIF(COUNT(*), 0) AS win_rate
-                    FROM (
-                        SELECT pnl_pct
+                # ── Momentum: last 5 closed signals for this strategy ──────────
+                recent = conn.execute(sql_text("""
+                    SELECT pnl_pct FROM signal_outcomes
+                    WHERE signal_type = :st AND exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                    ORDER BY exit_time DESC LIMIT 5
+                """), {"st": signal_type}).mappings().fetchall()
+                recent_pnls = [float(r["pnl_pct"]) for r in recent]
+
+                # ── Regime stats: is the current regime net-profitable here? ───
+                reg_avg, reg_n = None, 0
+                if current_regime:
+                    rrow = conn.execute(sql_text("""
+                        SELECT AVG(pnl_pct) AS avg_pnl, COUNT(*) AS n
                         FROM signal_outcomes
-                        WHERE signal_type = :st
-                          AND exit_time IS NOT NULL
-                          AND pnl_pct IS NOT NULL
-                        ORDER BY exit_time DESC
-                        LIMIT 20
-                    ) recent
+                        WHERE signal_type = :st AND regime_class = :rc
+                          AND exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                    """), {"st": signal_type, "rc": current_regime}).mappings().fetchone()
+                    if rrow:
+                        reg_n = int(rrow["n"] or 0)
+                        reg_avg = float(rrow["avg_pnl"]) if rrow["avg_pnl"] is not None else None
+
+                # ── Time-of-day stats: morning vs afternoon avg P&L ────────────
+                trow = conn.execute(sql_text("""
+                    SELECT
+                      AVG(CASE WHEN m BETWEEN 570 AND 690 THEN pnl_pct END) AS morning_avg,
+                      COUNT(CASE WHEN m BETWEEN 570 AND 690 THEN 1 END)     AS morning_n,
+                      AVG(CASE WHEN m BETWEEN 810 AND 960 THEN pnl_pct END) AS afternoon_avg,
+                      COUNT(CASE WHEN m BETWEEN 810 AND 960 THEN 1 END)     AS afternoon_n
+                    FROM (
+                      SELECT pnl_pct,
+                             (EXTRACT(HOUR FROM entry_time AT TIME ZONE 'America/New_York') * 60
+                              + EXTRACT(MINUTE FROM entry_time AT TIME ZONE 'America/New_York'))::int AS m
+                      FROM signal_outcomes
+                      WHERE signal_type = :st AND exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                    ) t
                 """), {"st": signal_type}).mappings().fetchone()
 
-            total = int(row["total"]) if row and row["total"] else 0
-            if total < 10:
-                return 1.0
-            wr = float(row["win_rate"] or 0)
-            if wr > 0.60:
-                return 1.2
-            if wr < 0.40:
-                return 0.7
-            return 1.0
+            now_et = datetime.now(pytz.timezone("America/New_York"))
+            cur_min = now_et.hour * 60 + now_et.minute
+            momentum = performance_brain.momentum_multiplier(recent_pnls)
+            reg_bonus = performance_brain.regime_bonus(reg_avg, reg_n)
+            t_bonus = performance_brain.time_of_day_bonus(
+                float(trow["morning_avg"]) if trow and trow["morning_avg"] is not None else None,
+                int(trow["morning_n"] or 0) if trow else 0,
+                float(trow["afternoon_avg"]) if trow and trow["afternoon_avg"] is not None else None,
+                int(trow["afternoon_n"] or 0) if trow else 0,
+                cur_min,
+            )
+            mult = performance_brain.combine(momentum, reg_bonus, t_bonus)
+            print(
+                f"[PerfBrain] {symbol or signal_type} multiplier={mult:.2f} | "
+                f"momentum={momentum:.1f} regime_bonus={reg_bonus:.1f} time_bonus={t_bonus:.1f}"
+            )
+            return mult
         except Exception as e:
             print(f"[PerfBrain] Multiplier query failed for {signal_type}: {e}")
             return 1.0

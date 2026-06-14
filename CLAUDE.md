@@ -143,6 +143,10 @@ Config: `REGIME_HIGH_VOL_VIX`, `REGIME_BULL_VIX_MAX`, `REGIME_BEAR_VIX_MIN`, `RE
 
 ---
 
+## Performance Brain (Task 7)
+
+`_get_performance_multiplier(signal_type, symbol, current_regime)` (math in `performance_brain.py`) returns a size multiplier clamped to **[0.5, 1.5]** combining three terms: **momentum base** (1.2× if 3+ of last 5 closed signals won, 0.7× if 3+ lost, else 1.0×; needs ≥3 recent), **regime bonus** (+0.1× when the current regime is net-profitable for the strategy, ≥5 samples), and **time-of-day bonus** (±0.1× for the stronger/weaker of morning [9:30–11:30] vs afternoon [13:30–16:00] session, computed from `signal_outcomes` ET timestamps). Log: `[PerfBrain] {symbol} multiplier=… | momentum=… regime_bonus=… time_bonus=…`. Tests: `test_performance_brain.py`.
+
 ## Signal Quality Scoring (Task 5)
 
 `signal_quality.py` computes a composite 0–10 quality score for every **buy** decision in `_process_symbol`, combining five components: **technical** 30% (RSI/MACD/EMA strength), **sentiment** 20% (Grok score aligned to direction), **regime** 20% (validated for current regime: 0/10), **insider** 20% (aligned Form 4 within 7d: 0/10), **volume** 10% (current volume ÷ ADV). Missing evidence maps to a NEUTRAL 5.0 (not 0) so the gate penalizes *known-bad* alignment without blanket-blocking on absent feeds. Trades below `SIGNAL_QUALITY_MIN_SCORE` (5.0) are skipped; size scales linearly 0.5×(@5.0)→1.5×(@10.0) and stacks into the multiplier chain. Log: `[Signal] {symbol} composite score=…/10 | tech=… sent=… regime=… insider=… vol=…`. Score persists to `signal_outcomes.composite_score`. Config: `SIGNAL_QUALITY_ENABLED` (compute/log/store), `SIGNAL_QUALITY_GATING_ENABLED` (gate + size-scale), `SIGNAL_QUALITY_MIN_SCORE`. **Known limitations:** scoring currently covers the long/buy path only (shorts route through `_execute_short`); insider component has no historical Form 4 feed so it passes `insider_aligned=None` → NEUTRAL. Tests: `test_signal_quality.py`.
