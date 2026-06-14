@@ -137,6 +137,12 @@ class Config:
     DISCOVERY_DEBATE_ENABLED = True      # Discovery Engine only — Claude reviews each validated strategy
     SLACK_VERBOSE = False                # False = critical/trade alerts only; True = all signals fire
 
+    # Enhanced signal quality scoring (Task 5)
+    # Composite 0-10 score from technical/sentiment/regime/insider/volume components.
+    SIGNAL_QUALITY_ENABLED = os.getenv("SIGNAL_QUALITY_ENABLED", "true").lower() != "false"  # compute + log + store always
+    SIGNAL_QUALITY_GATING_ENABLED = os.getenv("SIGNAL_QUALITY_GATING_ENABLED", "true").lower() != "false"  # block trades below min + scale size
+    SIGNAL_QUALITY_MIN_SCORE = float(os.getenv("SIGNAL_QUALITY_MIN_SCORE", "5.0"))  # minimum composite score to trade
+
     # Performance Brain
     PERFORMANCE_SCALING_ENABLED = True  # adjust position size based on last 20-trade win rate
     POSITION_SIZE_FLOOR = 0.1           # floor: no trade below 10% of SWING_EQUITY_RISK_PERCENT

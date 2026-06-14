@@ -75,6 +75,7 @@ A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. T
 - `validated_strategies` — strategies that cleared the permutation framework; stores IS/WF p-values, scores, params, and **per-regime validity** (`valid_bull_trend`, `valid_bear_trend`, `valid_high_vol`, `valid_choppy`, `best_regime`, `regime_sharpes` JSONB); authoritative "genuine edge" record consulted by the live regime gate
 - `signal_outcomes.regime_class` — 4-regime label captured at signal time (added via `ALTER TABLE IF NOT EXISTS`); powers the weekly regime performance breakdown
 - `signal_outcomes.decay_multiplier` — decay-monitor position multiplier applied to each trade (audit trail)
+- `signal_outcomes.composite_score` — Task 5 composite signal-quality score (0–10) at entry (added via `ALTER TABLE IF NOT EXISTS`)
 - `strategy_decay_status` — per `(signal_type, symbol)` decay state: `decay_ratio`, `status`, `position_multiplier`, `consecutive_signals_below`, `re_validation_requested`, `disabled`
 - `revalidation_queue` — decay/manual re-validation requests (`status` pending/running/complete/failed); `discovery_version` ('v1'/'v2', default 'v2') marks which engine owns each request. v1 grid-search engine processes only `discovery_version='v1'`; v2 (regime-aware, live) re-validates the full universe on its weekly Friday run rather than draining this queue
 - `data_partitions` — per-symbol 70/15/15 train/val/holdout boundary dates (Task 2 out-of-sample integrity wall); one row per symbol, upserted at Discovery Engine startup
@@ -139,6 +140,10 @@ VIX comes from the FRED-sourced `MACRO_SNAPSHOT`; if VIX is missing the classifi
 Config: `REGIME_HIGH_VOL_VIX`, `REGIME_BULL_VIX_MAX`, `REGIME_BEAR_VIX_MIN`, `REGIME_BULL_RETURN_PCT`, `REGIME_BEAR_RETURN_PCT`, `REGIME_CACHE_SECONDS`, `REGIME_MIN_BARS`, `REGIME_GATING_ENABLED`.
 
 ---
+
+## Signal Quality Scoring (Task 5)
+
+`signal_quality.py` computes a composite 0–10 quality score for every **buy** decision in `_process_symbol`, combining five components: **technical** 30% (RSI/MACD/EMA strength), **sentiment** 20% (Grok score aligned to direction), **regime** 20% (validated for current regime: 0/10), **insider** 20% (aligned Form 4 within 7d: 0/10), **volume** 10% (current volume ÷ ADV). Missing evidence maps to a NEUTRAL 5.0 (not 0) so the gate penalizes *known-bad* alignment without blanket-blocking on absent feeds. Trades below `SIGNAL_QUALITY_MIN_SCORE` (5.0) are skipped; size scales linearly 0.5×(@5.0)→1.5×(@10.0) and stacks into the multiplier chain. Log: `[Signal] {symbol} composite score=…/10 | tech=… sent=… regime=… insider=… vol=…`. Score persists to `signal_outcomes.composite_score`. Config: `SIGNAL_QUALITY_ENABLED` (compute/log/store), `SIGNAL_QUALITY_GATING_ENABLED` (gate + size-scale), `SIGNAL_QUALITY_MIN_SCORE`. **Known limitations:** scoring currently covers the long/buy path only (shorts route through `_execute_short`); insider component has no historical Form 4 feed so it passes `insider_aligned=None` → NEUTRAL. Tests: `test_signal_quality.py`.
 
 ## Strategy Decay Monitoring (Loop 22)
 

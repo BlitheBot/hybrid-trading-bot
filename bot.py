@@ -70,6 +70,7 @@ from discovery.regime_classifier import (
 from discovery.decay_monitor import StrategyDecayMonitor
 from discovery.grok_sentiment import refresh_grok_sentiment, get_grok_sentiment
 from utils import get_historical_bars, get_finnhub_price
+import signal_quality
 
 # ── Sentry error monitoring (optional — omit SENTRY_DSN to disable) ─────────
 try:
@@ -610,6 +611,10 @@ class TradingBot:
                 conn.execute(sql_text(
                     "ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS decay_multiplier FLOAT DEFAULT 1.0"
                 ))
+                # Composite signal-quality score at entry (Task 5).
+                conn.execute(sql_text(
+                    "ALTER TABLE signal_outcomes ADD COLUMN IF NOT EXISTS composite_score FLOAT"
+                ))
                 count = conn.execute(sql_text("SELECT COUNT(*) FROM signal_outcomes")).scalar()
             _health_state["db_connected"] = True
             print(f"[DB] signal_outcomes table verified — {count} existing rows")
@@ -621,7 +626,8 @@ class TradingBot:
                           ema_short: int, ema_long: int, rsi_at_entry: float,
                           macd_at_entry: float, regime: str, entry_time,
                           regime_class: str | None = None,
-                          decay_multiplier: float = 1.0) -> int | None:
+                          decay_multiplier: float = 1.0,
+                          composite_score: float | None = None) -> int | None:
         if not self._db_engine:
             return None
         try:
@@ -629,9 +635,11 @@ class TradingBot:
                 result = conn.execute(sql_text("""
                     INSERT INTO signal_outcomes
                         (symbol, signal_type, entry_time, entry_price, ema_short, ema_long,
-                         rsi_at_entry, macd_at_entry, market_regime, regime_class, decay_multiplier)
+                         rsi_at_entry, macd_at_entry, market_regime, regime_class, decay_multiplier,
+                         composite_score)
                     VALUES (:symbol, :signal_type, :entry_time, :entry_price, :ema_short, :ema_long,
-                            :rsi_at_entry, :macd_at_entry, :market_regime, :regime_class, :decay_multiplier)
+                            :rsi_at_entry, :macd_at_entry, :market_regime, :regime_class, :decay_multiplier,
+                            :composite_score)
                     RETURNING id
                 """), {
                     "symbol": symbol, "signal_type": signal_type, "entry_time": entry_time,
@@ -639,6 +647,7 @@ class TradingBot:
                     "ema_long": int(ema_long), "rsi_at_entry": float(rsi_at_entry),
                     "macd_at_entry": float(macd_at_entry), "market_regime": regime,
                     "regime_class": regime_class, "decay_multiplier": float(decay_multiplier),
+                    "composite_score": None if composite_score is None else float(composite_score),
                 })
                 row_id = result.fetchone()[0]
             print(f"[DB] Logged {signal_type} entry for {symbol} (row={row_id})")
@@ -1554,6 +1563,65 @@ class TradingBot:
                             grok_note = f"🐦 Grok X/Twitter bearish (score {_gscr}/10) → size −50%"
                             print(f"[GrokSentiment] {symbol}: bearish {_gscr}/10 → 0.5× reduction")
 
+                # ── Enhanced signal quality scoring (Task 5) ────────────────────
+                # Composite 0-10 score from technical/sentiment/regime/insider/volume.
+                # Gates buys below SIGNAL_QUALITY_MIN_SCORE and scales size 0.5x-1.5x.
+                quality_mult = 1.0
+                composite_val = None
+                quality_note = None
+                if Config.SIGNAL_QUALITY_ENABLED and signal.get('signal') == 'buy':
+                    try:
+                        import pandas_ta as _ta
+                        _es_p = int(getattr(strategy, 'ema_short', 50) or 50)
+                        _el_p = int(getattr(strategy, 'ema_long', 200) or 200)
+                        _closes = data['close']
+                        _es_series = _ta.ema(_closes, length=_es_p)
+                        _el_series = _ta.ema(_closes, length=_el_p)
+                        _es_val = float(_es_series.iloc[-1]) if _es_series is not None and len(_es_series) and pd.notna(_es_series.iloc[-1]) else None
+                        _el_val = float(_el_series.iloc[-1]) if _el_series is not None and len(_el_series) and pd.notna(_el_series.iloc[-1]) else None
+                        _gscore = float(_grok.get('score')) if (_grok and _grok.get('score') is not None) else None
+                        # Regime alignment from validated_strategies (fail-open -> neutral).
+                        _rg_ok, _rg_valid, _rg_has = await asyncio.to_thread(
+                            self._regime_gate_ok, symbol, self._current_regime_class
+                        )
+                        _regime_aligned = _rg_ok if _rg_has else None
+                        try:
+                            _cur_vol = float(data['volume'].iloc[-1])
+                            _adv_val = float(data['volume'].tail(20).mean())
+                        except (KeyError, IndexError, ValueError, TypeError):
+                            _cur_vol = _adv_val = None
+                        sq = signal_quality.evaluate(
+                            rsi=signal.get('rsi_at_entry'),
+                            macd=signal.get('macd_at_entry'),
+                            ema_short_val=_es_val, ema_long_val=_el_val,
+                            grok_score=_gscore,
+                            validated_for_regime=_regime_aligned,
+                            insider_aligned=None,   # no historical Form 4 feed wired yet
+                            current_volume=_cur_vol, adv=_adv_val,
+                            direction='long',
+                            min_score=Config.SIGNAL_QUALITY_MIN_SCORE,
+                        )
+                        composite_val = round(sq.composite, 2)
+                        _c = sq.components
+                        print(
+                            f"[Signal] {symbol} composite score={sq.composite:.1f}/10 | "
+                            f"tech={_c['technical']} sent={_c['sentiment']} regime={_c['regime']} "
+                            f"insider={_c['insider']} vol={_c['volume']}"
+                        )
+                        if Config.SIGNAL_QUALITY_GATING_ENABLED:
+                            if not sq.passes:
+                                _sq_msg = (f"Signal quality {sq.composite:.1f} < "
+                                           f"{Config.SIGNAL_QUALITY_MIN_SCORE} — skip")
+                                print(f"[Signal] {symbol}: {_sq_msg}")
+                                asyncio.create_task(notifications.notify_trade_skipped(
+                                    symbol, strategy.name, _sq_msg))
+                                continue
+                            quality_mult = sq.size_multiplier
+                            quality_note = f"🎯 Signal quality {sq.composite:.1f}/10 → size {quality_mult:.2f}×"
+                    except Exception as _sqe:
+                        import traceback as _tb
+                        print(f"[Signal] {symbol}: quality scoring failed (fail-open): {_sqe}\n{_tb.format_exc()}")
+
                 _notes = [n for n in [
                     getattr(strategy, 'discovery_size_note', None),
                     getattr(strategy, 'earnings_size_note', None),
@@ -1564,6 +1632,7 @@ class TradingBot:
                     kelly_note,
                     sentiment_note,
                     grok_note,
+                    quality_note,
                 ] if n]
 
                 # Short selling: when a sell signal fires with no open long position,
@@ -1648,7 +1717,7 @@ class TradingBot:
                             risk_percent * self.risk_multiplier
                             * earnings_mult * vix_risk_mult * confidence_mult
                             * perf_mult * debate_mult * sentiment_mult * grok_mult
-                            * decay_mult
+                            * decay_mult * quality_mult
                         )
                         # Floor: no trade can go below 10% of normal size regardless of stacked multipliers
                         scaled_risk_percent = max(
@@ -1693,6 +1762,7 @@ class TradingBot:
                                 getattr(strategy, 'ema_short', 50), getattr(strategy, 'ema_long', 200),
                                 float(signal.get('rsi_at_entry', 0)), float(signal.get('macd_at_entry', 0)),
                                 regime, entry_time, self._current_regime_class, decay_mult,
+                                composite_val,
                             )
                             if row_id:
                                 async with self._trade_ids_lock:
