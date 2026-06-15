@@ -428,6 +428,9 @@ class TradingBot:
         self._risk_state_cache = None          # (timestamp, dict) — consecutive losses + weekly P&L
         self._entries_paused_until = None       # datetime — consecutive-loss pause expiry
         self._last_consec_loss_alert = None     # de-dup the Slack pause alert
+        # Issue 2: only count losses from the current bot session (and reset after each
+        # 2-hour consecutive-loss pause) so prior-session losses never trigger a pause.
+        self._consec_loss_baseline_time = datetime.now(pytz.utc)
         self._alerted_negative_ev: set[str] = set()
         self._last_ev_check_date = None
         self.last_evaluated_price = {}
@@ -1461,6 +1464,14 @@ class TradingBot:
                     print(f"[Risk] {symbol}: new entries paused until "
                           f"{self._entries_paused_until:%H:%M UTC} (consecutive losses) — SKIP")
                     continue
+                # Pause just expired → reset the baseline so the counter starts from zero.
+                # Without this, the same historical losses would immediately re-trigger the pause.
+                if self._entries_paused_until and _now_utc >= self._entries_paused_until:
+                    self._consec_loss_baseline_time = _now_utc
+                    self._risk_state_cache = None
+                    self._entries_paused_until = None
+                    _risk_state["consecutive_losses"] = 0
+                    print(f"[Risk] {symbol}: consecutive-loss pause expired — loss counter reset to 0")
                 if risk_limits.consecutive_loss_tripped(
                     _risk_state["consecutive_losses"], Config.CONSECUTIVE_LOSS_LIMIT
                 ):
@@ -2040,6 +2051,7 @@ class TradingBot:
                                 "debate: passed | fundamentals: passed"
                                 if pre_execute_hook else "gates: passed"
                             )
+                            print(f"[Slack] Attempting trade notification for {symbol}")
                             asyncio.create_task(notifications.notify_trade_executed(
                                 symbol, "LONG",
                                 float(signal.get('entry_price', 0)),
@@ -2249,6 +2261,47 @@ class TradingBot:
 
     # ── Task 1 — exit monitor: updates signal_outcomes when positions close ───
 
+    async def _cancel_orphaned_oco_orders(self) -> None:
+        """Cancel BUY limit/stop OCO orders whose short position no longer exists.
+
+        A short's OCO legs are BUY orders (buy-to-cover). If the short is closed
+        (covered at market, hit stop, or expired) without the OCO being cancelled,
+        the BUY orders stay open indefinitely and could incorrectly open a long.
+        Called every 10 minutes from _exit_monitor_loop.
+        """
+        def _val(attr):
+            return getattr(attr, 'value', str(attr)).lower() if attr is not None else ''
+
+        try:
+            all_positions = await asyncio.to_thread(self.trading_client.get_all_positions)
+            short_syms = {
+                p.symbol for p in all_positions
+                if _val(getattr(p, 'side', None)) == 'short'
+            }
+            open_orders = await asyncio.to_thread(
+                self.trading_client.get_orders,
+                GetOrdersRequest(status=QueryOrderStatus.OPEN),
+            )
+            orphaned = [
+                o for o in open_orders
+                if _val(getattr(o, 'side', None)) == 'buy'
+                and any(k in _val(getattr(o, 'order_type', None)) for k in ('limit', 'stop'))
+                and o.symbol not in short_syms
+            ]
+            if orphaned:
+                print(f"[Cleanup] Found {len(orphaned)} orphaned OCO order(s) — cancelling")
+                for o in orphaned:
+                    otype = _val(getattr(o, 'order_type', None))
+                    qty   = getattr(o, 'qty', '?')
+                    price = getattr(o, 'limit_price', None) or getattr(o, 'stop_price', None) or '?'
+                    try:
+                        await asyncio.to_thread(self.trading_client.cancel_order_by_id, o.id)
+                        print(f"[Cleanup] Cancelled orphaned OCO for {o.symbol} — {otype} @ {price} qty={qty}")
+                    except Exception as _ce:
+                        print(f"[Cleanup] Could not cancel OCO for {o.symbol} — {_ce}")
+        except Exception as _e:
+            print(f"[Cleanup] Orphaned OCO check failed (non-fatal): {_e}")
+
     async def _exit_monitor_loop(self):
         print("[DB] Exit monitor loop started (10-min polling)")
         while True:
@@ -2276,6 +2329,9 @@ class TradingBot:
                         level="CRITICAL",
                     ))
                     _health_state["last_health_report_utc"] = datetime.now(pytz.utc).isoformat()
+
+            # Orphaned OCO cleanup — runs every cycle regardless of open trade IDs.
+            await self._cancel_orphaned_oco_orders()
 
             if not open_ids_snapshot:
                 continue
@@ -2653,8 +2709,9 @@ class TradingBot:
                     recent = conn.execute(sql_text("""
                         SELECT pnl_pct FROM signal_outcomes
                         WHERE exit_time IS NOT NULL AND pnl_pct IS NOT NULL
+                          AND exit_time >= :baseline
                         ORDER BY exit_time DESC LIMIT 50
-                    """)).mappings().fetchall()
+                    """), {"baseline": self._consec_loss_baseline_time}).mappings().fetchall()
                     week_ago = now - timedelta(days=7)
                     wk = conn.execute(sql_text("""
                         SELECT COALESCE(SUM(pnl_pct), 0) AS wk FROM signal_outcomes
@@ -3112,14 +3169,18 @@ class TradingBot:
             )
             print(f"[Swing] {symbol}: SHORT market order submitted — id={str(_entry_order.id)[:12]} status={_entry_order.status}")
 
-            # Step 2: poll for fill (max 30 s)
+            # Step 2: poll for fill (max 30 s) — isolated so a transient API error
+            # here does not abort the OCO placement or the Slack notification.
             _fill_price = None
-            for _attempt in range(30):
-                await asyncio.sleep(1)
-                _checked = await asyncio.to_thread(self.trading_client.get_order_by_id, _entry_order.id)
-                if getattr(_checked, 'status', None) and _checked.status.value == 'filled':
-                    _fill_price = float(_checked.filled_avg_price or entry_price)
-                    break
+            try:
+                for _attempt in range(30):
+                    await asyncio.sleep(1)
+                    _checked = await asyncio.to_thread(self.trading_client.get_order_by_id, _entry_order.id)
+                    if getattr(_checked, 'status', None) and _checked.status.value == 'filled':
+                        _fill_price = float(_checked.filled_avg_price or entry_price)
+                        break
+            except Exception as _poll_e:
+                print(f"[Swing] {symbol}: fill poll failed (non-fatal) — {_poll_e}")
             if _fill_price is None:
                 print(f"[Swing] {symbol}: fill not confirmed in 30s — using calculated entry price for OCO")
                 _fill_price = entry_price
@@ -3159,6 +3220,7 @@ class TradingBot:
             except Exception as _oco_e:
                 print(f"[Swing] {symbol}: OCO placement FAILED — {_oco_e}\n{_tb.format_exc()}")
 
+            print(f"[Slack] Attempting trade notification for {symbol}")
             asyncio.create_task(notifications.notify_trade_executed(
                 symbol, "SHORT", _fill_price, _actual_stop, _actual_target, shares,
                 "debate: passed | fundamentals: passed",

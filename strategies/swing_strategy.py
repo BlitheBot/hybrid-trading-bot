@@ -565,14 +565,18 @@ class SwingStrategy(BaseStrategy):
             order_id = str(order.id)[:8] if order and order.id else "unknown"
             print(f"[ORDER] Alpaca response: id={order.id} status={order.status.value if order else '?'} symbol={getattr(order,'symbol','?')} qty={getattr(order,'qty','?')}")
 
-            # Step 2: poll for fill (max 30 s) — runs in asyncio.to_thread, blocking is safe
+            # Step 2: poll for fill (max 30 s) — isolated so a transient API error here
+            # does not abort execute_trade; the order has already been submitted.
             fill_price = None
-            for _i in range(30):
-                _time.sleep(1)
-                _checked = trading_client.get_order_by_id(order.id)
-                if getattr(_checked, 'status', None) and _checked.status.value == 'filled':
-                    fill_price = float(_checked.filled_avg_price or entry_price)
-                    break
+            try:
+                for _i in range(30):
+                    _time.sleep(1)
+                    _checked = trading_client.get_order_by_id(order.id)
+                    if getattr(_checked, 'status', None) and _checked.status.value == 'filled':
+                        fill_price = float(_checked.filled_avg_price or entry_price)
+                        break
+            except Exception as _pe:
+                print(f"[ORDER] {symbol}: fill poll failed (non-fatal) — {_pe}")
             if fill_price is None:
                 print(f"[ORDER] {symbol}: fill not confirmed in 30s — using signal entry price for OCO")
                 fill_price = float(entry_price)
