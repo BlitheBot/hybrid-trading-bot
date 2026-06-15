@@ -51,6 +51,24 @@ class InsiderFlowPositionStrategy:
             )
         ]
 
+    @staticmethod
+    def enrich(bars: pd.DataFrame, symbol: str) -> pd.DataFrame:
+        """
+        Attach the per-bar ``insider_buy_value`` column from the historical SEC
+        Form 4 feed (Task 5). Gated by DISCOVERY_INSIDER_FEED_ENABLED; on any error
+        or when disabled, returns ``bars`` unchanged so the family stays all-flat.
+        """
+        from config import Config
+        if not getattr(Config, "DISCOVERY_INSIDER_FEED_ENABLED", True):
+            return bars
+        try:
+            from discovery.data_feeds.edgar_historical import attach_insider_buy_value
+            return attach_insider_buy_value(bars, symbol)
+        except Exception:
+            import traceback
+            print(f"[InsiderFlow] enrich failed for {symbol}:\n{traceback.format_exc()}")
+            return bars
+
     def position_vector(self, df: pd.DataFrame, params: dict) -> np.ndarray:
         n = len(df)
         pos = np.zeros(n, dtype=float)
