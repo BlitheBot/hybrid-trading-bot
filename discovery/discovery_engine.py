@@ -28,6 +28,7 @@ from discovery.strategies.pead_strategy import PEADPositionStrategy
 from discovery.strategies.short_interest_momentum_strategy import (
     ShortInterestMomentumPositionStrategy,
 )
+from discovery.strategies.sector_rotation_strategy import SectorRotationPositionStrategy
 
 # Multi-factor families run in addition to the swing momentum family (family 1).
 # Families gated off via config are filtered out in _active_extra_families().
@@ -38,6 +39,7 @@ _EXTRA_FAMILIES = [
     SMCPositionStrategy,
     PEADPositionStrategy,
     ShortInterestMomentumPositionStrategy,
+    SectorRotationPositionStrategy,
 ]
 
 
@@ -53,6 +55,8 @@ def _active_extra_families() -> list:
         fams.append(PEADPositionStrategy)
     if getattr(Config, "DISCOVERY_SHORT_MOMENTUM_ENABLED", True):
         fams.append(ShortInterestMomentumPositionStrategy)
+    if getattr(Config, "DISCOVERY_SECTOR_ROTATION_ENABLED", True):
+        fams.append(SectorRotationPositionStrategy)
     return fams
 from discovery.regime_classifier import CHOPPY, classify_regime, realized_vol_proxy
 from discovery.data_partitioner import DataPartitioner, PartitionViolation

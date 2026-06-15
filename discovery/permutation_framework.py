@@ -366,6 +366,9 @@ try:
     from discovery.strategies.short_interest_momentum_strategy import (
         ShortInterestMomentumPositionStrategy,
     )
+    from discovery.strategies.sector_rotation_strategy import (
+        SectorRotationPositionStrategy,
+    )
 
     for _fam in (
         MeanReversionPositionStrategy,
@@ -374,6 +377,7 @@ try:
         SMCPositionStrategy,
         PEADPositionStrategy,
         ShortInterestMomentumPositionStrategy,
+        SectorRotationPositionStrategy,
     ):
         register_strategy(_fam)
         DISCOVERY_FAMILIES.append(_fam)

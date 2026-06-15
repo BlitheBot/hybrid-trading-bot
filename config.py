@@ -214,6 +214,11 @@ class Config:
     DISCOVERY_INSIDER_FEED_ENABLED = os.getenv("DISCOVERY_INSIDER_FEED_ENABLED", "true").lower() != "false"
     INSIDER_DATA_STALE_DAYS = int(os.getenv("INSIDER_DATA_STALE_DAYS", "30"))  # flag symbol stale if newest filing older
 
+    # Sector-rotation discovery family (Strategy Family 8) — fetches the 11 GICS
+    # sector ETFs via Alpaca, ranks them by relative strength, and trades stocks
+    # leading/lagging top/bottom sectors. Fail-open: no sector data → all-flat.
+    DISCOVERY_SECTOR_ROTATION_ENABLED = os.getenv("DISCOVERY_SECTOR_ROTATION_ENABLED", "true").lower() != "false"
+
     # SMC live confirmation gate (Task 9) — optional additional filter on swing buy/sell
     # signals: requires price to be inside an active order block AND an unfilled FVG
     # target to exist in the expected direction. Default False; enable via Railway env var
