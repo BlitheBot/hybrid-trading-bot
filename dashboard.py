@@ -1701,6 +1701,114 @@ with tab_tradelog:
 
 # ── Tab 4: Discovery Results ───────────────────────────────────────────────────
 
+# Strategy families (for funnel/leaderboard/coverage panels — Task 8).
+_DISCOVERY_FAMILY_NAMES = [
+    "swing_ema_macd_rsi", "mean_reversion_bb_rsi", "volume_breakout_obv",
+    "insider_flow_form4", "smc_order_block_fvg", "pead_earnings_drift",
+    "short_interest_momentum", "sector_rotation",
+]
+_REGIME_FLAG_COLS = {
+    "BULL_TREND": "valid_bull_trend",
+    "BEAR_TREND": "valid_bear_trend",
+    "HIGH_VOL": "valid_high_vol",
+    "CHOPPY": "valid_choppy",
+}
+
+
+def _next_discovery_run(now_et: datetime) -> datetime:
+    """Next Friday 16:30 ET (the weekly Discovery Engine run)."""
+    target_hour, target_min = 16, 30
+    days_ahead = (4 - now_et.weekday()) % 7  # Friday == weekday 4
+    candidate = now_et.replace(hour=target_hour, minute=target_min, second=0, microsecond=0) \
+        + timedelta(days=days_ahead)
+    if candidate <= now_et:
+        candidate += timedelta(days=7)
+    return candidate
+
+
+@st.cache_data(ttl=300)
+def fetch_validated_strategies() -> "pd.DataFrame | None":
+    """All rows from validated_strategies (Task 8 leaderboard/regime/coverage)."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.connect() as conn:
+            return pd.read_sql(text("""
+                SELECT symbol, strategy_name, best_regime,
+                       valid_bull_trend, valid_bear_trend, valid_high_vol, valid_choppy,
+                       gross_sharpe_before_costs, net_sharpe_after_costs, validated_at
+                FROM validated_strategies
+            """), conn)
+    except Exception as e:
+        print(f"[Dashboard] fetch_validated_strategies failed: {e}")
+        return None
+
+
+@st.cache_data(ttl=300)
+def fetch_v1_funnel() -> "pd.DataFrame | None":
+    """v1 swing-family funnel counts from strategy_results (per symbol)."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.connect() as conn:
+            return pd.read_sql(text("""
+                SELECT
+                    COUNT(*)                                              AS combos_tested,
+                    COUNT(*) FILTER (WHERE status IN ('validated','rejected_permutation'))
+                                                                         AS ttest_passers,
+                    COUNT(*) FILTER (WHERE permutation_tested AND status='validated')
+                                                                         AS permutation_passers,
+                    COUNT(*) FILTER (WHERE status='validated')           AS promoted
+                FROM strategy_results
+            """), conn)
+    except Exception as e:
+        print(f"[Dashboard] fetch_v1_funnel failed: {e}")
+        return None
+
+
+@st.cache_data(ttl=300)
+def fetch_discovered_indicators() -> "pd.DataFrame | None":
+    """Graduated evolved indicators (Task 7) for the Task 8 dashboard table."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.connect() as conn:
+            return pd.read_sql(text("""
+                SELECT symbol, formula, regime, mean_ic, std_ic, val_ic, val_pvalue,
+                       discovered_at
+                FROM discovered_indicators
+                WHERE status = 'graduated'
+                ORDER BY mean_ic DESC
+                LIMIT 200
+            """), conn)
+    except Exception as e:
+        print(f"[Dashboard] fetch_discovered_indicators failed: {e}")
+        return None
+
+
+@st.cache_data(ttl=120)
+def fetch_revalidation_queue() -> "pd.DataFrame | None":
+    """Pending re-validation requests with age (Task 8)."""
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.connect() as conn:
+            return pd.read_sql(text("""
+                SELECT symbol, strategy_name, reason, discovery_version,
+                       requested_at, status
+                FROM revalidation_queue
+                WHERE status = 'pending'
+                ORDER BY requested_at ASC
+            """), conn)
+    except Exception as e:
+        print(f"[Dashboard] fetch_revalidation_queue failed: {e}")
+        return None
+
+
 with tab_discovery:
     st.header("Strategy Discovery Results")
 
@@ -1810,6 +1918,147 @@ with tab_discovery:
                                 icon="✅",
                             )
                             st.rerun()
+
+        # ══ Discovery Engine analytics (Task 8) ══════════════════════════════
+        st.markdown("---")
+        st.subheader("🔬 Discovery Engine Analytics")
+
+        # ── Next run countdown ───────────────────────────────────────────────
+        _now_et = datetime.now(pytz.timezone("America/New_York"))
+        _next_run = _next_discovery_run(_now_et)
+        _delta = _next_run - _now_et
+        _d, _rem = divmod(int(_delta.total_seconds()), 86400)
+        _h, _rem = divmod(_rem, 3600)
+        _m, _ = divmod(_rem, 60)
+        cdn1, cdn2 = st.columns([1, 2])
+        cdn1.metric("Next Discovery Run", f"{_d}d {_h}h {_m}m")
+        cdn2.caption(
+            f"Scheduled **{_next_run.strftime('%a %Y-%m-%d %H:%M %Z')}** "
+            f"(weekly Friday 4:30 PM ET run). The v2 engine re-validates the full "
+            f"universe on this run."
+        )
+
+        df_val = fetch_validated_strategies()
+
+        # ── Validation funnel (v1 swing family) ──────────────────────────────
+        st.markdown("#### Validation Funnel")
+        df_funnel = fetch_v1_funnel()
+        if df_funnel is not None and not df_funnel.empty and int(df_funnel.iloc[0]["combos_tested"]) > 0:
+            r = df_funnel.iloc[0]
+            f1, f2, f3, f4 = st.columns(4)
+            f1.metric("Combos tested", f"{int(r['combos_tested']):,}")
+            f2.metric("t-test passers", f"{int(r['ttest_passers']):,}")
+            f3.metric("Permutation passers", f"{int(r['permutation_passers']):,}")
+            f4.metric("Promoted", f"{int(r['promoted']):,}")
+            st.caption(
+                "Funnel reflects the v1 grid-search swing family (`strategy_results`). "
+                "Per-family earlier-stage counts for the position-vector families aren't "
+                "persisted — their promotions appear in the leaderboard below "
+                "(`validated_strategies`)."
+            )
+        else:
+            st.info("No `strategy_results` rows yet — run the v1 Discovery Engine to populate the funnel.")
+
+        # ── Strategy family leaderboard ──────────────────────────────────────
+        st.markdown("#### Strategy Family Leaderboard")
+        if df_val is not None and not df_val.empty:
+            lb = (
+                df_val.groupby("strategy_name")
+                .agg(validated=("symbol", "count"),
+                     avg_net_sharpe=("net_sharpe_after_costs", "mean"),
+                     best_net_sharpe=("net_sharpe_after_costs", "max"))
+                .reset_index()
+                .sort_values("validated", ascending=False)
+            )
+            st.dataframe(
+                lb.style.format({
+                    "avg_net_sharpe": "{:.3f}", "best_net_sharpe": "{:.3f}",
+                }, na_rep="—"),
+                width="stretch", hide_index=True,
+            )
+        else:
+            st.info("No validated strategies yet (`validated_strategies` empty).")
+
+        # ── Regime breakdown ─────────────────────────────────────────────────
+        st.markdown("#### Validated Strategies by Regime")
+        if df_val is not None and not df_val.empty:
+            reg_counts = {
+                regime: int(df_val[col].fillna(False).astype(bool).sum())
+                for regime, col in _REGIME_FLAG_COLS.items() if col in df_val.columns
+            }
+            if reg_counts:
+                rc = st.columns(len(reg_counts))
+                for (regime, cnt), col in zip(reg_counts.items(), rc):
+                    col.metric(regime, cnt)
+        else:
+            st.caption("—")
+
+        # ── Symbol coverage heatmap (symbol × family, net Sharpe) ────────────
+        st.markdown("#### Symbol Coverage")
+        if df_val is not None and not df_val.empty:
+            pivot = df_val.pivot_table(
+                index="symbol", columns="strategy_name",
+                values="net_sharpe_after_costs", aggfunc="max",
+            )
+            # Ensure all families show as columns so gaps (unvalidated) are visible.
+            for fam in _DISCOVERY_FAMILY_NAMES:
+                if fam not in pivot.columns:
+                    pivot[fam] = float("nan")
+            pivot = pivot[[c for c in _DISCOVERY_FAMILY_NAMES if c in pivot.columns]]
+            heat = go.Figure(data=go.Heatmap(
+                z=pivot.values, x=list(pivot.columns), y=list(pivot.index),
+                colorscale="RdYlGn", zmid=0,
+                colorbar=dict(title="net Sharpe"),
+                hovertemplate="%{y} / %{x}<br>net Sharpe=%{z:.3f}<extra></extra>",
+            ))
+            heat.update_layout(
+                height=max(220, 26 * len(pivot.index) + 80),
+                margin=dict(l=0, r=0, t=10, b=0),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#7d8590", size=11),
+                xaxis=dict(tickangle=-30),
+            )
+            st.plotly_chart(heat, use_container_width=True)
+            st.caption(
+                f"{pivot.index.nunique()} symbols have ≥1 validated strategy. "
+                "Blank cells = that family is not validated for the symbol."
+            )
+        else:
+            st.caption("No coverage data.")
+
+        # ── Discovered (evolved) indicators ──────────────────────────────────
+        st.markdown("#### Discovered Indicators (Evolved GP)")
+        df_ind = fetch_discovered_indicators()
+        if df_ind is not None and not df_ind.empty:
+            st.dataframe(
+                df_ind.style.format({
+                    "mean_ic": "{:.3f}", "std_ic": "{:.3f}",
+                    "val_ic": "{:.3f}", "val_pvalue": "{:.4f}",
+                }, na_rep="—"),
+                width="stretch", hide_index=True,
+            )
+            st.caption(f"{len(df_ind)} graduated indicators across "
+                       f"{df_ind['symbol'].nunique()} symbols.")
+        else:
+            st.info("No graduated indicators yet — run the Indicator Discovery scheduler.")
+
+        # ── Re-validation queue ──────────────────────────────────────────────
+        st.markdown("#### Re-validation Queue")
+        df_q = fetch_revalidation_queue()
+        if df_q is not None and not df_q.empty:
+            df_q = df_q.copy()
+            _now_utc = pd.Timestamp.now(tz="UTC")
+            _req = pd.to_datetime(df_q["requested_at"], utc=True, errors="coerce")
+            df_q["age"] = (_now_utc - _req).apply(
+                lambda d: "—" if pd.isna(d) else f"{int(d.total_seconds() // 3600)}h"
+            )
+            st.dataframe(
+                df_q[["symbol", "strategy_name", "reason", "discovery_version", "age", "status"]],
+                width="stretch", hide_index=True,
+            )
+            st.caption(f"{len(df_q)} pending request(s).")
+        else:
+            st.success("Re-validation queue is empty.")
 
 # ── Tab 5: Analytics ───────────────────────────────────────────────────────────
 
