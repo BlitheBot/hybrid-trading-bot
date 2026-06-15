@@ -125,15 +125,20 @@ class DiscoveryScheduler:
 
         self._slack(
             f":dna: Indicator Discovery Engine starting overnight run — "
-            f"{n_cached}/{n_total} symbols have cached bars | population=50 | 20 generations each."
+            f"{n_cached}/{n_total} symbols have cached bars | population=100 | 30 generations each."
         )
 
+        # Task 7: 100-tree population, 30 generations, 20% mutation, tournament
+        # selection, 70/30 train/validation split with an out-of-sample graduation
+        # gate (validation IC > 0.05 AND p < 0.01).
         engine = GeneticEngine(
-            population_size=50,
-            n_generations=20,
-            mutation_rate=0.3,
+            population_size=100,
+            n_generations=30,
+            mutation_rate=0.2,
             crossover_rate=0.5,
             max_tree_depth=4,
+            train_frac=0.7,
+            tournament_size=3,
         )
 
         total_graduated = 0

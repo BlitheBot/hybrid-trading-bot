@@ -1857,6 +1857,17 @@ class TradingBot:
                             _adv_val = float(data['volume'].tail(20).mean())
                         except (KeyError, IndexError, ValueError, TypeError):
                             _cur_vol = _adv_val = None
+                        # Evolved GP indicator (Task 7) — extra composite feature when a
+                        # graduated indicator exists for this symbol (fail-open -> None).
+                        _evolved = None
+                        try:
+                            from discovery.evolved_features import get_evolved_score
+                            _evolved = await asyncio.to_thread(
+                                get_evolved_score, symbol, data, 'long', self._db_engine,
+                                (self._current_regime_class or 'any'),
+                            )
+                        except Exception as _eve:
+                            print(f"[Signal] {symbol}: evolved feature failed (fail-open): {_eve}")
                         sq = signal_quality.evaluate(
                             rsi=signal.get('rsi_at_entry'),
                             macd_histogram=signal.get('macd_histogram_at_entry'),
@@ -1865,6 +1876,7 @@ class TradingBot:
                             validated_for_regime=_regime_aligned,
                             insider_aligned=None,   # no historical Form 4 feed wired yet
                             current_volume=_cur_vol, adv=_adv_val,
+                            evolved_score=_evolved,
                             direction='long',
                             min_score=Config.SIGNAL_QUALITY_MIN_SCORE,
                         )
@@ -1874,6 +1886,7 @@ class TradingBot:
                             f"[Signal] {symbol} composite score={sq.composite:.1f}/10 | "
                             f"tech={_c['technical']} sent={_c['sentiment']} regime={_c['regime']} "
                             f"insider={_c['insider']} vol={_c['volume']}"
+                            + (f" evolved={_c['evolved']}" if 'evolved' in _c else "")
                         )
                         if Config.SIGNAL_QUALITY_GATING_ENABLED:
                             if not sq.passes:

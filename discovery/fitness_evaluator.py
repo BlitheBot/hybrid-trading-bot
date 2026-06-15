@@ -20,10 +20,13 @@ class FitnessEvaluator:
         forward_period: int  = 5,
         ic_threshold:   float = 0.05,
         ic_std_threshold: float = 0.10,
+        val_pvalue_threshold: float = 0.01,
     ):
         self.forward_period    = forward_period
         self.ic_threshold      = ic_threshold
         self.ic_std_threshold  = ic_std_threshold
+        # Task 7 graduation gate: validation-set p-value must be below this.
+        self.val_pvalue_threshold = val_pvalue_threshold
 
     # ── Single-fold IC ────────────────────────────────────────────────────────
 
@@ -108,4 +111,44 @@ class FitnessEvaluator:
             "std_ic":  round(std_ic,  4),
             "n_folds": len(ic_values),
             "passed":  passed,
+        }
+
+    # ── Train/validation IC (Task 7 GP fitness + graduation) ────────────────────
+
+    def evaluate_on_set(self, expression_tree, bars_df: pd.DataFrame) -> dict:
+        """
+        Single-pass IC + p-value of an indicator over a whole bar slice. Used for the
+        out-of-sample validation graduation gate. Returns {ic, ic_pvalue, n}.
+        """
+        try:
+            indicator = expression_tree.evaluate(bars_df)
+        except Exception:
+            return {"ic": 0.0, "ic_pvalue": 1.0, "n": 0}
+        fwd_ret = self._forward_returns(bars_df["close"])
+        res = self.evaluate(indicator, fwd_ret)
+        mask = indicator.notna() & fwd_ret.notna()
+        return {"ic": res["ic"], "ic_pvalue": res["ic_pvalue"], "n": int(mask.sum())}
+
+    def training_fitness(self, expression_tree, train_df: pd.DataFrame) -> dict:
+        """Walk-forward IC on the TRAINING slice only (evolution fitness signal)."""
+        return self.walk_forward_ic(expression_tree, train_df)
+
+    def graduation_check(self, expression_tree, val_df: pd.DataFrame) -> dict:
+        """
+        Task 7 graduation gate, evaluated on the held-out VALIDATION slice:
+        graduate iff |IC| > ic_threshold AND p-value < val_pvalue_threshold.
+
+        Returns {val_ic, val_pvalue, val_n, graduated}.
+        """
+        res = self.evaluate_on_set(expression_tree, val_df)
+        graduated = (
+            abs(res["ic"]) > self.ic_threshold
+            and res["ic_pvalue"] < self.val_pvalue_threshold
+            and res["n"] >= 20
+        )
+        return {
+            "val_ic": res["ic"],
+            "val_pvalue": res["ic_pvalue"],
+            "val_n": res["n"],
+            "graduated": graduated,
         }

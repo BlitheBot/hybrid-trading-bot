@@ -32,6 +32,12 @@ WEIGHTS = {
     "volume": 0.10,
 }
 
+# When an evolved indicator (Task 7 GP discovery) is available for the symbol, it
+# joins the composite as a sixth component. composite_score normalizes by the sum of
+# weights, so we just add the evolved weight rather than re-deriving the others.
+EVOLVED_WEIGHT = 0.10
+WEIGHTS_WITH_EVOLVED = {**WEIGHTS, "evolved": EVOLVED_WEIGHT}
+
 
 def _clamp(x: float, lo: float = 0.0, hi: float = 10.0) -> float:
     return max(lo, min(hi, x))
@@ -105,6 +111,13 @@ def score_volume(current_volume: float | None, adv: float | None) -> float:
     return _clamp((current_volume / adv) * 5.0)
 
 
+def score_evolved(evolved_score: float | None) -> float:
+    """0-10 evolved-indicator alignment (NEUTRAL when no graduated indicator exists)."""
+    if evolved_score is None:
+        return NEUTRAL
+    return _clamp(float(evolved_score))
+
+
 @dataclass
 class SignalQuality:
     composite: float
@@ -138,10 +151,16 @@ def evaluate(
     insider_aligned: bool | None = None,
     current_volume: float | None = None,
     adv: float | None = None,
+    evolved_score: float | None = None,
     direction: str = "long",
     min_score: float = 5.0,
 ) -> SignalQuality:
-    """Compute the full composite quality assessment for one trade decision."""
+    """Compute the full composite quality assessment for one trade decision.
+
+    When ``evolved_score`` is provided (a graduated GP indicator was available for
+    the symbol, Task 7), it joins the composite as a sixth weighted component;
+    otherwise the original five-component weighting is used unchanged.
+    """
     components = {
         "technical": score_technical(rsi, macd_histogram, ema_short_val, ema_long_val, direction),
         "sentiment": score_sentiment(grok_score, direction),
@@ -149,7 +168,11 @@ def evaluate(
         "insider": score_insider(insider_aligned),
         "volume": score_volume(current_volume, adv),
     }
-    comp = composite_score(components)
+    if evolved_score is not None:
+        components["evolved"] = score_evolved(evolved_score)
+        comp = composite_score(components, WEIGHTS_WITH_EVOLVED)
+    else:
+        comp = composite_score(components)
     return SignalQuality(
         composite=comp,
         components={k: round(v, 1) for k, v in components.items()},

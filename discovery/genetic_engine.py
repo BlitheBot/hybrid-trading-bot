@@ -31,12 +31,18 @@ class GeneticEngine:
         mutation_rate:   float = 0.3,
         crossover_rate:  float = 0.5,
         max_tree_depth:  int   = 4,
+        train_frac:      float = 0.7,
+        tournament_size: int   = 3,
     ):
         self.population_size = population_size
         self.n_generations   = n_generations
         self.mutation_rate   = mutation_rate
         self.crossover_rate  = crossover_rate
         self.max_tree_depth  = max_tree_depth
+        # Task 7: fitness is measured on the training slice only; graduation is the
+        # out-of-sample validation gate (IC > threshold AND p < 0.01).
+        self.train_frac      = train_frac
+        self.tournament_size = tournament_size
         self._evaluator      = FitnessEvaluator()
 
     # ── Internal helpers ──────────────────────────────────────────────────────
@@ -48,12 +54,13 @@ class GeneticEngine:
         ]
 
     def _score_population(
-        self, population: list[ExpressionNode], bars_df: pd.DataFrame
+        self, population: list[ExpressionNode], train_df: pd.DataFrame
     ) -> list[tuple[ExpressionNode, dict]]:
+        """Score each tree by training-slice walk-forward IC (Task 7 fitness)."""
         scored = []
         for tree in population:
             try:
-                fitness = self._evaluator.walk_forward_ic(tree, bars_df)
+                fitness = self._evaluator.training_fitness(tree, train_df)
             except Exception:
                 fitness = {"mean_ic": 0.0, "std_ic": 1.0, "n_folds": 0, "passed": False}
             scored.append((tree, fitness))
@@ -62,21 +69,38 @@ class GeneticEngine:
     def _select_elites(
         self, scored: list[tuple[ExpressionNode, dict]], top_pct: float = 0.20
     ) -> list[ExpressionNode]:
+        """Top 20% by training IC survive unchanged into the next generation."""
         ranked = sorted(scored, key=lambda x: x[1]["mean_ic"], reverse=True)
         n      = max(2, int(len(ranked) * top_pct))
         return [tree for tree, _ in ranked[:n]]
 
+    def _tournament_select(
+        self, scored: list[tuple[ExpressionNode, dict]], rng: random.Random
+    ) -> ExpressionNode:
+        """Tournament selection: sample k competitors, return the fittest's tree."""
+        k = min(self.tournament_size, len(scored))
+        contenders = rng.sample(scored, k)
+        winner = max(contenders, key=lambda x: x[1]["mean_ic"])
+        return winner[0]
+
     def _next_generation(
-        self, elites: list[ExpressionNode], rng: random.Random
+        self,
+        elites: list[ExpressionNode],
+        scored: list[tuple[ExpressionNode, dict]],
+        rng: random.Random,
     ) -> list[ExpressionNode]:
+        """Elites carry over; the rest are bred via tournament-selected parents."""
         next_gen = list(elites)  # elites carry over unchanged
         while len(next_gen) < self.population_size:
-            if rng.random() < self.crossover_rate and len(elites) >= 2:
-                a, b  = rng.sample(elites, 2)
+            if rng.random() < self.crossover_rate and len(scored) >= 2:
+                a = self._tournament_select(scored, rng)
+                b = self._tournament_select(scored, rng)
                 child = ExpressionNode.crossover(a, b, rng)
             else:
-                parent = rng.choice(elites)
-                child  = parent.mutate(rng)
+                parent = self._tournament_select(scored, rng)
+                child  = parent
+            if rng.random() < self.mutation_rate:
+                child = child.mutate(rng)
             next_gen.append(child)
         return next_gen[: self.population_size]
 
@@ -97,21 +121,27 @@ class GeneticEngine:
         library = IndicatorLibrary(db_engine)
         library.create_table_if_not_exists()
 
+        # Task 7: train/validation split. Fitness is measured on TRAIN only so the
+        # validation slice stays a genuine out-of-sample graduation gate.
+        split = int(len(bars_df) * self.train_frac)
+        train_df = bars_df.iloc[:split]
+        val_df   = bars_df.iloc[split:]
+
         population = self._init_population(rng)
 
         for gen in range(self.n_generations):
-            scored       = self._score_population(population, bars_df)
+            scored       = self._score_population(population, train_df)
             best_tree, best_fitness = max(scored, key=lambda x: x[1]["mean_ic"])
             print(
                 f"[GENETIC] {symbol} Gen {gen + 1}/{self.n_generations}: "
-                f"best_ic={best_fitness['mean_ic']:.3f} "
+                f"best_train_ic={best_fitness['mean_ic']:.3f} "
                 f"formula={best_tree.to_string()[:60]}"
             )
             elites     = self._select_elites(scored)
-            population = self._next_generation(elites, rng)
+            population = self._next_generation(elites, scored, rng)
 
-        # Final evaluation pass on the last generation
-        final_scored  = self._score_population(population, bars_df)
+        # Final pass: score on train, then graduate on the held-out validation slice.
+        final_scored  = self._score_population(population, train_df)
         seen_formulas: set[str] = set()
         graduated: list[dict]   = []
         n_rejected = 0
@@ -122,19 +152,23 @@ class GeneticEngine:
                 continue
             seen_formulas.add(formula)
 
+            grad = self._evaluator.graduation_check(tree, val_df)
+            record = {**fitness, **grad, "passed": grad["graduated"]}
+
             try:
-                library.save(tree, fitness, symbol, regime)
+                library.save(tree, record, symbol, regime)
             except Exception as e:
                 print(f"[GENETIC] {symbol}: DB save failed for '{formula[:40]}': {e}")
                 continue
 
-            if fitness["passed"]:
-                graduated.append({"formula": formula, **fitness})
+            if grad["graduated"]:
+                graduated.append({"formula": formula, **record})
             else:
                 n_rejected += 1
 
         print(
-            f"[GENETIC] {symbol}: {len(graduated)} indicators graduated, "
+            f"[GENETIC] {symbol}: {len(graduated)} indicators graduated "
+            f"(val IC>{self._evaluator.ic_threshold} & p<{self._evaluator.val_pvalue_threshold}), "
             f"{n_rejected} rejected"
         )
         return graduated
@@ -167,7 +201,9 @@ if __name__ == "__main__":
         pass
 
     import unittest.mock as mock
-    with mock.patch("discovery.indicator_library.IndicatorLibrary", return_value=_NoOpLibrary()):
+    # Patch the name as bound inside the *running* module. Under `python -m` this
+    # module is loaded as __main__, so target it by its live __name__.
+    with mock.patch(f"{__name__}.IndicatorLibrary", return_value=_NoOpLibrary()):
         graduated = engine.run(_df, "TEST", "any", _FakeDBEngine())
 
     print(f"Smoke test complete — {len(graduated)} indicators returned (expected >=0)")

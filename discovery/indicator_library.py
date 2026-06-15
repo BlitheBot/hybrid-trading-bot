@@ -8,6 +8,8 @@ graduated  = passed walk_forward_ic (mean_ic > 0.05 AND std_ic < 0.10)
 rejected   = failed validation
 candidate  = saved but not yet evaluated (unused in scaffold — reserved for future streaming)
 """
+import json
+
 from sqlalchemy import text as sql_text
 
 
@@ -32,6 +34,16 @@ class IndicatorLibrary:
                     status        TEXT DEFAULT 'candidate'
                 )
             """))
+            # Task 7 additions: evolved tree structure (JSON) + out-of-sample
+            # validation metrics. Added idempotently so existing tables migrate.
+            for col, decl in (
+                ("tree_json",  "TEXT"),
+                ("val_ic",     "FLOAT"),
+                ("val_pvalue", "FLOAT"),
+            ):
+                conn.execute(sql_text(
+                    f"ALTER TABLE discovered_indicators ADD COLUMN IF NOT EXISTS {col} {decl}"
+                ))
 
     # ── Write ─────────────────────────────────────────────────────────────────
 
@@ -43,12 +55,18 @@ class IndicatorLibrary:
         regime: str,
     ) -> None:
         status = "graduated" if fitness_result.get("passed") else "rejected"
+        try:
+            tree_json = json.dumps(expression_tree.to_dict())
+        except Exception:
+            tree_json = None
         with self._engine.begin() as conn:
             conn.execute(sql_text("""
                 INSERT INTO discovered_indicators
-                    (formula, mean_ic, std_ic, n_folds, symbol, regime, status)
+                    (formula, mean_ic, std_ic, n_folds, symbol, regime, status,
+                     tree_json, val_ic, val_pvalue)
                 VALUES
-                    (:formula, :mean_ic, :std_ic, :n_folds, :symbol, :regime, :status)
+                    (:formula, :mean_ic, :std_ic, :n_folds, :symbol, :regime, :status,
+                     :tree_json, :val_ic, :val_pvalue)
             """), {
                 "formula": expression_tree.to_string(),
                 "mean_ic": float(fitness_result.get("mean_ic", 0.0)),
@@ -57,6 +75,9 @@ class IndicatorLibrary:
                 "symbol":  symbol,
                 "regime":  regime,
                 "status":  status,
+                "tree_json": tree_json,
+                "val_ic":  float(fitness_result.get("val_ic", 0.0)),
+                "val_pvalue": float(fitness_result.get("val_pvalue", 1.0)),
             })
 
     # ── Read ──────────────────────────────────────────────────────────────────
@@ -65,7 +86,8 @@ class IndicatorLibrary:
         """Returns all graduated indicators for a symbol, matching regime or 'any'."""
         with self._engine.connect() as conn:
             rows = conn.execute(sql_text("""
-                SELECT formula, mean_ic, std_ic, n_folds, discovered_at, regime
+                SELECT formula, mean_ic, std_ic, n_folds, discovered_at, regime,
+                       tree_json, val_ic, val_pvalue
                 FROM   discovered_indicators
                 WHERE  symbol = :symbol
                   AND  status = 'graduated'

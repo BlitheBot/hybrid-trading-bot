@@ -69,6 +69,7 @@ _LEAVES: dict[str, callable] = {
     "volume":             lambda df: df["volume"].astype(float),
     "open":               lambda df: df["open"],
     "returns":            lambda df: df["close"].pct_change(),
+    "log_return":         lambda df: _safe_log(df["close"]) - _safe_log(df["close"].shift(1)),
     "kalman_slope":       _kalman_slope,
     "kalman_noise_ratio": _kalman_noise_ratio,
     "hurst_exponent":     _hurst_exponent,
@@ -90,12 +91,16 @@ for _n in _N_VALUES:
     _UNARY[f"diff_{_n}"]         = (lambda n: lambda s: s.diff(n))(_n)
     _UNARY[f"rolling_max_{_n}"]  = (lambda n: lambda s: s.rolling(n).max())(_n)
     _UNARY[f"rolling_min_{_n}"]  = (lambda n: lambda s: s.rolling(n).min())(_n)
+    # momentum(n): n-bar percent change (Task 7 primitive set).
+    _UNARY[f"momentum_{_n}"]     = (lambda n: lambda s: s.pct_change(n))(_n)
 
 _BINARY: dict[str, callable] = {
-    "add":      lambda a, b: a + b,
+    "add":      lambda a, b: a + b,        # difference(a,b) == subtract; ratio(a,b) == divide
     "subtract": lambda a, b: a - b,
     "multiply": lambda a, b: a * b,
     "divide":   _safe_divide,
+    "maximum":  lambda a, b: np.maximum(a, b),
+    "minimum":  lambda a, b: np.minimum(a, b),
 }
 
 # Unified registry: name → (arity, callable)

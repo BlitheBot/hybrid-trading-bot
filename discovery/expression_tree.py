@@ -65,6 +65,26 @@ class ExpressionNode:
             return f"{self.op_name}({self.children[0].to_string()})"
         return f"{self.op_name}({self.children[0].to_string()}, {self.children[1].to_string()})"
 
+    # ── JSON (de)serialization ────────────────────────────────────────────────
+
+    def to_dict(self) -> dict:
+        """Recursive JSON-serializable representation of the tree (Task 7 storage)."""
+        return {
+            "op": self.op_name,
+            "children": [c.to_dict() for c in self.children],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ExpressionNode":
+        """Reconstruct an ExpressionNode from ``to_dict`` output."""
+        children = [cls.from_dict(c) for c in data.get("children", [])]
+        depth = (max((c.depth for c in children), default=-1) + 1) if children else 0
+        return cls(data["op"], children, depth)
+
+    def node_count(self) -> int:
+        """Total number of primitive nodes in the tree (Task 7: 'up to 4 primitives')."""
+        return 1 + sum(c.node_count() for c in self.children)
+
     # ── Random tree generation ────────────────────────────────────────────────
 
     @classmethod
