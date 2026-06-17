@@ -1354,9 +1354,16 @@ class TradingBot:
 
         client = self.crypto_data_client if is_crypto else self.stock_data_client
         if is_crypto:
-            # 1-minute bars for intraday SMB scalp — 390 bars covers one full trading session
-            data = get_historical_bars(symbol, TimeFrame.Minute, 390, client, is_crypto=True)
-            print(f"[Scalp] {symbol}: fetched 1-min bars (n={0 if data is None else len(data)}) for intraday SMB signal")
+            # 1 day of 1-minute bars (~1,440 bars) — enough for SMB (30-bar min) and
+            # CryptoMomentum (21-bar min). The original value of 390 was intended as a
+            # bar count but was interpreted as days_back=390 DAYS (~561k bars), which
+            # caused the Alpaca SDK to paginate hundreds of pages and block the event loop.
+            data = get_historical_bars(symbol, TimeFrame.Minute, 1, client, is_crypto=True)
+            if data is not None and len(data) > 0:
+                _latest_ts = data.index[-1].strftime('%H:%M UTC')
+                print(f"[Scalp] {symbol}: fetched {len(data)} 1-min bars (latest: {_latest_ts})")
+            else:
+                print(f"[Scalp] {symbol}: no 1-min bars returned")
         else:
             data = get_historical_bars(symbol, TimeFrame.Day, 365, client, is_crypto=False)
         

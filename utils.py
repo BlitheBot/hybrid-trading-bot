@@ -34,9 +34,9 @@ def get_historical_bars(symbol, timeframe, days_back, data_client, is_crypto=Fal
     """
     Fetches historical bars from Alpaca and updates the last price with Finnhub data for stocks.
     """
-    # Alpaca Free Plan requires a 15-minute delay for SIP data
-    # We use 16 minutes to be safe
-    end_date = datetime.now(pytz.utc) - timedelta(minutes=16)
+    # Alpaca SIP stock data requires a 15-minute delay (we use 16 to be safe).
+    # Crypto data on Alpaca is real-time — no delay needed.
+    end_date = datetime.now(pytz.utc) if is_crypto else datetime.now(pytz.utc) - timedelta(minutes=16)
     start_date = end_date - timedelta(days=days_back)
     
     try:
