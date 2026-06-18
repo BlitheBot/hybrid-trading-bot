@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 load_dotenv()
+# crypto diagnostics redeploy 2026-06-18T18:40:00Z
 
 class Config:
     # Alpaca API credentials
