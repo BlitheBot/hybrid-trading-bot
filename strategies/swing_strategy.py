@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import traceback
 import pandas as pd
 import numpy as np
@@ -14,6 +15,22 @@ from config import Config
 from llm_client import call_llm_with_model, LLMError, MODEL_GEMINI_FLASH
 
 import pandas_ta as ta
+
+
+def _extract_json_from_llm(text: str) -> dict:
+    """Parse JSON from LLM response that may contain thinking tags or markdown fences.
+
+    Gemini 2.5 Flash with thinking enabled sometimes wraps its JSON answer in
+    <thinking>...</thinking> blocks or ```json``` fences.  Strip both before
+    calling json.loads so callers get a clean dict.
+    """
+    # Strip <thinking>...</thinking> reasoning blocks (Gemini extended thinking)
+    cleaned = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.DOTALL)
+    # Strip markdown JSON code fences
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned.strip(), flags=re.MULTILINE)
+    cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.MULTILINE)
+    return json.loads(cleaned.strip())
+
 
 class SwingStrategy(BaseStrategy):
     def __init__(self, name, ema_short=50, ema_long=200, macd_fast=12, macd_slow=26, macd_signal=9,
@@ -134,31 +151,54 @@ class SwingStrategy(BaseStrategy):
             override_text = "Override case unavailable (LLM error)"
             override_objections: list[str] = []
             override_summary = "Override analysis unavailable"
-            try:
-                override_resp = await call_llm_with_model(
-                    MODEL_GEMINI_FLASH,
-                    (
-                        f"A technical SELL signal has fired for {symbol} with the following bearish "
-                        f"evidence: {context}. You are a bullish analyst. Make a compelling case for "
-                        f"why this bearish signal should be IGNORED and the stock will rise. "
-                        f"Provide only concrete fundamental or macro reasons — vague optimism does not count. "
-                        f"Rebut the short case where you can.\n\n"
-                        f"Short case to rebut:\n{short_text[:500]}\n\n"
-                        "Respond with JSON only: "
-                        '{"objections": ["<concrete fundamental/macro reason 1>", "<reason 2>", ...], "summary": "<one sentence>"}'
-                    ),
-                    response_format={"type": "json_object"},
-                    max_tokens=600,
-                    extra_body=_thinking,
-                )
-                override_text = override_resp.text
-                parsed = json.loads(override_resp.text)
-                override_objections = [str(o) for o in parsed.get("objections", []) if o]
-                override_summary = parsed.get("summary", override_resp.text[:200])
-            except LLMError as e:
-                print(f"[SwingDebate] {symbol} override call failed: {e} — defaulting to 0 objections")
-            except Exception as e:
-                print(f"[SwingDebate] {symbol} override JSON parse failed: {e} — defaulting to 0 objections")
+            _override_prompt = (
+                f"A technical SELL signal has fired for {symbol} with the following bearish "
+                f"evidence: {context}. You are a bullish analyst. Make a compelling case for "
+                f"why this bearish signal should be IGNORED and the stock will rise. "
+                f"Provide only concrete fundamental or macro reasons — vague optimism does not count. "
+                f"Rebut the short case where you can.\n\n"
+                f"Short case to rebut:\n{short_text[:500]}\n\n"
+                "Respond with JSON only: "
+                '{"objections": ["<concrete fundamental/macro reason 1>", "<reason 2>", ...], "summary": "<one sentence>"}'
+            )
+            _override_parsed = False
+            for _override_attempt, _override_extra in enumerate([_thinking, None], start=1):
+                try:
+                    override_resp = await call_llm_with_model(
+                        MODEL_GEMINI_FLASH,
+                        _override_prompt,
+                        response_format={"type": "json_object"},
+                        max_tokens=600,
+                        extra_body=_override_extra,
+                    )
+                    override_text = override_resp.text
+                    parsed = _extract_json_from_llm(override_resp.text)
+                    override_objections = [str(o) for o in parsed.get("objections", []) if o]
+                    override_summary = parsed.get("summary", override_resp.text[:200])
+                    _override_parsed = True
+                    break
+                except LLMError as e:
+                    if _override_attempt == 1:
+                        print(
+                            f"[SwingDebate] {symbol} override call failed (attempt {_override_attempt}): {e}"
+                            f" — retrying without thinking"
+                        )
+                    else:
+                        print(f"[SwingDebate] {symbol} override call failed after retry: {e} — failing open (0 objections)")
+                except Exception as e:
+                    _preview = getattr(override_resp, "text", "")[:300] if "override_resp" in dir() else "(no response)"
+                    if _override_attempt == 1:
+                        print(
+                            f"[SwingDebate] {symbol} override JSON parse failed (attempt {_override_attempt}): {e}"
+                            f" | raw[:300]={_preview!r} — retrying without thinking"
+                        )
+                    else:
+                        print(
+                            f"[SwingDebate] {symbol} override JSON parse failed after retry: {e}"
+                            f" | raw[:300]={_preview!r} — failing open (0 objections)"
+                        )
+            if not _override_parsed:
+                print(f"[SwingDebate] {symbol}: override analysis unavailable — defaulting to 0 objections (short proceeds)")
 
             # Short proceeds unless bull raises 2+ concrete fundamental/macro override reasons
             approved = len(override_objections) < 2
@@ -199,28 +239,51 @@ class SwingStrategy(BaseStrategy):
             bear_text = "Bear case unavailable (LLM error)"
             bear_objections: list[str] = []
             bear_summary = "Bear analysis unavailable"
-            try:
-                bear_resp = await call_llm_with_model(
-                    MODEL_GEMINI_FLASH,
-                    (
-                        f"You are a bearish equity analyst. Identify concrete risks AGAINST buying "
-                        f"{symbol} right now. Rebut the bull case where you can.\n\n"
-                        f"Data: {context}\n\nBull case to rebut:\n{bull_text[:500]}\n\n"
-                        "Respond with JSON only: "
-                        '{"objections": ["<risk 1>", "<risk 2>", ...], "summary": "<one sentence>"}'
-                    ),
-                    response_format={"type": "json_object"},
-                    max_tokens=600,
-                    extra_body=_thinking,
-                )
-                bear_text = bear_resp.text
-                parsed = json.loads(bear_resp.text)
-                bear_objections = [str(o) for o in parsed.get("objections", []) if o]
-                bear_summary = parsed.get("summary", bear_resp.text[:200])
-            except LLMError as e:
-                print(f"[SwingDebate] {symbol} bear call failed: {e} — defaulting to 0 objections")
-            except Exception as e:
-                print(f"[SwingDebate] {symbol} bear JSON parse failed: {e} — defaulting to 0 objections")
+            _bear_prompt = (
+                f"You are a bearish equity analyst. Identify concrete risks AGAINST buying "
+                f"{symbol} right now. Rebut the bull case where you can.\n\n"
+                f"Data: {context}\n\nBull case to rebut:\n{bull_text[:500]}\n\n"
+                "Respond with JSON only: "
+                '{"objections": ["<risk 1>", "<risk 2>", ...], "summary": "<one sentence>"}'
+            )
+            _bear_parsed = False
+            for _bear_attempt, _bear_extra in enumerate([_thinking, None], start=1):
+                try:
+                    bear_resp = await call_llm_with_model(
+                        MODEL_GEMINI_FLASH,
+                        _bear_prompt,
+                        response_format={"type": "json_object"},
+                        max_tokens=600,
+                        extra_body=_bear_extra,
+                    )
+                    bear_text = bear_resp.text
+                    parsed = _extract_json_from_llm(bear_resp.text)
+                    bear_objections = [str(o) for o in parsed.get("objections", []) if o]
+                    bear_summary = parsed.get("summary", bear_resp.text[:200])
+                    _bear_parsed = True
+                    break
+                except LLMError as e:
+                    if _bear_attempt == 1:
+                        print(
+                            f"[SwingDebate] {symbol} bear call failed (attempt {_bear_attempt}): {e}"
+                            f" — retrying without thinking"
+                        )
+                    else:
+                        print(f"[SwingDebate] {symbol} bear call failed after retry: {e} — failing open (0 objections)")
+                except Exception as e:
+                    _preview = getattr(bear_resp, "text", "")[:300] if "bear_resp" in dir() else "(no response)"
+                    if _bear_attempt == 1:
+                        print(
+                            f"[SwingDebate] {symbol} bear JSON parse failed (attempt {_bear_attempt}): {e}"
+                            f" | raw[:300]={_preview!r} — retrying without thinking"
+                        )
+                    else:
+                        print(
+                            f"[SwingDebate] {symbol} bear JSON parse failed after retry: {e}"
+                            f" | raw[:300]={_preview!r} — failing open (0 objections)"
+                        )
+            if not _bear_parsed:
+                print(f"[SwingDebate] {symbol}: bear analysis unavailable — defaulting to 0 objections (trade proceeds)")
 
             approved = len(bear_objections) <= 2
             n = len(bear_objections)
@@ -338,15 +401,18 @@ class SwingStrategy(BaseStrategy):
             # Adaptive signal gates — compute once per evaluation
             k = self._kalman.compute_latest(df['close'])
             h = self._hurst.compute_latest(df['close'])
-            noise_ok = k["noise_ratio"] < 0.4
-            hurst_ok = h["hurst"] >= 0.55  # lowered from 0.6 — accept weakly-trending regimes
+            noise_ok = k["noise_ratio"] < 0.5   # relaxed from 0.4 — was filtering too aggressively
+            hurst_ok = h["hurst"] > 0.50        # relaxed from 0.55 — accept weakly-trending regimes
 
             # LONG entry conditions
             ema_ok  = last_ema_short > last_ema_long
-            # Allow crossover up to 3 bars old: any of the 3 preceding bars had MACD <= signal
-            macd_ok = (last_macd > last_macd_signal and
-                       any(df['MACD'].iloc[-4:-1].values <= df['MACD_Signal'].iloc[-4:-1].values))
-            rsi_ok  = self.rsi_entry_low <= last_rsi <= self.rsi_entry_high  # widened to [35, 65]
+            # MACD above signal + histogram positive and building over last 2 bars.
+            # Removed the <=3-bar crossover recency requirement: in trending markets the
+            # crossover happened weeks ago; ongoing histogram expansion confirms momentum.
+            _hist_curr = float(df['MACD'].iloc[-1] - df['MACD_Signal'].iloc[-1])
+            _hist_prev = float(df['MACD'].iloc[-2] - df['MACD_Signal'].iloc[-2])
+            macd_ok = (last_macd > last_macd_signal and _hist_curr > 0 and _hist_curr > _hist_prev)
+            rsi_ok  = self.rsi_entry_low <= last_rsi <= self.rsi_entry_high  # [35, 65]
 
             # SHORT entry conditions: at least 2 of 3 must be true
             rsi_overbought     = last_rsi > 70
@@ -358,26 +424,27 @@ class SwingStrategy(BaseStrategy):
             signal     = None
             confidence = 0.0
 
-            # LONG entry: EMA bullish + MACD above signal (≤3 bars) + RSI [35,65] + Kalman + Hurst ≥0.55
+            # LONG entry: EMA bullish + MACD momentum building + RSI [35,65] + Kalman + Hurst >0.50
             if ema_ok and macd_ok and rsi_ok and noise_ok and hurst_ok:
                 signal = "buy"
                 confidence = 0.7
                 reasoning = (
                     f"EMA{self.ema_short}({last_ema_short:.2f}) > EMA{self.ema_long}({last_ema_long:.2f}), "
-                    f"MACD above signal (<=3 bars), RSI({last_rsi:.2f}) in [{self.rsi_entry_low},{self.rsi_entry_high}], "
+                    f"MACD above signal + histogram building ({_hist_curr:.4f}>{_hist_prev:.4f}), "
+                    f"RSI({last_rsi:.2f}) in [{self.rsi_entry_low},{self.rsi_entry_high}], "
                     f"Kalman noise={k['noise_ratio']:.2f}, Hurst H={h['hurst']:.3f}"
                 )
             elif ema_ok and macd_ok and rsi_ok and noise_ok and not hurst_ok:
                 if Config.SWING_VERBOSE_LOGGING:
                     print(
                         f"[SwingVerbose] {self.name}: BUY suppressed by Hurst regime gate "
-                        f"(H={h['hurst']:.3f} < 0.55 — not sufficiently trending)"
+                        f"(H={h['hurst']:.3f} <= 0.50 — not sufficiently trending)"
                     )
             elif ema_ok and macd_ok and rsi_ok and not noise_ok:
                 if Config.SWING_VERBOSE_LOGGING:
                     print(
                         f"[SwingVerbose] {self.name}: BUY suppressed by Kalman noise gate "
-                        f"(noise_ratio={k['noise_ratio']:.2f} >= 0.4)"
+                        f"(noise_ratio={k['noise_ratio']:.2f} >= 0.5)"
                     )
 
             # SHORT entry: at least 2 of 3 bearish conditions confirmed
@@ -395,7 +462,7 @@ class SwingStrategy(BaseStrategy):
                         f"{short_conditions}/3 conditions: {' | '.join(cond_labels)}"
                     )
 
-            elif Config.SWING_VERBOSE_LOGGING and not (ema_ok and macd_ok and rsi_ok):
+            elif Config.SWING_VERBOSE_LOGGING and not (ema_ok and macd_ok and rsi_ok and noise_ok and hurst_ok):
                 # Log which specific entry condition(s) failed
                 failed = []
                 if not ema_ok:
@@ -407,16 +474,23 @@ class SwingStrategy(BaseStrategy):
                         failed.append(
                             f"MACD({last_macd:.4f}) below signal({last_macd_signal:.4f}) — bearish momentum"
                         )
+                    elif _hist_curr <= 0:
+                        failed.append(
+                            f"MACD above signal but histogram non-positive ({_hist_curr:.4f})"
+                        )
                     else:
                         failed.append(
-                            f"MACD above signal but crossover >3 bars old "
-                            f"(oldest checked: MACD={df['MACD'].iloc[-4]:.4f} sig={df['MACD_Signal'].iloc[-4]:.4f})"
+                            f"MACD histogram not building ({_hist_curr:.4f} <= {_hist_prev:.4f}) — fading momentum"
                         )
                 if not rsi_ok:
                     if last_rsi < self.rsi_entry_low:
                         failed.append(f"RSI({last_rsi:.2f}) < low gate {self.rsi_entry_low} — oversold / not recovering")
                     else:
                         failed.append(f"RSI({last_rsi:.2f}) > high gate {self.rsi_entry_high} — overbought")
+                if not noise_ok:
+                    failed.append(f"Kalman noise_ratio={k['noise_ratio']:.2f} >= 0.5 — too noisy")
+                if not hurst_ok:
+                    failed.append(f"Hurst H={h['hurst']:.3f} <= 0.50 — not sufficiently trending")
                 if short_conditions == 1:
                     sc_labels = []
                     if rsi_overbought:     sc_labels.append("RSI>70")

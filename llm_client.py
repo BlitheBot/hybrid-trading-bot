@@ -109,6 +109,19 @@ async def call_llm_with_model(
                 if content is None:
                     print(f"[LLMClient] None response from LLM (attempt {attempt}) — retrying")
                     raise ValueError("null content in LLM response")
+                # Gemini thinking mode returns content as a list of typed blocks
+                # e.g. [{"type": "thinking", ...}, {"type": "text", "text": "..."}].
+                # Extract only the text blocks; discard internal reasoning tokens.
+                if isinstance(content, list):
+                    text_parts = [
+                        b.get("text", "")
+                        for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    ]
+                    content = "\n".join(text_parts)
+                    if not content.strip():
+                        print(f"[LLMClient] Empty text blocks in list content (attempt {attempt}) — retrying")
+                        raise ValueError("empty text content in thinking block response")
                 content = content.strip()
 
                 # Parse url_citation annotations (present when web search plugin fires)
