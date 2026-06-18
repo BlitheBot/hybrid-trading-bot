@@ -14,7 +14,7 @@
 
 ## Architecture Overview
 
-A Python asyncio trading bot running 24/7 on Railway with 22 concurrent loops. The swing screener runs every 5 minutes during market hours (9:30 AM–4:00 PM EDT, Mon–Fri) across up to 250 symbols pulled by volume from the `active_tickers` PostgreSQL table (6 priority symbols — JPM, SPY, COST, BRK.B, PG, V — always included). Per-symbol 4-hour cooldown is set the moment a signal enters the protection stack (debate gate), not on trade execution — this prevents the same symbol from being debated repeatedly in one session. Short selling is enabled (`SHORT_SELLING_ENABLED=True`): a SELL signal with no open long executes a short sale with ATR-based stop/target, full debate + fundamentals gate, and 1:2 minimum R/R. SHORT debate gate: bull must raise **4+ concrete fundamental/macro reasons** to block the trade (LONG path remains at 2+ bear objections). **Active short exit**: every swing cycle checks open shorts for thesis reversal (RSI < 55 AND MACD crosses above signal) — if both true, cancels OCO and covers at market immediately. The Discovery Engine uses the same 250-symbol universe from `active_tickers`. All positions use EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly sizing, composite signal-quality scoring (Task 5), correlation-aware portfolio gating (Task 4), and a multi-gate risk chain (incl. Task 8 sector/position/weekly/consecutive-loss limits). Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy.
+A Python asyncio trading bot running 24/7 on Railway with 23 concurrent loops. The swing screener runs every 5 minutes during market hours (9:30 AM–4:00 PM EDT, Mon–Fri) across up to 250 symbols pulled by volume from the `active_tickers` PostgreSQL table (6 priority symbols — JPM, SPY, COST, BRK.B, PG, V — always included). Per-symbol 4-hour cooldown is set the moment a signal enters the protection stack (debate gate), not on trade execution — this prevents the same symbol from being debated repeatedly in one session. Short selling is enabled (`SHORT_SELLING_ENABLED=True`): a SELL signal with no open long executes a short sale with ATR-based stop/target, full debate + fundamentals gate, and 1:2 minimum R/R. SHORT debate gate: bull must raise **4+ concrete fundamental/macro reasons** to block the trade (LONG path remains at 2+ bear objections). **Active short exit**: every swing cycle checks open shorts for thesis reversal (RSI < 55 AND MACD crosses above signal) — if both true, cancels OCO and covers at market immediately. The Discovery Engine uses the same 250-symbol universe from `active_tickers`. All positions use EMA/MACD/RSI + Kalman/Hurst/VWAP signal gates, Kelly sizing, composite signal-quality scoring (Task 5), correlation-aware portfolio gating (Task 4), and a multi-gate risk chain (incl. Task 8 sector/position/weekly/consecutive-loss limits). Alternative data loops scan Benzinga news, SEC EDGAR Form 4 filings, FRED macro indicators, Reddit, and X/Twitter sentiment. All decisions post to Slack. Completed trades log to PostgreSQL via SQLAlchemy.
 
 **Signal conditions (swing_strategy.py):**
 - LONG: EMA50 > EMA200 AND MACD above signal within last 3 bars AND RSI in [35, 65] AND Kalman noise < 0.4 AND Hurst H ≥ 0.55
@@ -226,6 +226,7 @@ Config: `DECAY_MONITOR_ENABLED`, `DECAY_MIN_SIGNALS`, `DECAY_CRITICAL_MIN_SIGNAL
 - **Signal quality (T5):** `SIGNAL_QUALITY_ENABLED`=true, `SIGNAL_QUALITY_GATING_ENABLED`=true, `SIGNAL_QUALITY_MIN_SCORE`=5.0
 - **Crypto momentum (T6):** `CRYPTO_MOMENTUM_ENABLED`=true, `CRYPTO_MOMENTUM_EMA_FAST`=9, `CRYPTO_MOMENTUM_EMA_SLOW`=21, `CRYPTO_MOMENTUM_VOL_MULT`=1.2, `CRYPTO_MOMENTUM_ATR_STOP_MULT`=1.5, `CRYPTO_MOMENTUM_ATR_TARGET_MULT`=3.0, `CRYPTO_MOMENTUM_COOLDOWN_MINUTES`=15, `CRYPTO_MOMENTUM_MIN_MOVE_PCT`=0.001
 - **Risk limits (T8):** `MAX_SECTOR_CONCENTRATION_PCT`=30.0, `MAX_SINGLE_POSITION_PCT`=5.0, `WEEKLY_LOSS_LIMIT_PCT`=-3.0, `WEEKLY_LOSS_SIZE_REDUCTION`=0.5, `CONSECUTIVE_LOSS_LIMIT`=5, `CONSECUTIVE_LOSS_PAUSE_HOURS`=2.0, `RISK_STATE_CACHE_SECONDS`=300
+- **Earnings protection:** `EARNINGS_PROTECTION_ENABLED`=true — 3-day window: 25% size reduction + Slack alert; today/tomorrow: block entirely. Loop 23 (`earnings_monitor_loop`) scans open positions at 8 AM EST and sends advisory Slack alerts. Supersedes legacy `EARNINGS_FILTER_ENABLED` (kept for fallback when protection is disabled).
 - **Permutation/regime/decay:** see the respective sections above. **`DECAY_MONITOR_ENABLED=false` is set in Railway** — the decay monitor loop (Loop 22) is currently disabled in production; do not change this flag.
 
 ---
@@ -246,7 +247,7 @@ Config: `DECAY_MONITOR_ENABLED`, `DECAY_MIN_SIGNALS`, `DECAY_CRITICAL_MIN_SIGNAL
 
 ---
 
-## 22 Async Loops
+## 23 Async Loops
 
 | # | Method | Status |
 |---|---|---|
@@ -272,6 +273,7 @@ Config: `DECAY_MONITOR_ENABLED`, `DECAY_MIN_SIGNALS`, `DECAY_CRITICAL_MIN_SIGNAL
 | 20 | `indicator_discovery_loop` | Active |
 | 21 | `grok_sentiment_loop` | Active (requires `XAI_API_KEY`) |
 | 22 | `decay_monitor_loop` | Active (`DECAY_MONITOR_ENABLED`, 6h cadence) |
+| 23 | `earnings_monitor_loop` | Active (`EARNINGS_PROTECTION_ENABLED`, 8 AM EST daily) |
 
 ---
 

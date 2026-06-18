@@ -93,7 +93,8 @@ class Config:
     TRUTH_SOCIAL_ENABLED = False  # Disabled: Truth Social blocks automated access; re-enable with Quiver API
     CONGRESSIONAL_ENABLED = False  # Disabled: free data sources unavailable; re-enable with QUIVER_API_KEY ($30/mo at quiverquant.com)
     FRED_ENABLED = True            # Free public FRED CSV endpoints — no API key required
-    EARNINGS_FILTER_ENABLED = True # Reduce swing position size to 25% when earnings within 48h; skip if earnings today/tomorrow
+    EARNINGS_FILTER_ENABLED = True # Reduce swing position size to 25% when earnings within 48h (legacy — superseded by EARNINGS_PROTECTION_ENABLED)
+    EARNINGS_PROTECTION_ENABLED = os.getenv("EARNINGS_PROTECTION_ENABLED", "true").lower() != "false"  # 3-day window: reduce to 25%; today/tomorrow: block entirely + 8am position scan
     VIX_SPIKE_THRESHOLD = 35      # VIX above this → reduce position size to 25%
     VIX_EXTREME_THRESHOLD = 40    # VIX above this → block trade entirely, alert #trading-alerts
     BEAR_MARKET_SIZE_REDUCTION = 0.5  # Multiply swing position size by this when SPY < 200 EMA

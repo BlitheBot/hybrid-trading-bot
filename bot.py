@@ -1211,14 +1211,15 @@ class TradingBot:
                 return proceed, summary
 
             else:
-                # LONG path: neutral bull vs bear; bear blocks if it raises 2+ objections.
+                # LONG path: neutral bull vs bear; synthesis call makes final verdict.
                 _bull_long_prompt = (
                     f"You are a bullish stock analyst. Search for the latest news on {symbol} "
                     f"and make the strongest 2-sentence case FOR buying it now. Data: {shared_data}"
                 )
                 _bear_long_prompt = (
                     f"You are a bearish stock analyst. Search for the latest news on {symbol} "
-                    f"and make the strongest 2-sentence case AGAINST buying it now. Data: {shared_data}"
+                    f"and identify the strongest risks AGAINST buying it now. Data: {shared_data}\n"
+                    'Return JSON only: {"objections":["<risk 1>","<risk 2>",...],"summary":"<one sentence>"}'
                 )
                 for _attempt in range(2):
                     try:
@@ -1229,7 +1230,8 @@ class TradingBot:
                             ),
                             call_llm_with_model(
                                 MODEL_FLASH, _bear_long_prompt,
-                                max_tokens=200, plugins=web_plugin,
+                                response_format={"type": "json_object"},
+                                max_tokens=300, plugins=web_plugin,
                             ),
                         )
                         break
@@ -1238,8 +1240,46 @@ class TradingBot:
                             print(f"[Debate] {symbol} None response from LLM — retrying once")
                         else:
                             raise
+
+                # Parse bear JSON — retry bear call alone once if parse fails
+                _bear_objections: list[str] = []
+                _bear_summary = ""
+                _bear_ok = False
+                try:
+                    _parsed_bear = _json.loads(bear_resp.text)
+                    _bear_objections = [str(o) for o in _parsed_bear.get("objections", []) if o]
+                    _bear_summary = _parsed_bear.get("summary", bear_resp.text[:300])
+                    _bear_ok = True
+                    print(f"[Debate] LONG {symbol} — bear raised {len(_bear_objections)} objection(s)")
+                except Exception as _be:
+                    _preview = bear_resp.text[:200] if bear_resp else "(no response)"
+                    print(
+                        f"[Debate] {symbol} bear parse failed: {_be}"
+                        f" | raw[:200]={_preview!r} — retrying bear alone"
+                    )
+                    try:
+                        bear_resp = await call_llm_with_model(
+                            MODEL_FLASH, _bear_long_prompt,
+                            response_format={"type": "json_object"},
+                            max_tokens=300, plugins=web_plugin,
+                        )
+                        _parsed_bear = _json.loads(bear_resp.text)
+                        _bear_objections = [str(o) for o in _parsed_bear.get("objections", []) if o]
+                        _bear_summary = _parsed_bear.get("summary", bear_resp.text[:300])
+                        _bear_ok = True
+                        print(f"[Debate] LONG {symbol} — bear raised {len(_bear_objections)} objection(s) (retry succeeded)")
+                    except (LLMError, Exception) as _be2:
+                        print(
+                            f"[Debate] LONG {symbol} — bear AI failed after retry ({_be2}),"
+                            f" proceeding with caution"
+                        )
+                        strategy.debate_size_multiplier = min(
+                            getattr(strategy, 'debate_size_multiplier', 1.0), 0.75
+                        )
+                        _bear_summary = "(bear analysis unavailable)"
+
                 synthesis_prompt = (
-                    f"Bull case: {bull_resp.text}\nBear case: {bear_resp.text}\n\n"
+                    f"Bull case: {bull_resp.text}\nBear case: {_bear_summary}\n\n"
                     f"Should we buy {symbol} right now?\n"
                     'Return JSON only: {"verdict":"proceed"|"skip"|"reduce_size",'
                     '"conviction":0.0-1.0,"reasoning":"one sentence"}'
@@ -1278,8 +1318,14 @@ class TradingBot:
                     strategy.debate_size_multiplier = 0.5
                     print(f"[Debate] {symbol} reduce_size verdict — setting 50% position size")
 
+                _n_bear = len(_bear_objections)
+                _bear_label = (
+                    f"{_n_bear} objection(s): {_bear_summary}"
+                    if _bear_ok else
+                    f"unavailable — 0.75x size penalty applied"
+                )
                 summary = (
-                    f"*Bull:* {bull_resp.text}\n*Bear:* {bear_resp.text}\n"
+                    f"*Bull:* {bull_resp.text}\n*Bear ({_n_bear} objection(s)):* {_bear_summary}\n"
                     f"*Verdict:* {verdict.upper()} (conviction {conviction:.0%}) — {reasoning}"
                 )
                 if source_lines:
@@ -1297,16 +1343,37 @@ class TradingBot:
     # ── Pre-trade hook: fundamentals → debate (Tasks 2 & 3) ──────────────────
 
     async def _swing_pre_trade_hook(self, symbol: str, signal: dict, strategy) -> tuple[bool, str]:
-        # Earnings filter — reduce position size to 25% if earnings within 48h
-        if Config.EARNINGS_FILTER_ENABLED:
-            has_earnings, report_date = await self._check_upcoming_earnings(symbol, days_ahead=2)
-            if has_earnings:
+        # Earnings protection — 3-day window: reduce to 25%; today/tomorrow: block
+        if Config.EARNINGS_PROTECTION_ENABLED:
+            _ep_has, _ep_date = await self._check_upcoming_earnings(symbol, days_ahead=3)
+            if _ep_has and _ep_date:
+                _ep_est = pytz.timezone("America/New_York")
+                _ep_today = datetime.now(_ep_est).date()
+                try:
+                    from datetime import date as _date_cls
+                    _ep_rpt = datetime.strptime(_ep_date, "%Y-%m-%d").date()
+                    _ep_days = (_ep_rpt - _ep_today).days
+                except Exception:
+                    _ep_days = 99  # Unknown date format — reduce size, don't block
+                if _ep_days <= 1:
+                    _when = "today" if _ep_days <= 0 else "tomorrow"
+                    print(f"[Earnings] {symbol} blocked — earnings {_when} ({_ep_date}), too risky")
+                    asyncio.create_task(notifications.notify_trade_skipped(
+                        symbol, "EarningsProtection",
+                        f"Earnings {_when} ({_ep_date}) — blocked to avoid pre-report volatility",
+                    ))
+                    return False, f"Earnings: blocked — report {_when} ({_ep_date})"
+                else:
+                    strategy.earnings_override_multiplier = 0.25
+                    _ep_note = f"⚠️ {symbol} has earnings in {_ep_days} days ({_ep_date}) — size reduced to 25%"
+                    print(f"[Earnings] {_ep_note}")
+                    asyncio.create_task(notifications.notify_alert(_ep_note, level="WARNING"))
+        elif Config.EARNINGS_FILTER_ENABLED:
+            # Legacy 48h check
+            _ef_has, _ef_date = await self._check_upcoming_earnings(symbol, days_ahead=2)
+            if _ef_has:
                 strategy.earnings_override_multiplier = 0.25
-                strategy.earnings_size_note = (
-                    f"⚠️ Earnings within 48hrs for {symbol} "
-                    f"(report: {report_date}) — reducing position size to 25%"
-                )
-                print(f"[Earnings] {strategy.earnings_size_note}")
+                print(f"[Earnings] {symbol}: earnings within 48h ({_ef_date}) — size reduced to 25%")
 
         # Fundamentals check
         proceed, reason = await self._check_fundamentals(symbol)
@@ -4580,6 +4647,61 @@ class TradingBot:
 
             await asyncio.sleep(Config.DECAY_LOOP_INTERVAL_SECONDS)
 
+    async def earnings_monitor_loop(self):
+        """Loop 23 — fires at 8:00 AM EST weekdays to scan open positions for upcoming earnings.
+
+        Advisory only: sends Slack alerts but never closes positions automatically.
+        Gated by EARNINGS_PROTECTION_ENABLED.
+        """
+        if not Config.EARNINGS_PROTECTION_ENABLED:
+            print("[EarningsMon] EARNINGS_PROTECTION_ENABLED=False — loop inactive")
+            return
+        print("[EarningsMon] Earnings monitor loop started (8:00 AM EST, Mon-Fri)")
+        _est = pytz.timezone("America/New_York")
+        while True:
+            _now = datetime.now(_est)
+            _target = _now.replace(hour=8, minute=0, second=0, microsecond=0)
+            if _now >= _target:
+                _target += timedelta(days=1)
+            while _target.weekday() >= 5:  # skip weekends
+                _target += timedelta(days=1)
+            await asyncio.sleep((_target - _now).total_seconds())
+
+            if not Config.EARNINGS_PROTECTION_ENABLED:
+                continue
+            if datetime.now(_est).weekday() >= 5:
+                continue
+
+            try:
+                positions = await asyncio.to_thread(self.trading_client.get_all_positions)
+                _alerts: list[tuple] = []
+                for _pos in positions:
+                    _sym = getattr(_pos, "symbol", None)
+                    if not _sym:
+                        continue
+                    try:
+                        _has, _rpt = await self._check_upcoming_earnings(_sym, days_ahead=2)
+                        if _has:
+                            _pnl_pct = float(getattr(_pos, "unrealized_plpc", 0)) * 100
+                            _alerts.append((_sym, _rpt, _pnl_pct))
+                    except Exception as _se:
+                        print(f"[EarningsMon] {_sym} check failed: {_se}")
+
+                for _sym, _rpt, _pnl_pct in _alerts:
+                    _msg = (
+                        f"⚠️ Earnings alert — {_sym} reports {_rpt} | "
+                        f"current P/L={_pnl_pct:+.2f}% | consider closing before announcement"
+                    )
+                    print(f"[EarningsMon] {_msg}")
+                    asyncio.create_task(notifications.notify_alert(_msg, level="WARNING"))
+
+                print(
+                    f"[EarningsMon] Scanned {len(positions)} open position(s) — "
+                    f"{len(_alerts)} earnings alert(s) sent"
+                )
+            except Exception as _e:
+                print(f"[EarningsMon] Morning scan failed: {_e}")
+
     async def start_dual_engine(self):
         print("🚀 Hybrid Trading Bot starting...")
 
@@ -4724,6 +4846,7 @@ class TradingBot:
             self.indicator_discovery_loop(),
             self.grok_sentiment_loop(),
             self.decay_monitor_loop(),
+            self.earnings_monitor_loop(),
         )
 
 if __name__ == "__main__":
