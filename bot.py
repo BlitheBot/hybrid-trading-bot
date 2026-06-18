@@ -2194,27 +2194,38 @@ class TradingBot:
         return None
 
     async def _on_crypto_trade(self, trade):
-        symbol = trade.symbol
-        price = trade.price
-        
-        if symbol in self.last_evaluated_price:
-            last_price = self.last_evaluated_price[symbol]
-            if abs(price - last_price) / last_price < Config.MIN_PRICE_MOVEMENT_PCT:
-                return # Not enough movement
-        self.last_evaluated_price[symbol] = price
-        
-        winner = await self._get_stronger_momentum_crypto()
-        if winner and symbol != winner:
-            return # Skip if this symbol doesn't have the strongest momentum
-            
-        await self._process_symbol(
-            symbol, 
-            self.scalp_strategies, 
-            is_crypto=True, 
-            risk_percent=Config.EQUITY_RISK_PER_TRADE_PERCENT, 
-            stop_loss_percent=Config.CRYPTO_SCALP_STOP_LOSS_PERCENT,
-            current_price=price
-        )
+        try:
+            symbol = trade.symbol
+            price = trade.price
+
+            # Count every tick so the heartbeat can report throughput
+            if not hasattr(self, '_crypto_tick_count'):
+                self._crypto_tick_count: dict[str, int] = {}
+            self._crypto_tick_count[symbol] = self._crypto_tick_count.get(symbol, 0) + 1
+
+            if symbol in self.last_evaluated_price:
+                last_price = self.last_evaluated_price[symbol]
+                if abs(price - last_price) / last_price < Config.MIN_PRICE_MOVEMENT_PCT:
+                    return  # Not enough movement — tick counted but no signal eval
+            self.last_evaluated_price[symbol] = price
+
+            winner = await self._get_stronger_momentum_crypto()
+            if winner and symbol != winner:
+                print(
+                    f"[Scalp] {symbol}: tick @ {price:.2f} — skipped (momentum winner={winner})"
+                )
+                return
+
+            await self._process_symbol(
+                symbol,
+                self.scalp_strategies,
+                is_crypto=True,
+                risk_percent=Config.EQUITY_RISK_PER_TRADE_PERCENT,
+                stop_loss_percent=Config.CRYPTO_SCALP_STOP_LOSS_PERCENT,
+                current_price=price,
+            )
+        except Exception as _trade_exc:
+            print(f"[Scalp] _on_crypto_trade error for {getattr(trade, 'symbol', '?')}: {_trade_exc}")
 
     def _close_websocket(self) -> None:
         """Explicitly close the Alpaca crypto WebSocket. Safe to call when stream is None."""
@@ -2257,7 +2268,30 @@ class TradingBot:
                 # It reconnects on WebSocketException and only returns on a clean stop or
                 # ValueError (e.g. "insufficient subscription") — our outer loop handles that.
                 _health_state["websocket_connected"] = True
-                await self.crypto_stream._run_forever()
+
+                # Heartbeat: log tick counts every 60s while the stream runs.
+                # This makes it immediately visible in Railway logs whether ticks
+                # are arriving at all, and whether the price-movement gate is
+                # filtering them out before signal evaluation.
+                async def _ws_heartbeat():
+                    while _health_state.get("websocket_connected"):
+                        await asyncio.sleep(60)
+                        counts = getattr(self, '_crypto_tick_count', {})
+                        count_str = " | ".join(
+                            f"{s}={c}" for s, c in sorted(counts.items())
+                        ) or "0 ticks"
+                        print(
+                            f"[Scalp] WebSocket heartbeat — connected=True | "
+                            f"ticks/60s: {count_str}"
+                        )
+                        self._crypto_tick_count = {}  # reset counters each interval
+
+                _hb_task = asyncio.create_task(_ws_heartbeat())
+                try:
+                    await self.crypto_stream._run_forever()
+                finally:
+                    _hb_task.cancel()
+
                 _health_state["websocket_connected"] = False
                 print("WebSocket stream exited _run_forever().")
             except (ValueError, Exception) as e:
