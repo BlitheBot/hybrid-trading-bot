@@ -26,26 +26,6 @@ from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
 from alpaca.data.requests import StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca.data.live import CryptoDataStream
-
-# Throttled subclass: the SDK's _run_forever() catches ValueError internally and
-# retries immediately because self._running=True by default, so our outer 300s wait
-# is never reached. Sleeping here, inside _auth(), throttles the SDK's own retry
-# loop before it can re-raise — ensuring a 300s gap between every connection attempt.
-_WS_CONN_LIMIT_WAIT = 300
-
-class _ThrottledCryptoDataStream(CryptoDataStream):
-    async def _auth(self):
-        try:
-            await super()._auth()
-        except ValueError as e:
-            if "connection limit" in str(e).lower() or "concurrent" in str(e).lower():
-                print(
-                    f"[WebSocket] Connection limit hit — sleeping {_WS_CONN_LIMIT_WAIT}s "
-                    f"inside SDK retry loop before Alpaca ghost connection expires."
-                )
-                await asyncio.sleep(_WS_CONN_LIMIT_WAIT)
-            raise
 
 from sqlalchemy import create_engine, text as sql_text
 
@@ -100,7 +80,7 @@ _health_state: dict = {
     "alpaca_connected": False,
     "last_news_scan_utc": None,
     "last_edgar_scan_utc": None,
-    "websocket_connected": False,
+    "crypto_polling_active": False,
     "equity_usd": 0.0,
     "open_positions": 0,
     "daily_pnl_pct": 0.0,
@@ -127,7 +107,7 @@ def health_check():
         "alpaca_connected": _health_state["alpaca_connected"],
         "last_news_scan": _health_state["last_news_scan_utc"],
         "last_edgar_scan": _health_state["last_edgar_scan_utc"],
-        "websocket_connected": _health_state["websocket_connected"],
+        "crypto_polling_active": _health_state["crypto_polling_active"],
     }), 200
 
 @_health_app.route("/metrics", methods=["GET"])
@@ -137,7 +117,7 @@ def prometheus_metrics():
         abort(404)
     uptime = round((datetime.now(pytz.utc) - _bot_start_time).total_seconds(), 2)
     vix    = MACRO_SNAPSHOT.get("vix") or 0.0
-    ws     = 1 if _health_state["websocket_connected"] else 0
+    polling = 1 if _health_state["crypto_polling_active"] else 0
     lines = [
         "# HELP bot_uptime_seconds Seconds since bot startup",
         "# TYPE bot_uptime_seconds gauge",
@@ -154,9 +134,9 @@ def prometheus_metrics():
         "# HELP bot_vix_level VIX level from FRED",
         "# TYPE bot_vix_level gauge",
         f"bot_vix_level {float(vix):.2f}",
-        "# HELP bot_websocket_connected 1 if crypto WebSocket is connected",
-        "# TYPE bot_websocket_connected gauge",
-        f"bot_websocket_connected {ws}",
+        "# HELP bot_crypto_polling_active 1 if crypto REST polling is active",
+        "# TYPE bot_crypto_polling_active gauge",
+        f"bot_crypto_polling_active {polling}",
         "# HELP bot_signals_fired_total Confirmed buy executions since startup",
         "# TYPE bot_signals_fired_total counter",
         f"bot_signals_fired_total {_health_state['signals_fired_total']}",
@@ -400,10 +380,7 @@ class TradingBot:
             secret_key=Config.ALPACA_SECRET_KEY
         )
         
-        # Lazily initialised by scalp_loop — None until the first connection attempt.
-        # Keeping it None here prevents a phantom connection being opened at startup
-        # before scalp_loop has a chance to manage the lifecycle.
-        self.crypto_stream = None
+        self._crypto_poll_cooldowns: dict[str, datetime] = {}
         self.scalp_strategies = []
         self.swing_strategies = []
         self.swing_symbol_strategies: dict[str, SwingStrategy] = {}
@@ -433,7 +410,7 @@ class TradingBot:
         self._consec_loss_baseline_time = datetime.now(pytz.utc)
         self._alerted_negative_ev: set[str] = set()
         self._last_ev_check_date = None
-        self.last_evaluated_price = {}
+
         self._recent_signals: deque = deque(maxlen=50)
         self._sector_alert_cooldown: dict[str, datetime] = {}
         self._adx_regime_cache = None  # (regime_str, timestamp)
@@ -2193,145 +2170,51 @@ class TradingBot:
             return winner
         return None
 
-    async def _on_crypto_trade(self, trade):
-        try:
-            symbol = trade.symbol
-            price = trade.price
-
-            # Count every tick so the heartbeat can report throughput
-            if not hasattr(self, '_crypto_tick_count'):
-                self._crypto_tick_count: dict[str, int] = {}
-            self._crypto_tick_count[symbol] = self._crypto_tick_count.get(symbol, 0) + 1
-
-            if symbol in self.last_evaluated_price:
-                last_price = self.last_evaluated_price[symbol]
-                if abs(price - last_price) / last_price < Config.MIN_PRICE_MOVEMENT_PCT:
-                    return  # Not enough movement — tick counted but no signal eval
-            self.last_evaluated_price[symbol] = price
-
-            winner = await self._get_stronger_momentum_crypto()
-            if winner and symbol != winner:
-                print(
-                    f"[Scalp] {symbol}: tick @ {price:.2f} — skipped (momentum winner={winner})"
-                )
-                return
-
-            await self._process_symbol(
-                symbol,
-                self.scalp_strategies,
-                is_crypto=True,
-                risk_percent=Config.EQUITY_RISK_PER_TRADE_PERCENT,
-                stop_loss_percent=Config.CRYPTO_SCALP_STOP_LOSS_PERCENT,
-                current_price=price,
-            )
-        except Exception as _trade_exc:
-            print(f"[Scalp] _on_crypto_trade error for {getattr(trade, 'symbol', '?')}: {_trade_exc}")
-
-    def _close_websocket(self) -> None:
-        """Explicitly close the Alpaca crypto WebSocket. Safe to call when stream is None."""
-        if self.crypto_stream is not None:
-            try:
-                self.crypto_stream.stop()
-                print("[WebSocket] Stream stopped cleanly.")
-            except Exception as e:
-                print(f"[WebSocket] stop() raised: {e}")
-            finally:
-                self.crypto_stream = None
-        _health_state["websocket_connected"] = False
-
     async def scalp_loop(self):
         if not Config.SCALP_ENABLED:
             print("[Scalp] Disabled via config — skipping crypto scalp loop.")
             return
-        print(f"🚀 Starting Crypto Scalping Bot for {Config.SCALP_SYMBOLS} (Websocket)...")
-        print(f"[Scalp] Crypto scalper initialized for {', '.join(Config.SCALP_SYMBOLS)}")
+        print(f"[Scalp] Starting crypto REST poll loop for {', '.join(Config.SCALP_SYMBOLS)} (60s interval, 24/7)...")
+        _health_state["crypto_polling_active"] = True
 
-        retry_delay = 5
-        consecutive_failures = 0
         while True:
-            # Always close the previous stream before opening a new one.
-            # This prevents stale half-open connections from accumulating against
-            # Alpaca's 1-connection-per-account limit on the paper trading tier.
-            self._close_websocket()
-
-            print(f"WebSocket connecting in {retry_delay}s...")
-            await asyncio.sleep(retry_delay)
-
-            connect_time = time.time()
             try:
-                self.crypto_stream = _ThrottledCryptoDataStream(
-                    api_key=Config.ALPACA_API_KEY,
-                    secret_key=Config.ALPACA_SECRET_KEY
-                )
-                self.crypto_stream.subscribe_trades(self._on_crypto_trade, *Config.SCALP_SYMBOLS)
-                # _run_forever() handles auth, subscription, and the consume loop internally.
-                # It reconnects on WebSocketException and only returns on a clean stop or
-                # ValueError (e.g. "insufficient subscription") — our outer loop handles that.
-                _health_state["websocket_connected"] = True
+                # Fetch latest 1-min bar for each symbol to get current price for logging
+                btc_bars = get_historical_bars("BTC/USD", TimeFrame.Minute, 1, self.crypto_data_client, is_crypto=True)
+                eth_bars = get_historical_bars("ETH/USD", TimeFrame.Minute, 1, self.crypto_data_client, is_crypto=True)
 
-                # Heartbeat: log tick counts every 60s while the stream runs.
-                # This makes it immediately visible in Railway logs whether ticks
-                # are arriving at all, and whether the price-movement gate is
-                # filtering them out before signal evaluation.
-                async def _ws_heartbeat():
-                    while _health_state.get("websocket_connected"):
-                        await asyncio.sleep(60)
-                        counts = getattr(self, '_crypto_tick_count', {})
-                        count_str = " | ".join(
-                            f"{s}={c}" for s, c in sorted(counts.items())
-                        ) or "0 ticks"
-                        print(
-                            f"[Scalp] WebSocket heartbeat — connected=True | "
-                            f"ticks/60s: {count_str}"
-                        )
-                        self._crypto_tick_count = {}  # reset counters each interval
+                btc_price = float(btc_bars['close'].iloc[-1]) if btc_bars is not None and len(btc_bars) > 0 else None
+                eth_price = float(eth_bars['close'].iloc[-1]) if eth_bars is not None and len(eth_bars) > 0 else None
 
-                _hb_task = asyncio.create_task(_ws_heartbeat())
-                try:
-                    await self.crypto_stream._run_forever()
-                finally:
-                    _hb_task.cancel()
+                btc_str = f"BTC/USD={btc_price:.2f}" if btc_price else "BTC/USD=N/A"
+                eth_str = f"ETH/USD={eth_price:.2f}" if eth_price else "ETH/USD=N/A"
 
-                _health_state["websocket_connected"] = False
-                print("WebSocket stream exited _run_forever().")
-            except (ValueError, Exception) as e:
-                _health_state["websocket_connected"] = False
-                if "connection limit" in str(e).lower() or "concurrent connection" in str(e).lower():
-                    # Separate path for connection limit — mandatory long wait regardless of
-                    # normal backoff state. After the pause, use max backoff (60s) so the
-                    # reconnect attempt is also slow in case the ghost hasn't cleared yet.
-                    print(
-                        f"[WebSocket] Connection limit exceeded — waiting {_WS_CONN_LIMIT_WAIT}s "
-                        f"for Alpaca server-side ghost connection to expire..."
-                    )
-                    asyncio.create_task(notifications.notify_alert(
-                        f"[WebSocket] Connection limit exceeded — waiting {_WS_CONN_LIMIT_WAIT}s "
-                        f"for ghost connection to expire before reconnecting."
-                    ))
-                    await asyncio.sleep(_WS_CONN_LIMIT_WAIT)
-                    retry_delay = 60   # stay at max backoff after a limit error
-                    consecutive_failures = 0
-                    continue
-                elif isinstance(e, ValueError):
-                    print(f"WebSocket ValueError: {e}")
-                    asyncio.create_task(notifications.notify_alert(f"WebSocket ValueError: {e} Retrying in {retry_delay}s..."))
+                winner = await self._get_stronger_momentum_crypto()
+                if winner is None:
+                    winner = "BTC/USD"
+
+                print(f"[Scalp] REST poll — {btc_str} | {eth_str} | evaluating {winner}")
+
+                _now = datetime.now(pytz.utc)
+                last_trade = self._crypto_poll_cooldowns.get(winner)
+                if last_trade and (_now - last_trade).total_seconds() < 15 * 60:
+                    remaining = int(15 * 60 - (_now - last_trade).total_seconds())
+                    print(f"[Scalp] {winner}: cooldown active — {remaining}s remaining")
                 else:
-                    msg = f"WebSocket error: {e}"
-                    print(msg)
-                    asyncio.create_task(notifications.notify_alert(f"{msg} Retrying in {retry_delay}s..."))
+                    self._crypto_poll_cooldowns[winner] = _now
+                    current_price = btc_price if winner == "BTC/USD" else eth_price
+                    await self._process_symbol(
+                        winner,
+                        self.scalp_strategies,
+                        is_crypto=True,
+                        risk_percent=Config.EQUITY_RISK_PER_TRADE_PERCENT,
+                        stop_loss_percent=Config.CRYPTO_SCALP_STOP_LOSS_PERCENT,
+                        current_price=current_price,
+                    )
+            except Exception as e:
+                print(f"[Scalp] REST poll error: {e}")
 
-            if time.time() - connect_time > 60:
-                retry_delay = 5
-                consecutive_failures = 0
-                print(f"WebSocket was stable for >60s. Backoff reset to 5s.")
-            else:
-                retry_delay = min(retry_delay * 2, 60)
-                consecutive_failures += 1
-                if consecutive_failures >= 10:
-                    asyncio.create_task(notifications.notify_alert(
-                        "Crypto websocket has failed 10 consecutive times — possible Alpaca outage"
-                    ))
-                    consecutive_failures = 0
+            await asyncio.sleep(60)
 
     async def trailing_stop_monitor_loop(self):
         print("🛡️ Starting Trailing Stop Monitor Loop...")
@@ -4739,15 +4622,11 @@ class TradingBot:
     async def start_dual_engine(self):
         print("🚀 Hybrid Trading Bot starting...")
 
-        # ── SIGTERM handler: close WebSocket before Railway kills the process ──────
-        # Railway sends SIGTERM on redeploy. Without this, the Alpaca WebSocket
-        # connection lingers open on their side for minutes, causing "connection
-        # limit exceeded" on the next startup (paper tier allows 1 concurrent WS).
         import signal as _signal
 
         def _on_sigterm():
-            print("[Shutdown] SIGTERM received — closing WebSocket before exit...")
-            self._close_websocket()
+            print("[Shutdown] SIGTERM received — cancelling all tasks...")
+            _health_state["crypto_polling_active"] = False
             for _task in asyncio.all_tasks():
                 _task.cancel()
 

@@ -20,7 +20,8 @@ A Python asyncio trading bot running 24/7 on Railway with 23 concurrent loops. T
 - LONG: EMA50 > EMA200 AND MACD above signal within last 3 bars AND RSI in [35, 65] AND Kalman noise < 0.4 AND Hurst H ≥ 0.55
 - SHORT: at least 2 of 3 — RSI > 70, MACD fresh bearish crossover, EMA50 < EMA200
 - Crypto scalp (smb_strategy.py): uses 1-minute bars (390 bars = ~1 session), Kalman Q=5e-3 (intraday), AnchoredVWAP gate at 0.15% distance / 1.1× volume
-- Crypto momentum (crypto_momentum_strategy.py, Task 6): 9/21 EMA crossover on 1-min bars + volume > 1.2× 20-bar avg; ATR stop 1.5×/target 3× (R/R 2.0); 15-min cooldown + 0.1% min-move per symbol. Both crypto strategies are evaluated each tick in `_process_symbol`; only the higher-confidence signal executes (`CRYPTO_MOMENTUM_ENABLED`). Tests: `strategies/test_crypto_momentum_strategy.py`
+- Crypto momentum (crypto_momentum_strategy.py, Task 6): 9/21 EMA crossover on 1-min bars + volume > 1.2× 20-bar avg; ATR stop 1.5×/target 3× (R/R 2.0); 15-min cooldown + 0.1% min-move per symbol. Both crypto strategies are evaluated each REST poll in `_process_symbol`; only the higher-confidence signal executes (`CRYPTO_MOMENTUM_ENABLED`). Tests: `strategies/test_crypto_momentum_strategy.py`
+- **Crypto scalp loop uses REST polling (not WebSocket)**: Alpaca paper accounts do not deliver real-time WebSocket tick data without a paid Algo Trader Plus plan. `scalp_loop` polls the REST API every 60 seconds for 1-min bars on BTC/USD and ETH/USD, picks the stronger momentum symbol via `_get_stronger_momentum_crypto()`, applies a 15-minute per-symbol cooldown (`_crypto_poll_cooldowns`), and calls `_process_symbol()`. Runs 24/7 (no market-hours gate). Health state key: `crypto_polling_active` (replaces former `websocket_connected`).
 
 ---
 
@@ -251,7 +252,7 @@ Config: `DECAY_MONITOR_ENABLED`, `DECAY_MIN_SIGNALS`, `DECAY_CRITICAL_MIN_SIGNAL
 
 | # | Method | Status |
 |---|---|---|
-| 1 | `scalp_loop` | Active (`SCALP_ENABLED=True`) |
+| 1 | `scalp_loop` | Active (`SCALP_ENABLED=True`) — REST poll 60s, 24/7 |
 | 2 | `swing_loop` | Active |
 | 3 | `prioritizer_loop` | Active |
 | 4 | `news_loop` | Active |
