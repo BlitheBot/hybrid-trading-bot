@@ -2252,6 +2252,126 @@ class TradingBot:
 
     # ── Task 1 — exit monitor: updates signal_outcomes when positions close ───
 
+    async def _check_unprotected_positions(self) -> None:
+        """Scan all open positions for missing stop-loss protection.
+
+        Any position with no stop order (and no OCO stop leg) gets an emergency
+        ATR-based OCO placed immediately. Sends a PagerDuty CRITICAL alert per
+        symbol. Fail-open: errors log and trading continues.
+        """
+        from alpaca.trading.requests import LimitOrderRequest, StopLossRequest, TakeProfitRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        import numpy as np
+
+        def _val(attr):
+            return getattr(attr, 'value', str(attr)).lower() if attr is not None else ''
+
+        try:
+            all_positions = await asyncio.to_thread(self.trading_client.get_all_positions)
+            if not all_positions:
+                return
+
+            open_orders = await asyncio.to_thread(
+                self.trading_client.get_orders,
+                GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500, nested=True),
+            )
+
+            # Map symbol → whether a stop order exists (including OCO child legs)
+            stop_protected: dict[str, bool] = {}
+            for o in open_orders:
+                sym = o.symbol
+                has_stop = 'stop' in _val(getattr(o, 'order_type', None))
+                if not has_stop:
+                    for leg in (getattr(o, 'legs', None) or []):
+                        if 'stop' in _val(getattr(leg, 'order_type', None)):
+                            has_stop = True
+                            break
+                if has_stop:
+                    stop_protected[sym] = True
+                elif sym not in stop_protected:
+                    stop_protected[sym] = False
+
+            unprotected = [p for p in all_positions if not stop_protected.get(p.symbol, False)]
+            if not unprotected:
+                return
+
+            print(f"[Safety] Found {len(unprotected)} position(s) with no stop-loss — placing emergency OCOs")
+
+            dc = StockHistoricalDataClient(Config.ALPACA_API_KEY, Config.ALPACA_SECRET_KEY)
+            end_dt = datetime.now(pytz.utc)
+            start_dt = end_dt - timedelta(days=45)
+
+            for p in unprotected:
+                sym = p.symbol
+                entry  = float(p.avg_entry_price)
+                current = float(p.current_price)
+                qty    = abs(float(p.qty))
+                is_short = _val(getattr(p, 'side', None)) == 'short'
+
+                # ATR(14) from daily bars; fallback to 2% of price
+                atr = current * 0.02
+                try:
+                    bars = await asyncio.to_thread(
+                        dc.get_stock_bars,
+                        StockBarsRequest(
+                            symbol_or_symbols=sym,
+                            timeframe=TimeFrame.Day,
+                            start=start_dt,
+                            end=end_dt,
+                        ),
+                    )
+                    df = bars.df
+                    if hasattr(df.index, 'levels'):
+                        df = df.xs(sym, level=0)
+                    if len(df) >= 15:
+                        h, l, c = df['high'].values, df['low'].values, df['close'].values
+                        tr = [max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1])) for i in range(1, len(df))]
+                        atr = float(np.mean(tr[-14:]))
+                except Exception:
+                    pass
+
+                if is_short:
+                    raw_stop = entry + 2.0 * atr
+                    stop_price   = round(max(raw_stop, current * 1.005), 2)
+                    target_price = round(max(entry - 5.0 * atr, 0.01), 2)
+                    order_side   = OrderSide.BUY
+                else:
+                    raw_stop = entry - 2.0 * atr
+                    stop_price   = round(min(raw_stop, current * 0.995), 2)
+                    target_price = round(entry + 5.0 * atr, 2)
+                    order_side   = OrderSide.SELL
+
+                try:
+                    oco = await asyncio.to_thread(
+                        self.trading_client.submit_order,
+                        LimitOrderRequest(
+                            symbol=sym,
+                            qty=qty,
+                            side=order_side,
+                            time_in_force=TimeInForce.GTC,
+                            order_class=OrderClass.OCO,
+                            limit_price=target_price,
+                            take_profit=TakeProfitRequest(limit_price=target_price),
+                            stop_loss=StopLossRequest(stop_price=stop_price),
+                        ),
+                    )
+                    msg = (
+                        f"\U0001f6a8 EMERGENCY — {sym} had no stop-loss protection, "
+                        f"emergency OCO placed | stop={stop_price} target={target_price} | "
+                        f"id={str(oco.id)[:12]}"
+                    )
+                    print(f"[Safety] {msg}")
+                    asyncio.create_task(notifications.notify_alert(msg, level="CRITICAL"))
+                except Exception as _oco_e:
+                    err_msg = f"[Safety] Emergency OCO for {sym} FAILED: {_oco_e}"
+                    print(err_msg)
+                    asyncio.create_task(notifications.notify_alert(err_msg, level="CRITICAL"))
+
+        except Exception as _e:
+            print(f"[Safety] Unprotected position check failed (non-fatal): {_e}")
+
     async def _cancel_orphaned_oco_orders(self) -> None:
         """Cancel BUY limit/stop OCO orders whose short position no longer exists.
 
@@ -2323,6 +2443,9 @@ class TradingBot:
 
             # Orphaned OCO cleanup — runs every cycle regardless of open trade IDs.
             await self._cancel_orphaned_oco_orders()
+
+            # Safety net — emergency OCO for any position missing stop protection.
+            await self._check_unprotected_positions()
 
             if not open_ids_snapshot:
                 continue
