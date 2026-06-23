@@ -2278,6 +2278,9 @@ class TradingBot:
                 GetOrdersRequest(status=QueryOrderStatus.OPEN, limit=500, nested=True),
             )
 
+            # Index live positions by symbol — only symbols present here are truly open.
+            pos_by_sym: dict[str, object] = {p.symbol: p for p in all_positions}
+
             # Map symbol → whether a stop order exists (including OCO child legs)
             stop_protected: dict[str, bool] = {}
             for o in open_orders:
@@ -2293,7 +2296,22 @@ class TradingBot:
                 elif sym not in stop_protected:
                     stop_protected[sym] = False
 
-            unprotected = [p for p in all_positions if not stop_protected.get(p.symbol, False)]
+            unprotected = []
+            for p in all_positions:
+                sym = p.symbol
+                if stop_protected.get(sym, False):
+                    continue
+                # Skip if all shares are already committed to another order
+                # (e.g. a pending market liquidation) — abs(qty_available)==0 means
+                # Alpaca would reject any new order anyway. Short positions report
+                # qty_available as negative, so use abs() for the zero-check.
+                _qty_avail_raw = getattr(p, 'qty_available', None)
+                qty_avail = abs(float(_qty_avail_raw)) if _qty_avail_raw is not None else abs(float(p.qty))
+                if qty_avail == 0:
+                    print(f"[Safety] {sym}: no stop-loss but qty_available=0 (liquidation in progress?) — skipping")
+                    continue
+                unprotected.append(p)
+
             if not unprotected:
                 return
 
@@ -2305,9 +2323,13 @@ class TradingBot:
 
             for p in unprotected:
                 sym = p.symbol
+                # Guard: re-verify position still exists (race between check and action)
+                if sym not in pos_by_sym:
+                    print(f"[Safety] {sym}: position disappeared before OCO placement — skipping")
+                    continue
                 entry  = float(p.avg_entry_price)
                 current = float(p.current_price)
-                qty    = abs(float(p.qty))
+                qty    = qty_avail   # abs value already computed above
                 is_short = _val(getattr(p, 'side', None)) == 'short'
 
                 # ATR(14) from daily bars; fallback to 2% of price
