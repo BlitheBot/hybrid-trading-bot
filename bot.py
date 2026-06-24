@@ -2256,8 +2256,9 @@ class TradingBot:
         """Scan all open positions for missing stop-loss protection.
 
         Any position with no stop order (and no OCO stop leg) gets an emergency
-        ATR-based OCO placed immediately. Sends a PagerDuty CRITICAL alert per
-        symbol. Fail-open: errors log and trading continues.
+        ATR-based OCO placed immediately. Sends a WARNING Slack alert on recovery
+        (protection_source=safety_net_recovery); CRITICAL on unrecoverable failure.
+        Fail-open: errors log and trading continues.
         """
         from alpaca.trading.requests import LimitOrderRequest, StopLossRequest, TakeProfitRequest
         from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
@@ -2380,12 +2381,11 @@ class TradingBot:
                         ),
                     )
                     msg = (
-                        f"\U0001f6a8 EMERGENCY — {sym} had no stop-loss protection, "
-                        f"emergency OCO placed | stop={stop_price} target={target_price} | "
-                        f"id={str(oco.id)[:12]}"
+                        f"[Safety-net] {sym}: emergency OCO placed (protection_source=safety_net_recovery) | "
+                        f"stop={stop_price} target={target_price} | id={str(oco.id)[:12]}"
                     )
                     print(f"[Safety] {msg}")
-                    asyncio.create_task(notifications.notify_alert(msg, level="CRITICAL"))
+                    asyncio.create_task(notifications.notify_alert(msg, level="WARNING"))
                 except Exception as _oco_e:
                     err_msg = f"[Safety] Emergency OCO for {sym} FAILED: {_oco_e}"
                     print(err_msg)
@@ -2436,9 +2436,9 @@ class TradingBot:
             print(f"[Cleanup] Orphaned OCO check failed (non-fatal): {_e}")
 
     async def _exit_monitor_loop(self):
-        print("[DB] Exit monitor loop started (10-min polling)")
+        print("[DB] Exit monitor loop started (2-min polling)")
         while True:
-            await asyncio.sleep(600)
+            await asyncio.sleep(120)
             async with self._trade_ids_lock:
                 open_ids_snapshot = dict(self._open_trade_ids)
 
@@ -3355,6 +3355,10 @@ class TradingBot:
                 )
             except Exception as _oco_e:
                 print(f"[Swing] {symbol}: OCO placement FAILED — {_oco_e}\n{_tb.format_exc()}")
+                asyncio.create_task(notifications.notify_alert(
+                    f"[OCO FAILED] Short {symbol} — stop protection missing. Safety-net will recover in <2min.",
+                    level="WARNING",
+                ))
 
             print(f"[Slack] Attempting trade notification for {symbol}")
             asyncio.create_task(notifications.notify_trade_executed(
@@ -3802,8 +3806,11 @@ class TradingBot:
 
                         # Execute using swing risk parameters (stack_mult = 1.3 when stacked)
                         try:
-                            from alpaca.trading.requests import MarketOrderRequest
-                            from alpaca.trading.enums import OrderSide, TimeInForce
+                            from alpaca.trading.requests import (
+                                MarketOrderRequest, LimitOrderRequest,
+                                TakeProfitRequest, StopLossRequest,
+                            )
+                            from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 
                             account = await asyncio.to_thread(self.trading_client.get_account)
                             equity = float(account.equity)
@@ -3822,13 +3829,51 @@ class TradingBot:
                             qty = min(qty, max(1, int(max_dollars / entry_price)))
 
                             side = OrderSide.BUY if action == "buy" else OrderSide.SELL
-                            await asyncio.to_thread(
+                            _news_order = await asyncio.to_thread(
                                 self.trading_client.submit_order,
                                 MarketOrderRequest(symbol=ticker, qty=qty, side=side, time_in_force=TimeInForce.DAY)
                             )
 
+                            # For long entries: poll for fill then place synchronous OCO protection.
+                            # SELL actions close an existing long (already has OCO) — skip.
+                            fill_price = entry_price
+                            if action == "buy":
+                                try:
+                                    for _i in range(30):
+                                        await asyncio.sleep(1)
+                                        _checked = await asyncio.to_thread(
+                                            self.trading_client.get_order_by_id, _news_order.id
+                                        )
+                                        if getattr(_checked, 'status', None) and _checked.status.value == 'filled':
+                                            fill_price = float(_checked.filled_avg_price or entry_price)
+                                            break
+                                except Exception as _poll_e:
+                                    print(f"[NewsLoop] {ticker}: fill poll failed (non-fatal) — {_poll_e}")
+                                if fill_price == entry_price:
+                                    print(f"[NewsLoop] {ticker}: fill not confirmed in 30s — using pre-trade price for OCO")
+                                actual_stop   = round(fill_price * (1 - Config.STOP_LOSS_PERCENT / 100), 2)
+                                actual_target = round(fill_price * (1 + Config.TAKE_PROFIT_PERCENT / 100), 2)
+                                try:
+                                    _oco = await asyncio.to_thread(
+                                        self.trading_client.submit_order,
+                                        LimitOrderRequest(
+                                            symbol=ticker, qty=qty, side=OrderSide.SELL,
+                                            time_in_force=TimeInForce.GTC, order_class=OrderClass.OCO,
+                                            limit_price=actual_target,
+                                            take_profit=TakeProfitRequest(limit_price=actual_target),
+                                            stop_loss=StopLossRequest(stop_price=actual_stop),
+                                        ),
+                                    )
+                                    print(f"[NewsLoop] {ticker}: OCO protection placed — id={str(_oco.id)[:12]} target={actual_target} stop={actual_stop}")
+                                except Exception as _oco_e:
+                                    print(f"[NewsLoop] {ticker}: OCO FAILED — {_oco_e}")
+                                    asyncio.create_task(notifications.notify_alert(
+                                        f"[OCO FAILED] News long {ticker} — stop protection missing. Safety-net will recover in <2min.",
+                                        level="WARNING",
+                                    ))
+
                             asyncio.create_task(notifications.notify_news_trade(
-                                ticker, sig["headline"], action, entry_price, qty
+                                ticker, sig["headline"], action, fill_price, qty
                             ))
                             self.active_signals[f"{ticker}-news-{action}"] = datetime.now(pytz.utc)
 
