@@ -1419,12 +1419,16 @@ class TradingBot:
             data['symbol'] = symbol
 
         if current_price is not None:
+            # Carry forward the last real bar's volume so strategy volume-confirmation
+            # gates (CryptoMomentum ratio check, SMB AnchoredVWAP) aren't killed by a
+            # synthetic 0 — the root cause of every crypto signal being suppressed since d5449c3.
+            _carry_vol = float(data['volume'].iloc[-1]) if len(data) > 0 else 0
             current_bar = pd.DataFrame([{
                 'open': current_price,
                 'high': current_price,
                 'low': current_price,
                 'close': current_price,
-                'volume': 0,
+                'volume': _carry_vol,
                 'vwap': current_price,
                 'symbol': symbol,
             }], index=pd.DatetimeIndex([datetime.now(pytz.utc)]))
