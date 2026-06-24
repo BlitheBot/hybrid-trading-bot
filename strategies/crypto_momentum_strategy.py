@@ -203,6 +203,7 @@ class CryptoMomentumStrategy(BaseStrategy):
                   f"{symbol} qty={qty} fill={fill_price:.4f} stop={actual_stop} target={actual_target}")
 
             # Step 3: GTC OCO protection.
+            _oco_error = None
             try:
                 oco = trading_client.submit_order(LimitOrderRequest(
                     symbol=symbol, qty=qty, side=oco_side,
@@ -215,6 +216,7 @@ class CryptoMomentumStrategy(BaseStrategy):
                       f"target={actual_target} stop={actual_stop}")
             except Exception as _oco_e:
                 print(f"[ORDER] {symbol}: OCO FAILED — {_oco_e}\n{traceback.format_exc()}")
-            return qty
+                _oco_error = str(_oco_e)
+            return (qty, _oco_error)
         except Exception:
             print(f"❌ CryptoMom Order Failed for {symbol}:\n{traceback.format_exc()}")

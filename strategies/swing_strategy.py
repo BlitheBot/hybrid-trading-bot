@@ -659,6 +659,7 @@ class SwingStrategy(BaseStrategy):
             actual_stop   = round(fill_price * (1 - stop_loss_percent / 100), 2)
             actual_target = round(fill_price * (1 + take_profit_percent / 100), 2)
             print(f"✅ Swing LONG entered: {symbol} qty={qty} fill={fill_price:.2f} stop={actual_stop} target={actual_target}")
+            _oco_error = None
             try:
                 oco = trading_client.submit_order(LimitOrderRequest(
                     symbol=symbol,
@@ -673,6 +674,7 @@ class SwingStrategy(BaseStrategy):
                 print(f"[ORDER] {symbol}: OCO protection placed — id={str(oco.id)[:12]} target={actual_target} stop={actual_stop}")
             except Exception as _oco_e:
                 print(f"[ORDER] {symbol}: OCO FAILED — {_oco_e}\n{traceback.format_exc()}")
-            return qty
+                _oco_error = str(_oco_e)
+            return (qty, _oco_error)
         except Exception:
             print(f"❌ Swing Order Failed for {symbol}:\n{traceback.format_exc()}")

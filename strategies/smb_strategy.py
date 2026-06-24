@@ -217,6 +217,7 @@ class SMBStrategy(BaseStrategy):
             )
 
             # Step 3: GTC OCO protection
+            _oco_error = None
             try:
                 oco = trading_client.submit_order(LimitOrderRequest(
                     symbol=symbol,
@@ -234,6 +235,7 @@ class SMBStrategy(BaseStrategy):
                 )
             except Exception as _oco_e:
                 print(f"[ORDER] {symbol}: OCO FAILED — {_oco_e}\n{traceback.format_exc()}")
-            return qty
+                _oco_error = str(_oco_e)
+            return (qty, _oco_error)
         except Exception:
             print(f"❌ SMB Order Failed for {symbol}:\n{traceback.format_exc()}")

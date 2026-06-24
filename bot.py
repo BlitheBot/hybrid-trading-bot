@@ -2082,7 +2082,7 @@ class TradingBot:
                             scaled_risk_percent,
                             Config.SWING_EQUITY_RISK_PERCENT * Config.POSITION_SIZE_FLOOR,
                         )
-                        executed_qty = await asyncio.to_thread(
+                        _trade_result = await asyncio.to_thread(
                             strategy.execute_trade,
                             signal,
                             self.trading_client,
@@ -2091,6 +2091,18 @@ class TradingBot:
                             Config.TAKE_PROFIT_PERCENT,
                             Config.MAX_BUYING_POWER_UTILIZATION_PERCENT,
                         )
+                        # execute_trade returns (qty, oco_error_str|None) on execution,
+                        # or None on early exit (guard tripped, qty=0, market order failed).
+                        if isinstance(_trade_result, tuple):
+                            executed_qty, _oco_error = _trade_result
+                        else:
+                            executed_qty, _oco_error = _trade_result, None
+                        if _oco_error:
+                            asyncio.create_task(notifications.notify_alert(
+                                f"[OCO FAILED] {symbol} ({strategy.name}) — stop protection missing. "
+                                f"Safety-net will recover in <2min. Error: {_oco_error}",
+                                level="WARNING",
+                            ))
 
                         # Prometheus counter: confirmed buy execution
                         if signal['signal'] == 'buy':
