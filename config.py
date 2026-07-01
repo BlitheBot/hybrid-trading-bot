@@ -31,6 +31,11 @@ class Config:
     
     # Advanced Swing & Risk Parameters
     SWING_MIN_RR_RATIO = 2.0
+    # Short OCO ATR multipliers — R/R = TARGET/STOP must stay >= SWING_MIN_RR_RATIO.
+    # 1.5x/3.0x = 2.0 R/R with a target that's reachable on realistic 3-8% moves,
+    # vs. the old 2x/5x which required 10-20% moves to fill.
+    SHORT_STOP_ATR_MULT = float(os.getenv("SHORT_STOP_ATR_MULT", "1.5"))
+    SHORT_TARGET_ATR_MULT = float(os.getenv("SHORT_TARGET_ATR_MULT", "3.0"))
     MIN_DOLLAR_VOLUME = 10_000_000  # skip trades where avg daily dollar volume < $10M
     TRAILING_STOP_ACTIVATION_PCT = 0.03
     TRAILING_STOP_TRAIL_PCT = 0.015

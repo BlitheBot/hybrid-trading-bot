@@ -434,6 +434,9 @@ class TradingBot:
         # Per-symbol 4-hour cooldown for the 5-min swing screener.
         # Updated when a signal actually fires to prevent re-entering the same daily candle.
         self._swing_signal_times: dict[str, datetime] = {}
+        # Short thesis-reversal covers that fired while the market was closed —
+        # flushed at the next market open before the swing symbol loop runs.
+        self._pending_covers: dict[str, dict] = {}
 
     def add_scalp_strategy(self, strategy: BaseStrategy):
         if not isinstance(strategy, BaseStrategy):
@@ -2235,7 +2238,7 @@ class TradingBot:
     async def trailing_stop_monitor_loop(self):
         print("🛡️ Starting Trailing Stop Monitor Loop...")
         from alpaca.trading.requests import TrailingStopOrderRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.enums import OrderSide, TimeInForce, PositionSide
         while True:
             await asyncio.sleep(Config.TRAILING_STOP_MONITOR_INTERVAL)
             try:
@@ -2244,25 +2247,45 @@ class TradingBot:
                 for pos in positions:
                     unrealized_pct = float(pos.unrealized_plpc)
                     if unrealized_pct >= Config.TRAILING_STOP_ACTIVATION_PCT:
+                        # nested=True is required to pull OCO child legs — without it
+                        # the stop leg of any bracket/OCO order is invisible here and
+                        # the monitor silently never activates a trailing stop.
                         req = GetOrdersRequest(
                             status=QueryOrderStatus.OPEN,
-                            symbols=[pos.symbol]
+                            symbols=[pos.symbol],
+                            nested=True,
                         )
                         orders = await asyncio.to_thread(self.trading_client.get_orders, req)
-                        for order in orders:
-                            if order.order_type.value in ("stop", "stop_limit"):
-                                msg = f"Activating Trailing Stop for {pos.symbol} at {unrealized_pct*100:.2f}% profit!"
-                                print(msg)
-                                asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
-                                await asyncio.to_thread(self.trading_client.cancel_order_by_id, order.id)
-                                new_sl = TrailingStopOrderRequest(
-                                    symbol=pos.symbol,
-                                    qty=abs(float(pos.qty)),
-                                    side=OrderSide.SELL if pos.side == "long" else OrderSide.BUY,
-                                    time_in_force=TimeInForce.GTC,
-                                    trail_percent=Config.TRAILING_STOP_TRAIL_PCT * 100
-                                )
-                                await asyncio.to_thread(self.trading_client.submit_order, new_sl)
+                        _closing_side = OrderSide.SELL if pos.side == PositionSide.LONG else OrderSide.BUY
+
+                        _nested_legs = [leg for o in orders for leg in (getattr(o, 'legs', None) or [])]
+                        print(
+                            f"[TrailingStop] {pos.symbol} — scanning {len(orders)} orders "
+                            f"({len(_nested_legs)} nested legs) for stop leg"
+                        )
+
+                        stop_order = None
+                        for candidate in list(orders) + _nested_legs:
+                            _otype = getattr(candidate.order_type, 'value', str(candidate.order_type))
+                            if _otype in ("stop", "stop_limit") and candidate.side == _closing_side:
+                                stop_order = candidate
+                                break
+
+                        if stop_order is None:
+                            continue
+
+                        msg = f"Activating Trailing Stop for {pos.symbol} at {unrealized_pct*100:.2f}% profit!"
+                        print(msg)
+                        asyncio.create_task(notifications.notify_alert(msg, level="INFO"))
+                        await asyncio.to_thread(self.trading_client.cancel_order_by_id, stop_order.id)
+                        new_sl = TrailingStopOrderRequest(
+                            symbol=pos.symbol,
+                            qty=abs(float(pos.qty)),
+                            side=_closing_side,
+                            time_in_force=TimeInForce.GTC,
+                            trail_percent=Config.TRAILING_STOP_TRAIL_PCT * 100
+                        )
+                        await asyncio.to_thread(self.trading_client.submit_order, new_sl)
             except Exception as e:
                 print(f"[TrailingStop] Error: {e}")
 
@@ -2372,9 +2395,9 @@ class TradingBot:
                     pass
 
                 if is_short:
-                    raw_stop = entry + 2.0 * atr
+                    raw_stop = entry + Config.SHORT_STOP_ATR_MULT * atr
                     stop_price   = round(max(raw_stop, current * 1.005), 2)
-                    target_price = round(max(entry - 5.0 * atr, 0.01), 2)
+                    target_price = round(max(entry - Config.SHORT_TARGET_ATR_MULT * atr, 0.01), 2)
                     order_side   = OrderSide.BUY
                 else:
                     raw_stop = entry - 2.0 * atr
@@ -3119,6 +3142,70 @@ class TradingBot:
         self._adv_cache[symbol] = (adv_val, now)
         return adv_val
 
+    async def _is_market_open_now(self) -> bool:
+        """Authoritative Alpaca clock check — accounts for holidays/early closes,
+        unlike the swing_loop's own weekday/tod_min approximation."""
+        try:
+            clock = await asyncio.to_thread(self.trading_client.get_clock)
+            return bool(clock.is_open)
+        except Exception as e:
+            print(f"[ShortExit] Market clock check failed (assuming closed): {e}")
+            return False
+
+    async def _submit_buy_to_cover(self, symbol: str, qty: float, reason: str) -> bool:
+        """Submit a DAY market buy-to-cover order. Caller must confirm market is open."""
+        from alpaca.trading.requests import MarketOrderRequest as _MOR
+        from alpaca.trading.enums import OrderSide as _OS, TimeInForce as _TIF
+        try:
+            _cover = await asyncio.to_thread(
+                self.trading_client.submit_order,
+                _MOR(
+                    symbol=symbol,
+                    qty=abs(float(qty)),
+                    side=_OS.BUY,
+                    time_in_force=_TIF.DAY,
+                ),
+            )
+            print(f"[ShortExit] {symbol}: buy-to-cover submitted — id={str(_cover.id)[:12]} reason={reason}")
+            asyncio.create_task(notifications.notify_alert(
+                f"[ShortExit] {symbol} {reason} — covered at market",
+                level="INFO",
+            ))
+            return True
+        except Exception as _cov_e:
+            print(f"[ShortExit] {symbol}: buy-to-cover FAILED — {_cov_e}")
+            return False
+
+    async def _flush_pending_covers(self) -> None:
+        """Submit any thesis-reversal covers that were queued while the market was closed.
+        Runs at the top of the swing loop as soon as the market is open, before the
+        symbol screening loop starts."""
+        if not self._pending_covers:
+            return
+        pending = dict(self._pending_covers)
+        self._pending_covers.clear()
+        print(f"[ShortExit] Submitting {len(pending)} queued covers from after-hours thesis reversals")
+        for symbol, info in pending.items():
+            try:
+                _pos = await asyncio.to_thread(self.trading_client.get_open_position, symbol)
+                if str(getattr(_pos, 'side', '')).lower() != 'short':
+                    print(f"[ShortExit] {symbol}: no longer short — skipping queued cover")
+                    continue
+                # Cancel any outstanding OCO before covering (position was left
+                # protected while the cover was queued).
+                try:
+                    _open_ords = await asyncio.to_thread(
+                        self.trading_client.get_orders,
+                        GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[symbol]),
+                    )
+                    for _o in _open_ords:
+                        await asyncio.to_thread(self.trading_client.cancel_order_by_id, _o.id)
+                except Exception as _ce:
+                    print(f"[ShortExit] {symbol}: OCO cancel error before queued cover (non-fatal) — {_ce}")
+                await self._submit_buy_to_cover(symbol, _pos.qty, info.get('reason', 'thesis_reversal'))
+            except Exception as _pos_e:
+                print(f"[ShortExit] {symbol}: position no longer exists — skipping queued cover ({_pos_e})")
+
     async def _execute_short(
         self,
         symbol: str,
@@ -3216,12 +3303,12 @@ class TradingBot:
             print(f"[Swing] {symbol}: ATR calculation failed (non-fatal): {_ae}\n{_tb.format_exc()}")
 
         if _atr and _atr > 0:
-            short_stop   = round(entry_price + 2.0 * _atr, 2)
-            short_target = round(entry_price - 5.0 * _atr, 2)
+            short_stop   = round(entry_price + Config.SHORT_STOP_ATR_MULT * _atr, 2)
+            short_target = round(entry_price - Config.SHORT_TARGET_ATR_MULT * _atr, 2)
             print(
                 f"[Swing] {symbol}: ATR stop/target — "
-                f"entry={entry_price:.2f} stop={short_stop:.2f} (+2×ATR) "
-                f"target={short_target:.2f} (−5×ATR)"
+                f"entry={entry_price:.2f} stop={short_stop:.2f} (+{Config.SHORT_STOP_ATR_MULT}×ATR) "
+                f"target={short_target:.2f} (−{Config.SHORT_TARGET_ATR_MULT}×ATR)"
             )
         else:
             short_stop   = round(entry_price * (1 + stop_loss_percent / 100), 2)
@@ -3339,8 +3426,8 @@ class TradingBot:
 
             # Recompute stop/target from actual fill price
             if _atr and _atr > 0:
-                _actual_stop   = round(_fill_price + 2.0 * _atr, 2)
-                _actual_target = round(_fill_price - 5.0 * _atr, 2)
+                _actual_stop   = round(_fill_price + Config.SHORT_STOP_ATR_MULT * _atr, 2)
+                _actual_target = round(_fill_price - Config.SHORT_TARGET_ATR_MULT * _atr, 2)
             else:
                 _actual_stop   = short_stop
                 _actual_target = short_target
@@ -3413,6 +3500,11 @@ class TradingBot:
                 continue
 
             _cycle += 1
+
+            # Flush any thesis-reversal covers queued while the market was closed,
+            # before the first symbol is screened this cycle.
+            if self._pending_covers:
+                await self._flush_pending_covers()
 
             # --- Symbol universe: top 250 by volume + 6 priority symbols ---
             symbols = await asyncio.to_thread(self._get_swing_symbols)
@@ -3511,43 +3603,37 @@ class TradingBot:
                                         f"[Swing] {symbol} SHORT thesis reversed — closing position early | "
                                         f"RSI={_curr_rsi:.2f} MACD={_curr_macd:.4f}"
                                     )
-                                    # Cancel outstanding OCO orders before covering
-                                    try:
-                                        _open_ords = await asyncio.to_thread(
-                                            self.trading_client.get_orders,
-                                            GetOrdersRequest(
-                                                status=QueryOrderStatus.OPEN,
-                                                symbols=[symbol],
-                                            ),
-                                        )
-                                        for _o in _open_ords:
-                                            await asyncio.to_thread(
-                                                self.trading_client.cancel_order_by_id, _o.id
+                                    if not await self._is_market_open_now():
+                                        # Market closed mid-cycle (long screening pass can
+                                        # cross the 4pm bell) — a DAY market order would be
+                                        # rejected/expire unfilled. Leave the existing OCO in
+                                        # place and queue the cover for the next open instead.
+                                        self._pending_covers[symbol] = {
+                                            'reason': 'thesis_reversal',
+                                            'queued_at': datetime.now(pytz.utc),
+                                        }
+                                        print(f"[ShortExit] {symbol} market closed — cover queued for next open")
+                                    else:
+                                        # Cancel outstanding OCO orders before covering
+                                        try:
+                                            _open_ords = await asyncio.to_thread(
+                                                self.trading_client.get_orders,
+                                                GetOrdersRequest(
+                                                    status=QueryOrderStatus.OPEN,
+                                                    symbols=[symbol],
+                                                ),
                                             )
-                                        print(f"[Swing] {symbol}: cancelled {len(_open_ords)} OCO order(s) before covering")
-                                    except Exception as _ce:
-                                        print(f"[Swing] {symbol}: OCO cancel error (non-fatal) — {_ce}")
-                                    # Market buy-to-cover
-                                    try:
-                                        from alpaca.trading.requests import MarketOrderRequest as _MOR
-                                        from alpaca.trading.enums import OrderSide as _OS, TimeInForce as _TIF
-                                        _cover = await asyncio.to_thread(
-                                            self.trading_client.submit_order,
-                                            _MOR(
-                                                symbol=symbol,
-                                                qty=abs(float(_short_pos.qty)),
-                                                side=_OS.BUY,
-                                                time_in_force=_TIF.DAY,
-                                            ),
+                                            for _o in _open_ords:
+                                                await asyncio.to_thread(
+                                                    self.trading_client.cancel_order_by_id, _o.id
+                                                )
+                                            print(f"[Swing] {symbol}: cancelled {len(_open_ords)} OCO order(s) before covering")
+                                        except Exception as _ce:
+                                            print(f"[Swing] {symbol}: OCO cancel error (non-fatal) — {_ce}")
+                                        await self._submit_buy_to_cover(
+                                            symbol, _short_pos.qty,
+                                            f"thesis reversed (RSI={_curr_rsi:.1f}, MACD crossed above signal)",
                                         )
-                                        print(f"[Swing] {symbol}: buy-to-cover submitted — id={str(_cover.id)[:12]}")
-                                        asyncio.create_task(notifications.notify_alert(
-                                            f"[ShortExit] {symbol} thesis reversed — covered at market | "
-                                            f"RSI={_curr_rsi:.1f} MACD crossed above signal",
-                                            level="INFO",
-                                        ))
-                                    except Exception as _cov_e:
-                                        print(f"[Swing] {symbol}: buy-to-cover FAILED — {_cov_e}")
                     except Exception as _exit_err:
                         print(f"[Swing] {symbol}: short exit check failed (non-fatal) — {_exit_err}")
                     continue  # skip new signal evaluation for any symbol with an open short
