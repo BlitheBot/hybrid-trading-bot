@@ -976,22 +976,32 @@ class TradingBot:
 
     # ── Strategy decay gating (Loop 22 support) ───────────────────────────────
 
-    def _decay_key_for_strategy(self, strategy) -> str:
-        """Map a live strategy object to its signal_type — the decay-status key."""
+    def _decay_key_for_strategy(self, strategy, direction: str = 'long') -> str:
+        """Map a live strategy object to its signal_type — the decay-status key.
+
+        ``direction`` uses the same 'long'/'short' tag stored alongside entries in
+        ``_open_trade_ids`` and the signal_type suffix used when logging to
+        signal_outcomes (see _execute_short). A SwingStrategy short is a distinct
+        signal_type ('swing_short' / 'discovery_{type}_short') from its long
+        counterpart, so it must be looked up under its own decay key — previously
+        every SwingStrategy direction collapsed onto 'swing_long', leaving the
+        decay monitor blind to short-side performance entirely.
+        """
         disc_type = getattr(strategy, 'discovery_strategy_type', None)
+        is_short = direction == 'short'
         if isinstance(strategy, (SwingStrategy, BollingerMeanReversionStrategy)) and disc_type:
-            return f"discovery_{disc_type}"
+            return f"discovery_{disc_type}_short" if is_short else f"discovery_{disc_type}"
         if isinstance(strategy, SwingStrategy):
-            return 'swing_long'
+            return 'swing_short' if is_short else 'swing_long'
         if isinstance(strategy, BollingerMeanReversionStrategy):
-            return 'swing_bb'
+            return 'swing_bb'  # long-only mean-reversion — direction never varies
         return 'scalp_long'
 
-    def _decay_adjustment(self, strategy, symbol: str) -> tuple[bool, float, str | None]:
+    def _decay_adjustment(self, strategy, symbol: str, direction: str = 'long') -> tuple[bool, float, str | None]:
         """Return (disabled, position_multiplier, status) from the cached decay map."""
         if not Config.DECAY_MONITOR_ENABLED:
             return False, 1.0, None
-        info = self._decay_status_map.get((self._decay_key_for_strategy(strategy), symbol))
+        info = self._decay_status_map.get((self._decay_key_for_strategy(strategy, direction), symbol))
         if not info:
             return False, 1.0, None
         return info["disabled"], float(info.get("position_multiplier", 1.0)), info.get("status")
@@ -2033,18 +2043,30 @@ class TradingBot:
                                     "— not shortable/hard to borrow"
                                 )
                             else:
-                                try:
-                                    await self._execute_short(
-                                        symbol, signal, strategy,
-                                        risk_percent, stop_loss_percent, data,
-                                        decay_multiplier=_decay_mult,
-                                    )
-                                except Exception as _se:
-                                    import traceback as _tb
-                                    print(
-                                        f"[Swing] {symbol}: _execute_short raised "
-                                        f"— {_se}\n{_tb.format_exc()}"
-                                    )
+                                # Recompute the decay gate for the SHORT-specific key —
+                                # the pre-signal check above (_decay_mult) was necessarily
+                                # taken under the 'long' key since direction wasn't known
+                                # until generate_signals() ran. A strategy can be healthy
+                                # long and CRITICAL short (or vice versa); reusing the long
+                                # multiplier here silently ignored short-side decay status.
+                                _short_decay_disabled, _short_decay_mult, _short_decay_status = (
+                                    self._decay_adjustment(strategy, symbol, direction='short')
+                                )
+                                if _short_decay_disabled:
+                                    print(f"[Decay] {symbol} {strategy.name} SHORT DISABLED — skipping")
+                                else:
+                                    try:
+                                        await self._execute_short(
+                                            symbol, signal, strategy,
+                                            risk_percent, stop_loss_percent, data,
+                                            decay_multiplier=_short_decay_mult,
+                                        )
+                                    except Exception as _se:
+                                        import traceback as _tb
+                                        print(
+                                            f"[Swing] {symbol}: _execute_short raised "
+                                            f"— {_se}\n{_tb.format_exc()}"
+                                        )
 
                 # Liquidity filter + ADV cap (stocks only; skipped for crypto)
                 if not _skip_execute_trade and not is_crypto:
