@@ -384,7 +384,7 @@ class TradingBot:
         self.scalp_strategies = []
         self.swing_strategies = []
         self.swing_symbol_strategies: dict[str, SwingStrategy] = {}
-        self._open_trade_ids: dict = {}       # symbol → (row_id, entry_price, entry_time)
+        self._open_trade_ids: dict = {}       # symbol → (row_id, entry_price, entry_time, direction)
         self._trade_ids_lock = asyncio.Lock() # guards all _open_trade_ids mutations
         self._db_engine = self._init_db_engine()
         self._regime_cache = None             # (regime_str, timestamp)
@@ -2037,6 +2037,7 @@ class TradingBot:
                                     await self._execute_short(
                                         symbol, signal, strategy,
                                         risk_percent, stop_loss_percent, data,
+                                        decay_multiplier=_decay_mult,
                                     )
                                 except Exception as _se:
                                     import traceback as _tb
@@ -2144,7 +2145,7 @@ class TradingBot:
                             )
                             if row_id:
                                 async with self._trade_ids_lock:
-                                    self._open_trade_ids[symbol] = (row_id, float(signal.get('entry_price', 0)), entry_time)
+                                    self._open_trade_ids[symbol] = (row_id, float(signal.get('entry_price', 0)), entry_time, 'long')
                                 asyncio.create_task(notion_journal.post_trade_to_notion({
                                     "symbol":        symbol,
                                     "signal_type":   signal_type,
@@ -2369,7 +2370,12 @@ class TradingBot:
                     continue
                 entry  = float(p.avg_entry_price)
                 current = float(p.current_price)
-                qty    = qty_avail   # abs value already computed above
+                # Recompute from this position — do NOT reuse qty_avail from the
+                # filtering loop above, which holds the last-iterated position's
+                # value, not this one's (caused wrong-qty OCOs with 2+ unprotected
+                # positions open simultaneously).
+                _qty_avail_raw = getattr(p, 'qty_available', None)
+                qty = abs(float(_qty_avail_raw)) if _qty_avail_raw is not None else abs(float(p.qty))
                 is_short = _val(getattr(p, 'side', None)) == 'short'
 
                 # ATR(14) from daily bars; fallback to 2% of price
@@ -2523,20 +2529,36 @@ class TradingBot:
                         continue
                     if order.status.value != 'filled':
                         continue
-                    if not hasattr(order, 'side') or order.side.value != 'sell':
+                    if not hasattr(order, 'side'):
+                        continue
+
+                    # Direction-aware close-side matching: a long position closes on
+                    # a SELL (target/stop/manual exit); a short position closes on a
+                    # BUY (buy-to-cover). Without this, short covers (all BUY orders)
+                    # were never matched and their exits never reached signal_outcomes.
+                    _snap_entry = open_ids_snapshot[sym]
+                    _snap_direction = _snap_entry[3] if len(_snap_entry) > 3 else 'long'
+                    _expected_close_side = 'sell' if _snap_direction == 'long' else 'buy'
+                    if order.side.value != _expected_close_side:
                         continue
 
                     async with self._trade_ids_lock:
                         if sym not in self._open_trade_ids:
                             continue  # Already processed by a concurrent iteration
-                        row_id, entry_price, entry_time = self._open_trade_ids.pop(sym)
+                        _popped = self._open_trade_ids.pop(sym)
+                        row_id, entry_price, entry_time = _popped[0], _popped[1], _popped[2]
+                        direction = _popped[3] if len(_popped) > 3 else 'long'
 
                     if row_id is None:
                         continue
 
                     exit_price = float(order.filled_avg_price) if order.filled_avg_price else 0.0
                     exit_time  = order.filled_at or datetime.now(pytz.utc)
-                    pnl_pct    = (exit_price - entry_price) / entry_price * 100 if entry_price else 0.0
+                    if direction == 'short':
+                        # Short P&L is inverted: profit when price falls below entry.
+                        pnl_pct = (entry_price - exit_price) / entry_price * 100 if entry_price else 0.0
+                    else:
+                        pnl_pct = (exit_price - entry_price) / entry_price * 100 if entry_price else 0.0
 
                     order_type = order.order_type.value if hasattr(order, 'order_type') else 'unknown'
                     if order_type in ('stop', 'trailing_stop'):
@@ -3214,6 +3236,7 @@ class TradingBot:
         risk_percent: float,
         stop_loss_percent: float,
         data,
+        decay_multiplier: float = 1.0,
     ) -> None:
         """Execute a short sale with the full protection stack."""
         import traceback as _tb
@@ -3469,6 +3492,26 @@ class TradingBot:
                 "debate: passed | fundamentals: passed",
             ))
             _health_state["signals_fired_total"] += 1
+
+            # Log entry to signal_outcomes only after a confirmed fill — mirrors the
+            # long/buy path. Without this, shorts were invisible to Kelly, the
+            # circuit breakers, the decay monitor, the consecutive-loss counter,
+            # and Performance Brain (all of which read signal_outcomes).
+            _disc_type = getattr(strategy, 'discovery_strategy_type', None)
+            _short_signal_type = f"discovery_{_disc_type}_short" if _disc_type else "swing_short"
+            _short_entry_time = datetime.now(pytz.utc)
+            _short_regime = await self._get_market_regime()
+            _short_row_id = await asyncio.to_thread(
+                self._log_trade_entry,
+                symbol, _short_signal_type, _fill_price,
+                getattr(strategy, 'ema_short', 50), getattr(strategy, 'ema_long', 200),
+                float(signal.get('rsi_at_entry', 0)), float(signal.get('macd_at_entry', 0)),
+                _short_regime, _short_entry_time, self._current_regime_class,
+                decay_multiplier,
+            )
+            if _short_row_id:
+                async with self._trade_ids_lock:
+                    self._open_trade_ids[symbol] = (_short_row_id, _fill_price, _short_entry_time, 'short')
         except Exception as _ord_e:
             print(f"[Swing] {symbol}: SHORT order failed — {_ord_e}\n{_tb.format_exc()}")
 
@@ -3974,6 +4017,21 @@ class TradingBot:
                                         level="WARNING",
                                     ))
 
+                                # Log entry to signal_outcomes only after a confirmed fill —
+                                # without this, news auto-trades were invisible to Kelly,
+                                # the circuit breakers, decay monitor, and Performance Brain.
+                                _news_entry_time = datetime.now(pytz.utc)
+                                _news_regime = await self._get_market_regime()
+                                _news_row_id = await asyncio.to_thread(
+                                    self._log_trade_entry,
+                                    ticker, "news_long", fill_price,
+                                    0, 0, 0.0, 0.0,
+                                    _news_regime, _news_entry_time, self._current_regime_class,
+                                )
+                                if _news_row_id:
+                                    async with self._trade_ids_lock:
+                                        self._open_trade_ids[ticker] = (_news_row_id, fill_price, _news_entry_time, 'long')
+
                             asyncio.create_task(notifications.notify_news_trade(
                                 ticker, sig["headline"], action, fill_price, qty
                             ))
@@ -4163,14 +4221,45 @@ class TradingBot:
                             max_dollars = float(account.buying_power) * (Config.MAX_BUYING_POWER_UTILIZATION_PERCENT / 100.0)
                             qty = min(qty, max(1, int(max_dollars / entry_price)))
 
-                            await asyncio.to_thread(
+                            _edgar_order = await asyncio.to_thread(
                                 self.trading_client.submit_order,
                                 MarketOrderRequest(symbol=ticker, qty=qty, side=OrderSide.BUY, time_in_force=TimeInForce.DAY)
                             )
+
+                            # Poll for fill so the DB log and notification use the actual
+                            # fill price rather than the pre-trade quote.
+                            fill_price = entry_price
+                            try:
+                                for _i in range(30):
+                                    await asyncio.sleep(1)
+                                    _checked = await asyncio.to_thread(
+                                        self.trading_client.get_order_by_id, _edgar_order.id
+                                    )
+                                    if getattr(_checked, 'status', None) and _checked.status.value == 'filled':
+                                        fill_price = float(_checked.filled_avg_price or entry_price)
+                                        break
+                            except Exception as _poll_e:
+                                print(f"[EDGARLoop] {ticker}: fill poll failed (non-fatal) — {_poll_e}")
+
                             asyncio.create_task(notifications.notify_news_trade(
-                                ticker, sig["headline"], action, entry_price, qty
+                                ticker, sig["headline"], action, fill_price, qty
                             ))
                             self.active_signals[f"{ticker}-edgar-buy"] = datetime.now(pytz.utc)
+
+                            # Log entry to signal_outcomes only after a confirmed fill —
+                            # without this, EDGAR auto-trades were invisible to Kelly,
+                            # the circuit breakers, decay monitor, and Performance Brain.
+                            _edgar_entry_time = datetime.now(pytz.utc)
+                            _edgar_regime = await self._get_market_regime()
+                            _edgar_row_id = await asyncio.to_thread(
+                                self._log_trade_entry,
+                                ticker, "edgar_long", fill_price,
+                                0, 0, 0.0, 0.0,
+                                _edgar_regime, _edgar_entry_time, self._current_regime_class,
+                            )
+                            if _edgar_row_id:
+                                async with self._trade_ids_lock:
+                                    self._open_trade_ids[ticker] = (_edgar_row_id, fill_price, _edgar_entry_time, 'long')
 
                         except Exception as e:
                             msg = f"[EDGARLoop] Trade execution error for {ticker}: {e}"
