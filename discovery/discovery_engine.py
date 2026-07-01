@@ -16,6 +16,7 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
 from config import Config
+from utils import apply_http_timeout
 from discovery.permutation_framework import (
     SwingPositionStrategy,
     validate_strategy_edge_regime_aware,
@@ -488,6 +489,7 @@ class DiscoveryEngine:
             api_key=Config.ALPACA_API_KEY,
             secret_key=Config.ALPACA_SECRET_KEY,
         )
+        apply_http_timeout(self._data_client)
 
     def _load_symbols(self) -> list[str]:
         """Pull top-250 tickers by volume from active_tickers, falling back to DISCOVERY_SYMBOLS."""

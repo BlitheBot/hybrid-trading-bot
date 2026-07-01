@@ -51,7 +51,7 @@ from discovery.regime_classifier import (
 )
 from discovery.decay_monitor import StrategyDecayMonitor
 from discovery.grok_sentiment import refresh_grok_sentiment, get_grok_sentiment
-from utils import get_historical_bars, get_finnhub_price
+from utils import get_historical_bars, get_finnhub_price, apply_http_timeout
 import signal_quality
 import performance_brain
 import risk_limits
@@ -372,14 +372,19 @@ class TradingBot:
             url_override=base_url
         )
         self.stock_data_client = StockHistoricalDataClient(
-            api_key=Config.ALPACA_API_KEY, 
+            api_key=Config.ALPACA_API_KEY,
             secret_key=Config.ALPACA_SECRET_KEY
         )
         self.crypto_data_client = CryptoHistoricalDataClient(
-            api_key=Config.ALPACA_API_KEY, 
+            api_key=Config.ALPACA_API_KEY,
             secret_key=Config.ALPACA_SECRET_KEY
         )
-        
+        # alpaca-py's RESTClient never passes a timeout to requests.Session —
+        # every Alpaca call (orders, positions, bars) can hang forever without
+        # this. See utils.apply_http_timeout for details.
+        for _client in (self.trading_client, self.stock_data_client, self.crypto_data_client):
+            apply_http_timeout(_client)
+
         self._crypto_poll_cooldowns: dict[str, datetime] = {}
         self.scalp_strategies = []
         self.swing_strategies = []
@@ -1415,14 +1420,18 @@ class TradingBot:
             # CryptoMomentum (21-bar min). The original value of 390 was intended as a
             # bar count but was interpreted as days_back=390 DAYS (~561k bars), which
             # caused the Alpaca SDK to paginate hundreds of pages and block the event loop.
-            data = get_historical_bars(symbol, TimeFrame.Minute, 1, client, is_crypto=True)
+            data = await asyncio.to_thread(
+                get_historical_bars, symbol, TimeFrame.Minute, 1, client, is_crypto=True
+            )
             if data is not None and len(data) > 0:
                 _latest_ts = data.index[-1].strftime('%H:%M UTC')
                 print(f"[Scalp] {symbol}: fetched {len(data)} 1-min bars (latest: {_latest_ts})")
             else:
                 print(f"[Scalp] {symbol}: no 1-min bars returned")
         else:
-            data = get_historical_bars(symbol, TimeFrame.Day, 365, client, is_crypto=False)
+            data = await asyncio.to_thread(
+                get_historical_bars, symbol, TimeFrame.Day, 365, client, is_crypto=False
+            )
         
         if data is None:
             return
@@ -1459,8 +1468,13 @@ class TradingBot:
             scored = []
             for s in strategies:
                 try:
-                    _sig = (s.generate_signals(data, self.stock_data_client)
-                            if isinstance(s, SMBStrategy) else s.generate_signals(data))
+                    # generate_signals() can transitively call get_historical_bars
+                    # (e.g. SMBStrategy's relative-strength check) — always run it
+                    # off the event loop, never assume a given strategy is network-free.
+                    if isinstance(s, SMBStrategy):
+                        _sig = await asyncio.to_thread(s.generate_signals, data, self.stock_data_client)
+                    else:
+                        _sig = await asyncio.to_thread(s.generate_signals, data)
                 except Exception as _ge:
                     print(f"[Scalp] {symbol}: {s.name} signal eval failed — {_ge}")
                     _sig = None
@@ -1488,9 +1502,9 @@ class TradingBot:
             signal = pre_signals.get(strategy.name)
             if signal is None:
                 if isinstance(strategy, SMBStrategy):
-                    signal = strategy.generate_signals(data, self.stock_data_client)
+                    signal = await asyncio.to_thread(strategy.generate_signals, data, self.stock_data_client)
                 else:
-                    signal = strategy.generate_signals(data)
+                    signal = await asyncio.to_thread(strategy.generate_signals, data)
             
             if signal:
                 if self.trading_halted_for_day:
@@ -2200,7 +2214,9 @@ class TradingBot:
         
         rsi_scores = {}
         for sym in Config.SCALP_SYMBOLS:
-            df = get_historical_bars(sym, TimeFrame.Hour, 7, self.crypto_data_client, is_crypto=True)
+            df = await asyncio.to_thread(
+                get_historical_bars, sym, TimeFrame.Hour, 7, self.crypto_data_client, is_crypto=True
+            )
             if df is not None and len(df) > 14:
                 df['RSI'] = ta.rsi(df['close'], length=14)
                 rsi_scores[sym] = df['RSI'].iloc[-1]
@@ -2222,8 +2238,12 @@ class TradingBot:
         while True:
             try:
                 # Fetch latest 1-min bar for each symbol to get current price for logging
-                btc_bars = get_historical_bars("BTC/USD", TimeFrame.Minute, 1, self.crypto_data_client, is_crypto=True)
-                eth_bars = get_historical_bars("ETH/USD", TimeFrame.Minute, 1, self.crypto_data_client, is_crypto=True)
+                btc_bars = await asyncio.to_thread(
+                    get_historical_bars, "BTC/USD", TimeFrame.Minute, 1, self.crypto_data_client, is_crypto=True
+                )
+                eth_bars = await asyncio.to_thread(
+                    get_historical_bars, "ETH/USD", TimeFrame.Minute, 1, self.crypto_data_client, is_crypto=True
+                )
 
                 btc_price = float(btc_bars['close'].iloc[-1]) if btc_bars is not None and len(btc_bars) > 0 else None
                 eth_price = float(eth_bars['close'].iloc[-1]) if eth_bars is not None and len(eth_bars) > 0 else None
@@ -2381,6 +2401,7 @@ class TradingBot:
             print(f"[Safety] Found {len(unprotected)} position(s) with no stop-loss — placing emergency OCOs")
 
             dc = StockHistoricalDataClient(Config.ALPACA_API_KEY, Config.ALPACA_SECRET_KEY)
+            apply_http_timeout(dc)
             end_dt = datetime.now(pytz.utc)
             start_dt = end_dt - timedelta(days=45)
 
@@ -3580,7 +3601,9 @@ class TradingBot:
             await self._check_account_status()
             spy_bars = None
             try:
-                spy_bars = get_historical_bars("SPY", TimeFrame.Day, 365, self.stock_data_client)
+                spy_bars = await asyncio.to_thread(
+                    get_historical_bars, "SPY", TimeFrame.Day, 365, self.stock_data_client
+                )
             except Exception as _spy_e:
                 print(f"[Swing] SPY bars fetch failed (non-fatal): {_spy_e}")
 
@@ -3645,7 +3668,9 @@ class TradingBot:
                     _short_pos = _short_positions[symbol]
                     try:
                         import pandas_ta as _pdt
-                        _exit_data = get_historical_bars(symbol, TimeFrame.Day, 365, self.stock_data_client)
+                        _exit_data = await asyncio.to_thread(
+                            get_historical_bars, symbol, TimeFrame.Day, 365, self.stock_data_client
+                        )
                         if _exit_data is not None and len(_exit_data) >= 3:
                             _rsi_s    = _pdt.rsi(_exit_data['close'], length=14)
                             _macd_e   = _pdt.macd(_exit_data['close'], fast=12, slow=26, signal=9)
@@ -4300,7 +4325,10 @@ class TradingBot:
         print("Validating swing symbols...")
         for symbol in Config.SWING_SYMBOLS:
             try:
-                self.stock_data_client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=symbol))
+                await asyncio.to_thread(
+                    self.stock_data_client.get_stock_latest_trade,
+                    StockLatestTradeRequest(symbol_or_symbols=symbol),
+                )
                 print(f"  {symbol} OK")
             except Exception as e:
                 msg = f"WARNING: Symbol {symbol} failed validation — check config ({e})"

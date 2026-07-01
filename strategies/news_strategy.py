@@ -10,6 +10,7 @@ from sqlalchemy import text as sql_text
 from config import Config
 from strategies.base_strategy import BaseStrategy
 from llm_client import call_llm, call_llm_with_model, LLMError, MODEL_FLASH, MODEL_DEEPSEEK_CHAT
+from utils import apply_http_timeout
 
 # ── Trusted source multipliers ──────────────────────────────────────────────
 HIGH_TRUST_SOURCES = {"bloomberg", "reuters", "wsj", "cnbc", "wall street journal", "financial times", "ft.com"}
@@ -119,6 +120,7 @@ class NewsStrategy(BaseStrategy):
             api_key=Config.ALPACA_API_KEY,
             secret_key=Config.ALPACA_SECRET_KEY,
         )
+        apply_http_timeout(self.news_client)
         self._last_seen: dict[str, datetime] = {}
         self._last_articles_scanned: int = 0
         self._claude_calls_today: int = 0

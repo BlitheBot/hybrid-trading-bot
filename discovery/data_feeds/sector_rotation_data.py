@@ -127,10 +127,12 @@ def _get_data_client():
         return _data_client
     try:
         from alpaca.data.historical import StockHistoricalDataClient
+        from utils import apply_http_timeout
         _data_client = StockHistoricalDataClient(
             api_key=Config.ALPACA_API_KEY,
             secret_key=Config.ALPACA_SECRET_KEY,
         )
+        apply_http_timeout(_data_client)
     except Exception:
         print(f"[Sector] Alpaca client init failed:\n{traceback.format_exc()}")
         _data_client = None

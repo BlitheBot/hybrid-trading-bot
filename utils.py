@@ -1,4 +1,5 @@
 import requests
+import requests.adapters
 from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from datetime import datetime, timedelta
@@ -6,23 +7,65 @@ import pytz
 import pandas as pd
 from config import Config
 
+# Default timeout (seconds) applied to every outbound HTTP request made by this
+# bot — both raw `requests` calls and Alpaca SDK clients (see apply_http_timeout
+# below). Without this, a hung connection blocks its thread/event-loop task
+# forever, which can eventually exhaust the asyncio.to_thread executor pool and
+# freeze all 23 async loops.
+DEFAULT_HTTP_TIMEOUT = 30
+
+
+class _TimeoutHTTPAdapter(requests.adapters.HTTPAdapter):
+    """requests.HTTPAdapter that injects a default timeout when the caller
+    didn't specify one on the individual request."""
+
+    def __init__(self, *args, timeout: float = DEFAULT_HTTP_TIMEOUT, **kwargs):
+        self._default_timeout = timeout
+        super().__init__(*args, **kwargs)
+
+    def send(self, request, **kwargs):
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self._default_timeout
+        return super().send(request, **kwargs)
+
+
+def apply_http_timeout(alpaca_client, timeout: float = DEFAULT_HTTP_TIMEOUT) -> None:
+    """Mount a default-timeout adapter onto an Alpaca SDK client's requests.Session.
+
+    alpaca-py's RESTClient._one_request() calls self._session.request(...) with
+    no `timeout` kwarg at all, so every Alpaca HTTP call (orders, positions,
+    bars, news) has NO timeout and can hang indefinitely. Call this once, right
+    after constructing any TradingClient / StockHistoricalDataClient /
+    CryptoHistoricalDataClient / NewsClient instance. Fail-open: if the SDK's
+    internal session attribute ever changes name, this silently does nothing
+    rather than crashing startup.
+    """
+    session = getattr(alpaca_client, "_session", None)
+    if session is None:
+        print(f"[HTTPTimeout] {type(alpaca_client).__name__} has no _session attribute — timeout not applied")
+        return
+    adapter = _TimeoutHTTPAdapter(timeout=timeout)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
+
 def get_finnhub_price(symbol):
     """
     Fetches real-time price from Finnhub to bypass Alpaca's 15-min delay.
     """
     if not Config.FINNHUB_API_KEY:
         return None
-    
+
     # Finnhub free tier crypto is limited, so we only use it for stocks here.
     # For crypto, we'll rely on Alpaca's real-time data if available, or accept the delay.
     if "/" in symbol or symbol in ["BTCUSD", "ETHUSD"]:
-        return None 
+        return None
 
     try:
         url = f"https://finnhub.io/api/v1/quote?symbol={symbol}&token={Config.FINNHUB_API_KEY}"
-        response = requests.get(url)
+        response = requests.get(url, timeout=DEFAULT_HTTP_TIMEOUT)
         data = response.json()
-        
+
         if 'c' in data and data['c'] != 0:
             return float(data['c'])
         return None

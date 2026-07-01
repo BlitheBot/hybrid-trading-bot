@@ -39,6 +39,7 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
 from config import Config
+from utils import apply_http_timeout
 from discovery.strategies import load_all_strategies
 from discovery.strategies.base import DiscoveryStrategy
 from discovery.symbol_universe import get_discovery_candidates
@@ -664,6 +665,7 @@ class DiscoveryEngineV2:
             api_key=Config.ALPACA_API_KEY,
             secret_key=Config.ALPACA_SECRET_KEY,
         )
+        apply_http_timeout(self._data_client)
         self._db_url = Config.DATABASE_URL
 
     def _slack(self, msg: str):
