@@ -226,6 +226,23 @@ class Config:
     # leading/lagging top/bottom sectors. Fail-open: no sector data → all-flat.
     DISCOVERY_SECTOR_ROTATION_ENABLED = os.getenv("DISCOVERY_SECTOR_ROTATION_ENABLED", "true").lower() != "false"
 
+    # Short-interest LEVEL data (biweekly FINRA settlement reports) — corrects
+    # the short-interest-momentum family, which previously used the daily
+    # short-VOLUME ratio (order flow) as its primary signal instead of actual
+    # open short positions. Distinct from SHORT_INTEREST_CONFIRM_ENABLED above,
+    # which is the live bot's WoW daily-ratio sizing bonus (unchanged).
+    # See discovery/data_feeds/finra_short_interest_levels.py.
+    SHORT_INTEREST_LEVELS_LOOKBACK_PERIODS = int(os.getenv("SHORT_INTEREST_LEVELS_LOOKBACK_PERIODS", "48"))  # ~2 years of biweekly reports
+
+    # Dedicated small/mid-cap universe for the short-interest-momentum family —
+    # the documented academic edge (squeeze/continuation) lives here, not in
+    # the top-250-by-dollar-volume universe the rest of the discovery engine
+    # uses. See discovery/short_interest_universe.py.
+    SHORT_INTEREST_UNIVERSE_MIN_MARKET_CAP = float(os.getenv("SHORT_INTEREST_UNIVERSE_MIN_MARKET_CAP", "500000000"))     # $500M
+    SHORT_INTEREST_UNIVERSE_MAX_MARKET_CAP = float(os.getenv("SHORT_INTEREST_UNIVERSE_MAX_MARKET_CAP", "10000000000"))  # $10B
+    SHORT_INTEREST_UNIVERSE_MAX_CANDIDATES = int(os.getenv("SHORT_INTEREST_UNIVERSE_MAX_CANDIDATES", "400"))            # bounds Finnhub /profile2 calls
+    SHORT_INTEREST_UNIVERSE_MIN_AVG_VOLUME = int(os.getenv("SHORT_INTEREST_UNIVERSE_MIN_AVG_VOLUME", "100000"))         # shares/day liquidity floor
+
     # SMC live confirmation gate (Task 9) — optional additional filter on swing buy/sell
     # signals: requires price to be inside an active order block AND an unfilled FVG
     # target to exist in the expected direction. Default False; enable via Railway env var

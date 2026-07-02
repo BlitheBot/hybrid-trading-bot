@@ -33,19 +33,28 @@ from discovery.strategies.sector_rotation_strategy import SectorRotationPosition
 
 # Multi-factor families run in addition to the swing momentum family (family 1).
 # Families gated off via config are filtered out in _active_extra_families().
+# ShortInterestMomentumPositionStrategy is NOT in this list — it runs in its
+# own dedicated universe pass (_run_short_interest_universe_pass), not the
+# per-symbol loop this list feeds.
 _EXTRA_FAMILIES = [
     MeanReversionPositionStrategy,
     VolumeBreakoutPositionStrategy,
     InsiderFlowPositionStrategy,
     SMCPositionStrategy,
     PEADPositionStrategy,
-    ShortInterestMomentumPositionStrategy,
     SectorRotationPositionStrategy,
 ]
 
 
 def _active_extra_families() -> list:
-    """The extra families enabled by config flags (overnight-build families gate individually)."""
+    """The extra families enabled by config flags (overnight-build families gate individually).
+
+    ShortInterestMomentumPositionStrategy is deliberately excluded here — its
+    documented edge lives in small/mid-caps, not the megacap-heavy top-250
+    universe this per-symbol loop screens. It validates in a dedicated pass
+    (_run_short_interest_universe_pass) over its own universe instead — see
+    that method and discovery/short_interest_universe.py.
+    """
     fams = [
         MeanReversionPositionStrategy,
         VolumeBreakoutPositionStrategy,
@@ -54,8 +63,6 @@ def _active_extra_families() -> list:
     ]
     if getattr(Config, "DISCOVERY_PEAD_ENABLED", True):
         fams.append(PEADPositionStrategy)
-    if getattr(Config, "DISCOVERY_SHORT_MOMENTUM_ENABLED", True):
-        fams.append(ShortInterestMomentumPositionStrategy)
     if getattr(Config, "DISCOVERY_SECTOR_ROTATION_ENABLED", True):
         fams.append(SectorRotationPositionStrategy)
     return fams
@@ -671,6 +678,101 @@ class DiscoveryEngine:
             print(f"[Discovery] {symbol}: no family promoted across all {1 + len(_active_extra_families())} families")
         return promoted_count
 
+    async def _run_short_interest_universe_pass(self, spy_regime_df) -> int:
+        """
+        Dedicated validation pass for the short-interest-momentum family, run
+        over its OWN small/mid-cap universe (short_interest_universe) instead
+        of the general top-250-by-dollar-volume universe the rest of this
+        engine uses — the documented short-interest anomaly lives in small/
+        mid-caps, which are almost never present in a dollar-volume-ranked,
+        megacap-heavy list.
+
+        Syncs the FINRA short-interest LEVEL data and rebuilds the universe
+        first (both idempotent/incremental — see finra_short_interest_levels.py
+        and short_interest_universe.py), then validates
+        ShortInterestMomentumPositionStrategy per symbol via the same
+        regime-aware MCPT + cost gate every other family uses. Fail-open
+        throughout: any DB/network error skips this pass without affecting
+        the rest of the discovery run.
+        """
+        if not getattr(Config, "DISCOVERY_SHORT_MOMENTUM_ENABLED", True):
+            return 0
+        if not Config.DATABASE_URL:
+            print("[Discovery] No DATABASE_URL — skipping short-interest universe pass")
+            return 0
+
+        import traceback as _tb
+        try:
+            from discovery.data_feeds.finra_short_interest_levels import sync_short_interest_levels
+            from discovery.short_interest_universe import (
+                refresh_short_interest_universe, get_short_interest_universe,
+            )
+        except Exception:
+            print(f"[Discovery] short-interest universe imports failed:\n{_tb.format_exc()}")
+            return 0
+
+        print("[Discovery] Short-interest universe pass — syncing FINRA level data...")
+        try:
+            await asyncio.to_thread(sync_short_interest_levels)
+        except Exception:
+            print(f"[Discovery] short_interest_levels sync failed (non-fatal):\n{_tb.format_exc()}")
+
+        try:
+            n_admitted = await asyncio.to_thread(refresh_short_interest_universe)
+            print(f"[Discovery] short_interest_universe refreshed — {n_admitted} symbols")
+        except Exception:
+            print(f"[Discovery] short_interest_universe refresh failed (non-fatal):\n{_tb.format_exc()}")
+
+        symbols = await asyncio.to_thread(get_short_interest_universe)
+        if not symbols:
+            print("[Discovery] short_interest_universe is empty — skipping validation pass")
+            return 0
+
+        print(f"[Discovery] Validating short_interest_momentum over its own universe ({len(symbols)} symbols)")
+        fam = ShortInterestMomentumPositionStrategy
+        enrich = getattr(fam, "enrich", None)
+        promoted_count = 0
+
+        for symbol in symbols:
+            try:
+                bars = await asyncio.to_thread(_load_bars, symbol, self._data_client)
+                if bars is None or bars.empty:
+                    continue
+                try:
+                    partitioner = DataPartitioner(bars, symbol)
+                    partitioner.log_boundaries()
+                    bars = partitioner.get_non_holdout()
+                except (ValueError, PartitionViolation) as e:
+                    print(f"[Partition] {symbol}: partitioning failed ({e}) — using full series")
+
+                fam_bars = bars
+                if enrich is not None:
+                    try:
+                        fam_bars = enrich(bars, symbol)
+                        if fam_bars is None or len(fam_bars) != len(bars):
+                            fam_bars = bars
+                    except Exception:
+                        print(f"[Discovery] {symbol} short_interest_momentum enrich raised:\n{_tb.format_exc()}")
+                        fam_bars = bars
+
+                regime_series = self._regime_series_for(spy_regime_df, bars)
+                res = await asyncio.to_thread(
+                    validate_strategy_edge_regime_aware, fam, {}, symbol, fam_bars, regime_series
+                )
+                if res.get("promoted"):
+                    promoted_count += 1
+                    print(
+                        f"[Discovery] {symbol} short_interest_momentum — PROMOTED "
+                        f"valid={res.get('valid_regimes')} best={res.get('best_regime')}"
+                    )
+                else:
+                    print(f"[Discovery] {symbol} short_interest_momentum — no edge ({res.get('reason')})")
+            except Exception:
+                print(f"[Discovery] {symbol} short-interest universe pass raised:\n{_tb.format_exc()}")
+
+        print(f"[Discovery] Short-interest universe pass complete — {promoted_count}/{len(symbols)} promoted")
+        return promoted_count
+
     def _upsert_result(self, conn, symbol, params, wf_df, p_value, status,
                        permutation_tested=False):
         if wf_df.empty:
@@ -928,6 +1030,16 @@ class DiscoveryEngine:
 
         if db_conn:
             db_conn.close()
+
+        # Short-interest-momentum runs over its own dedicated small/mid-cap
+        # universe (see method docstring) rather than the per-symbol loop above.
+        if Config.DISCOVERY_MULTI_FAMILY_ENABLED and Config.PERMUTATION_ENABLED:
+            try:
+                n_si = await self._run_short_interest_universe_pass(spy_regime_df)
+                validated_total += n_si
+            except Exception:
+                import traceback as _tb
+                print(f"[Discovery] short-interest universe pass raised:\n{_tb.format_exc()}")
 
         # Correlation-aware portfolio construction (Task 4): after all strategies
         # are validated, select the diversified subset to deploy and persist it.
