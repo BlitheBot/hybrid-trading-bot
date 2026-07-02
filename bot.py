@@ -3431,7 +3431,15 @@ class TradingBot:
             # Week-over-week short-interest confirmation bonus (Task 4): rising SI
             # confirms a short → larger size. Set on the signal in _process_symbol.
             short_int_mult = float(signal.get('short_interest_size_mult', 1.0))
-            risk_dollars = equity * (risk_percent * self.risk_multiplier * sentiment_mult * short_int_mult / 100.0)
+            # Decay multiplier stacks with the rest, floored at 0.1x — mirrors the
+            # long path (_process_symbol). Previously computed for the audit-trail
+            # DB log only; never actually shrank a decaying short's position size.
+            decay_mult = max(decay_multiplier, Config.DECAY_MULTIPLIER_FLOOR) if decay_multiplier < 1.0 else 1.0
+            if decay_mult < 1.0:
+                print(f"[Decay] {symbol} applying decay multiplier {decay_mult}x to SHORT sizing")
+            risk_dollars = equity * (
+                risk_percent * self.risk_multiplier * sentiment_mult * short_int_mult * decay_mult / 100.0
+            )
             shares_raw   = max(1, int(risk_dollars / short_risk))
             max_dollars  = float(account.buying_power) * (Config.MAX_BUYING_POWER_UTILIZATION_PERCENT / 100.0)
             shares_bp    = max(1, int(max_dollars / entry_price))
@@ -3439,7 +3447,7 @@ class TradingBot:
             print(
                 f"[Swing] {symbol}: sizing — equity={equity:.0f} risk%={risk_percent:.3f} "
                 f"risk_mult={self.risk_multiplier:.2f} sent_mult={sentiment_mult:.2f} "
-                f"short_int_mult={short_int_mult:.2f} "
+                f"short_int_mult={short_int_mult:.2f} decay_mult={decay_mult:.2f} "
                 f"risk_$={risk_dollars:.2f} shares_risk={shares_raw} "
                 f"bp_cap={shares_bp} final_shares={shares}"
             )
@@ -3550,7 +3558,7 @@ class TradingBot:
                 getattr(strategy, 'ema_short', 50), getattr(strategy, 'ema_long', 200),
                 float(signal.get('rsi_at_entry', 0)), float(signal.get('macd_at_entry', 0)),
                 _short_regime, _short_entry_time, self._current_regime_class,
-                decay_multiplier,
+                decay_mult,
             )
             if _short_row_id:
                 async with self._trade_ids_lock:
