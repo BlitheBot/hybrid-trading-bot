@@ -2,7 +2,10 @@
 Historical FINRA short-volume loader.
 
 Feeds:
-  * the short-interest-momentum discovery family (Task 2), and
+  * the short-interest-momentum discovery family, secondary/confirmation
+    signal only (see discovery/strategies/short_interest_momentum_strategy.py
+    — the family's PRIMARY signal is real short-interest LEVEL data from
+    finra_short_interest_levels.py, a different FINRA feed), and
   * the live week-over-week short-interest confirmation bonus (Task 4).
 
 FINRA publishes one consolidated short-volume file PER TRADING DAY at::
@@ -14,21 +17,33 @@ Each pipe-delimited file lists every exchange-listed symbol
 short-volume RATIO (ShortVolume / TotalVolume) as a daily short-pressure proxy
 and its week-over-week change as the signal.
 
+Storage
+-------
+Two distinct caches, migrated differently:
+  * The per-symbol short-volume-RATIO series (what ``build_ratio_series``
+    returns) now lives in the shared Postgres ``strategy_data_cache`` table
+    (feed_name="finra_short_volume") instead of parquet — parquet caches were
+    wiped on every Railway redeploy. See discovery.data_feeds.strategy_data_cache.
+  * The RAW daily file cache (``_raw_path`` / ``_fetch_daily_file``, plain
+    text, one file per trading day covering ALL symbols) is UNCHANGED — it's
+    not parquet, it's a fetch-avoidance cache for the bulk daily download
+    (shared across every symbol in a discovery run), a different shape than
+    the per-(feed,symbol,date) row model strategy_data_cache uses, and
+    out of scope for this migration.
+
 COST / FAIL-OPEN NOTE
 ---------------------
 A daily file covers ALL symbols, so building a multi-year per-symbol history means
-downloading hundreds of files. To keep a discovery run tractable:
-
-  * every daily file is cached to ``discovery/data/short_interest/_raw/`` on first
-    fetch (shared across all symbols in a run), and
-  * each ``attach_short_interest_change`` call is bounded by ``max_files`` (it
-    fetches only the most recent N bar-dates).
-
-Over a long backtest window the available history is therefore PARTIAL. Like the
-insider family, the short-interest-momentum family degrades to an all-flat vector
-on bars with no data (``si_change`` = 0) and trades less / never validates rather
-than crashing. All network/parse failures are caught and logged with a full
-traceback (no bare excepts).
+downloading hundreds of files. To keep a discovery run tractable, each
+``attach_short_interest_change`` call is bounded by ``max_files`` (it fetches
+only the most recent N bar-dates). A cold per-symbol cache fetches
+synchronously; a warm-but-stale cache (>7 days since last sync — this feed
+updates far less urgently than EDGAR/FMP) is served immediately and refreshed
+in a background thread. Over a long backtest window the available history is
+therefore PARTIAL. Like the insider family, the short-interest-momentum family
+degrades to an all-flat vector on bars with no data (``si_change`` = 0) and
+trades less / never validates rather than crashing. All network/parse failures
+are caught and logged with a full traceback (no bare excepts).
 """
 from __future__ import annotations
 
@@ -41,7 +56,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from discovery.data_feeds import strategy_data_cache
+
 SI_COLUMN = "si_change"
+
+FEED_NAME = "finra_short_volume"
+_MAX_AGE_DAYS = 7  # weekly refresh — matches the WoW cadence this signal is used at
 
 _SI_DIR = Path(__file__).resolve().parent.parent / "data" / "short_interest"
 _RAW_DIR = _SI_DIR / "_raw"
@@ -80,7 +100,11 @@ def _parse_content(content: str) -> dict:
 
 
 def _fetch_daily_file(d: date) -> dict | None:
-    """Return {symbol: ratio} for trading day ``d`` (cached on disk + in memory)."""
+    """Return {symbol: ratio} for trading day ``d`` (cached on disk + in memory).
+
+    Unchanged by the Postgres migration — this is the bulk, all-symbols,
+    fetch-avoidance cache, not the per-symbol strategy-history cache.
+    """
     key = d.strftime("%Y%m%d")
     if key in _daily_memo:
         return _daily_memo[key]
@@ -119,35 +143,11 @@ def _fetch_daily_file(d: date) -> dict | None:
         return None
 
 
-def _per_symbol_cache(symbol: str) -> Path:
-    safe = symbol.replace("/", "_").replace(".", "_")
-    return _SI_DIR / f"{safe}_si.parquet"
-
-
-def build_ratio_series(symbol: str, bar_dates: pd.DatetimeIndex, max_files: int = 400) -> pd.Series:
-    """
-    Return a Series of short-volume ratios indexed by date for ``symbol``, covering
-    (at most) the ``max_files`` most-recent ``bar_dates``. Cached per symbol.
-
-    Bars with no FINRA data are simply absent from the returned Series.
-    """
+def _fetch_and_store_series(symbol: str, bar_dates: pd.DatetimeIndex, max_files: int) -> pd.Series:
+    """Build the per-symbol short-volume-ratio series from the (locally
+    cached) daily files, persist it to strategy_data_cache, and return it.
+    Empty Series on no data (fail-open)."""
     empty = pd.Series(dtype=float)
-    if bar_dates is None or len(bar_dates) == 0:
-        return empty
-
-    cache = _per_symbol_cache(symbol)
-    if cache.exists():
-        age = datetime.now() - datetime.fromtimestamp(cache.stat().st_mtime)
-        if age < timedelta(hours=168):
-            try:
-                import pyarrow.parquet as pq
-                df = pq.read_table(str(cache)).to_pandas()
-                if not df.empty:
-                    return pd.Series(df["short_ratio"].to_numpy(),
-                                     index=pd.DatetimeIndex(df["date"]))
-            except Exception:
-                print(f"[FINRA] per-symbol cache read failed for {symbol}:\n{traceback.format_exc()}")
-
     dates = pd.DatetimeIndex(bar_dates).normalize().unique().sort_values()
     if len(dates) > max_files:
         dates = dates[-max_files:]
@@ -165,15 +165,36 @@ def build_ratio_series(symbol: str, bar_dates: pd.DatetimeIndex, max_files: int 
         return empty
 
     series = pd.Series(out_ratios, index=pd.DatetimeIndex(out_dates))
-    try:
-        _SI_DIR.mkdir(parents=True, exist_ok=True)
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-        df = pd.DataFrame({"date": series.index, "short_ratio": series.to_numpy()})
-        pq.write_table(pa.Table.from_pandas(df), str(cache))
-    except Exception:
-        print(f"[FINRA] per-symbol cache write failed for {symbol}:\n{traceback.format_exc()}")
+    strategy_data_cache.write_rows(
+        FEED_NAME, symbol,
+        [(d, {"short_ratio": float(r)}) for d, r in zip(out_dates, out_ratios)],
+    )
     return series
+
+
+def build_ratio_series(symbol: str, bar_dates: pd.DatetimeIndex, max_files: int = 400) -> pd.Series:
+    """
+    Return a Series of short-volume ratios indexed by date for ``symbol``, covering
+    (at most) the ``max_files`` most-recent ``bar_dates``. Cached in Postgres per
+    symbol (see module docstring). A cold cache fetches synchronously; a
+    warm-but-stale cache (>7 days) is served immediately and refreshed in the
+    background.
+
+    Bars with no FINRA data are simply absent from the returned Series.
+    """
+    empty = pd.Series(dtype=float)
+    if bar_dates is None or len(bar_dates) == 0:
+        return empty
+
+    cached = strategy_data_cache.read_frame(FEED_NAME, symbol)
+    if not cached.empty and "short_ratio" in cached.columns:
+        strategy_data_cache.maybe_trigger_refresh(
+            FEED_NAME, symbol, _MAX_AGE_DAYS,
+            _fetch_and_store_series, symbol, bar_dates, max_files,
+        )
+        return pd.Series(cached["short_ratio"].to_numpy(), index=pd.DatetimeIndex(cached["date"]))
+
+    return _fetch_and_store_series(symbol, bar_dates, max_files)
 
 
 def attach_short_interest_change(
@@ -228,7 +249,9 @@ def get_recent_wow_change(symbol: str, lookback_days: int = 7) -> float | None:
 
     Compares the most recent available FINRA daily ratio to the one ~``lookback_days``
     calendar days earlier. Returns ``None`` when either reading is unavailable
-    (fail-open — caller skips the adjustment).
+    (fail-open — caller skips the adjustment). Unchanged by the Postgres
+    migration — reads directly from the raw daily-file cache, not the
+    per-symbol strategy_data_cache series.
     """
     try:
         latest = None

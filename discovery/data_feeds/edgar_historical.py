@@ -17,17 +17,27 @@ and is awkward to scope reliably to one issuer's Form 4s. The submissions API is
 the documented per-entity filing index and is used here instead (noted as a
 deliberate deviation).
 
+Storage
+-------
+Per-symbol net-value history is stored in the shared Postgres
+``strategy_data_cache`` table (feed_name="edgar_form4") — see
+``discovery.data_feeds.strategy_data_cache`` — instead of parquet, so history
+survives Railway redeploys (the filesystem is ephemeral; parquet caches were
+being wiped every deploy). A cold cache (nothing stored yet for a symbol)
+fetches synchronously; a warm-but-stale cache (>1 day since last sync) is
+served immediately and refreshed in a background thread rather than blocking
+the caller or silently going stale forever. The ticker→CIK map stays a small
+local JSON file cache (refreshed monthly, not per-deploy-critical strategy
+history) — out of scope for this migration.
+
 COST / FAIL-OPEN CONTRACT
 -------------------------
 Each Form 4 is a separate XML fetch, so building a full multi-year history is
 network-heavy and SEC-rate-limited. Each call is therefore bounded by
-``max_filings`` (most-recent first) and everything is cached:
-  * the ticker→CIK map → discovery/data/insider/_ticker_cik.json
-  * per-symbol net-value history → discovery/data/insider/{symbol}_insider.parquet
-Over a long backtest window the available history is PARTIAL. With no data the
-``insider_buy_value`` column is all-zeros and InsiderFlowStrategy stays all-flat —
-it does NOT crash the pipeline. All failures are caught and logged with a full
-traceback (no bare excepts).
+``max_filings`` (most-recent first). Over a long backtest window the available
+history is PARTIAL. With no data the ``insider_buy_value`` column is all-zeros
+and InsiderFlowStrategy stays all-flat — it does NOT crash the pipeline. All
+failures are caught and logged with a full traceback (no bare excepts).
 """
 from __future__ import annotations
 
@@ -42,6 +52,7 @@ import numpy as np
 import pandas as pd
 
 from config import Config
+from discovery.data_feeds import strategy_data_cache
 from strategies.sec_edgar_strategy import (
     _find_form4_xml_url,
     _http_get,
@@ -49,6 +60,9 @@ from strategies.sec_edgar_strategy import (
 )
 
 INSIDER_COLUMN = "insider_buy_value"
+
+FEED_NAME = "edgar_form4"
+_MAX_AGE_DAYS = 1  # EDGAR filings are effectively daily — refresh at most once/day
 
 _INSIDER_DIR = Path(__file__).resolve().parent.parent / "data" / "insider"
 _TICKER_MAP_PATH = _INSIDER_DIR / "_ticker_cik.json"
@@ -61,7 +75,12 @@ _ticker_cik_map: dict[str, int] | None = None
 
 
 def _load_ticker_cik_map() -> dict[str, int]:
-    """Return {TICKER: cik_int}, cached on disk + in memory. Empty on failure."""
+    """Return {TICKER: cik_int}, cached on disk + in memory. Empty on failure.
+
+    Left on a small local JSON file cache rather than migrated to Postgres —
+    it's a symbol→CIK lookup, refreshed monthly, not per-deploy-critical
+    strategy history like the parquet caches this module used to keep.
+    """
     global _ticker_cik_map
     if _ticker_cik_map is not None:
         return _ticker_cik_map
@@ -105,34 +124,16 @@ def _ticker_to_cik(symbol: str) -> int | None:
     return _load_ticker_cik_map().get(symbol.upper().strip())
 
 
-def _per_symbol_cache(symbol: str) -> Path:
-    safe = symbol.replace("/", "_").replace(".", "_")
-    return _INSIDER_DIR / f"{safe}_insider.parquet"
-
-
-def get_form4_history(
+def _fetch_and_store(
     symbol: str,
     start: str | None = None,
     end: str | None = None,
     max_filings: int = 150,
 ) -> pd.DataFrame:
-    """
-    Return a DataFrame [date, net_value] of net open-market insider dollar value
-    (buys − sells) per Form 4 filing date for ``symbol`` within [start, end].
-
-    Cached per symbol. Empty DataFrame on any failure (fail-open).
-    """
+    """Fetch Form 4 filings from EDGAR, aggregate net value per filing date,
+    persist to strategy_data_cache, and return [date, net_value]. Empty
+    DataFrame on any failure (fail-open)."""
     empty = pd.DataFrame(columns=["date", "net_value"])
-
-    cache = _per_symbol_cache(symbol)
-    if cache.exists():
-        age = datetime.now() - datetime.fromtimestamp(cache.stat().st_mtime)
-        if age < timedelta(hours=168):
-            try:
-                import pyarrow.parquet as pq
-                return pq.read_table(str(cache)).to_pandas()
-            except Exception:
-                print(f"[EDGAR] per-symbol cache read failed for {symbol}:\n{traceback.format_exc()}")
 
     cik = _ticker_to_cik(symbol)
     if cik is None:
@@ -200,14 +201,42 @@ def get_form4_history(
          "net_value": list(records.values())}
     ).sort_values("date").reset_index(drop=True)
 
-    try:
-        _INSIDER_DIR.mkdir(parents=True, exist_ok=True)
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-        pq.write_table(pa.Table.from_pandas(df), str(cache))
-    except Exception:
-        print(f"[EDGAR] per-symbol cache write failed for {symbol}:\n{traceback.format_exc()}")
+    strategy_data_cache.write_rows(
+        FEED_NAME, symbol,
+        [(row["date"], {"net_value": float(row["net_value"])}) for _, row in df.iterrows()],
+    )
     return df
+
+
+def get_form4_history(
+    symbol: str,
+    start: str | None = None,
+    end: str | None = None,
+    max_filings: int = 150,
+) -> pd.DataFrame:
+    """
+    Return a DataFrame [date, net_value] of net open-market insider dollar value
+    (buys − sells) per Form 4 filing date for ``symbol`` within [start, end].
+
+    Cached in Postgres per symbol (see module docstring). A cold cache fetches
+    synchronously; a warm-but-stale cache (>1 day) is served immediately and
+    refreshed in the background. Matches the pre-migration behavior of
+    returning the FULL cached history on a cache hit (start/end only bound
+    what gets fetched on a cold cache or background refresh, not what's
+    returned from an existing cache). Empty DataFrame on any failure
+    (fail-open).
+    """
+    empty = pd.DataFrame(columns=["date", "net_value"])
+    cached = strategy_data_cache.read_frame(FEED_NAME, symbol)
+
+    if not cached.empty:
+        strategy_data_cache.maybe_trigger_refresh(
+            FEED_NAME, symbol, _MAX_AGE_DAYS,
+            _fetch_and_store, symbol, start, end, max_filings,
+        )
+        return cached[["date", "net_value"]] if "net_value" in cached.columns else empty
+
+    return _fetch_and_store(symbol, start, end, max_filings)
 
 
 def get_insider_signal(symbol: str, on_date, lookback_days: int = 5) -> float:

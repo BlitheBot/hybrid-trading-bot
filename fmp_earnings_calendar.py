@@ -6,8 +6,18 @@ NOTE ON PROVENANCE
 The overnight-build task description assumed this module "already existed and was
 already integrated". It did not — it is built here from scratch. It pulls
 historical earnings surprises (actual vs estimated EPS) from Financial Modeling
-Prep's ``/v3/historical/earning_calendar/{symbol}`` endpoint and caches them to
-``discovery/data/earnings/{symbol}_earnings.parquet``.
+Prep's ``/v3/historical/earning_calendar/{symbol}`` endpoint.
+
+Storage
+-------
+Per-symbol history is stored in the shared Postgres ``strategy_data_cache``
+table (feed_name="fmp_earnings") — see
+``discovery.data_feeds.strategy_data_cache`` — instead of parquet, so history
+survives Railway redeploys (the filesystem is ephemeral; parquet caches were
+being wiped every deploy). A cold cache (nothing stored yet for a symbol)
+fetches synchronously; a warm-but-stale cache (>1 day since last sync) is
+served immediately and refreshed in a background thread rather than blocking
+the caller or silently going stale forever.
 
 FAIL-OPEN CONTRACT
 ------------------
@@ -26,53 +36,24 @@ percentage is undefined).
 from __future__ import annotations
 
 import traceback
-from datetime import datetime, timedelta
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import requests
 
 from config import Config
+from discovery.data_feeds import strategy_data_cache
 
-_EARNINGS_DIR = Path(__file__).parent / "discovery" / "data" / "earnings"
 _BASE_URL = "https://financialmodelingprep.com/api/v3/historical/earning_calendar/{symbol}"
-_CACHE_MAX_AGE_HOURS = 168  # one week — the discovery engine runs weekly
 _REQUEST_TIMEOUT = 20
 
 _EARNINGS_COLUMN = "earnings_surprise"
 
+FEED_NAME = "fmp_earnings"
+_MAX_AGE_DAYS = 1  # earnings reports post daily; refresh at most once/day
+
 # Emit the "no API key" warning only once per process to avoid log spam.
 _warned_no_key = False
-
-
-def _cache_path(symbol: str) -> Path:
-    safe = symbol.replace("/", "_").replace(".", "_")
-    return _EARNINGS_DIR / f"{safe}_earnings.parquet"
-
-
-def _read_cache(path: Path) -> pd.DataFrame | None:
-    if not path.exists():
-        return None
-    age = datetime.now() - datetime.fromtimestamp(path.stat().st_mtime)
-    if age >= timedelta(hours=_CACHE_MAX_AGE_HOURS):
-        return None
-    try:
-        import pyarrow.parquet as pq
-        return pq.read_table(str(path)).to_pandas()
-    except Exception:
-        print(f"[FMP] earnings cache read failed for {path.name}:\n{traceback.format_exc()}")
-        return None
-
-
-def _write_cache(path: Path, df: pd.DataFrame) -> None:
-    try:
-        _EARNINGS_DIR.mkdir(parents=True, exist_ok=True)
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-        pq.write_table(pa.Table.from_pandas(df), str(path))
-    except Exception:
-        print(f"[FMP] earnings cache write failed for {path.name}:\n{traceback.format_exc()}")
 
 
 def _parse_rows(rows: list) -> pd.DataFrame:
@@ -104,21 +85,12 @@ def _parse_rows(rows: list) -> pd.DataFrame:
     return df
 
 
-def get_historical_earnings(symbol: str, *, session: requests.Session | None = None) -> pd.DataFrame:
-    """
-    Return a DataFrame of historical earnings surprises for ``symbol`` with columns
-    [date, eps_actual, eps_estimated, surprise_pct], sorted ascending by date.
-
-    Cached per-symbol to parquet. Returns an empty (correctly-typed) DataFrame on
-    any failure or when no API key is configured (fail-open).
-    """
+def _fetch_and_store(symbol: str, *, session: requests.Session | None = None) -> pd.DataFrame:
+    """Fetch earnings history from FMP, persist to strategy_data_cache, and
+    return [date, eps_actual, eps_estimated, surprise_pct]. Empty DataFrame on
+    any failure or missing API key (fail-open)."""
     global _warned_no_key
     empty = pd.DataFrame(columns=["date", "eps_actual", "eps_estimated", "surprise_pct"])
-
-    path = _cache_path(symbol)
-    cached = _read_cache(path)
-    if cached is not None:
-        return cached
 
     if not Config.FMP_API_KEY:
         if not _warned_no_key:
@@ -139,11 +111,42 @@ def get_historical_earnings(symbol: str, *, session: requests.Session | None = N
             return empty
         df = _parse_rows(payload)
         if not df.empty:
-            _write_cache(path, df)
+            strategy_data_cache.write_rows(
+                FEED_NAME, symbol,
+                [(row["date"], {
+                    "eps_actual": float(row["eps_actual"]),
+                    "eps_estimated": float(row["eps_estimated"]),
+                    "surprise_pct": float(row["surprise_pct"]),
+                }) for _, row in df.iterrows()],
+            )
         return df
     except Exception:
         print(f"[FMP] {symbol}: earnings fetch failed:\n{traceback.format_exc()}")
         return empty
+
+
+def get_historical_earnings(symbol: str, *, session: requests.Session | None = None) -> pd.DataFrame:
+    """
+    Return a DataFrame of historical earnings surprises for ``symbol`` with columns
+    [date, eps_actual, eps_estimated, surprise_pct], sorted ascending by date.
+
+    Cached in Postgres per symbol (see module docstring). A cold cache fetches
+    synchronously; a warm-but-stale cache (>1 day) is served immediately and
+    refreshed in the background. Returns an empty (correctly-typed) DataFrame
+    on any failure or when no API key is configured (fail-open).
+    """
+    empty = pd.DataFrame(columns=["date", "eps_actual", "eps_estimated", "surprise_pct"])
+    cached = strategy_data_cache.read_frame(FEED_NAME, symbol)
+
+    if not cached.empty:
+        strategy_data_cache.maybe_trigger_refresh(
+            FEED_NAME, symbol, _MAX_AGE_DAYS,
+            _fetch_and_store, symbol, session=session,
+        )
+        cols = ["date", "eps_actual", "eps_estimated", "surprise_pct"]
+        return cached[cols] if all(c in cached.columns for c in cols) else empty
+
+    return _fetch_and_store(symbol, session=session)
 
 
 def attach_earnings_surprise(bars: pd.DataFrame, symbol: str) -> pd.DataFrame:
